@@ -2,7 +2,7 @@
 
 更新日期：2026-11-03（Asia/Shanghai）。
 
-当前交付：**alpha.2 已适配 DSH 0.2.1-rc.2；用户已确认桌面安装成功，M0 激活与交互验收进行中。**
+当前交付：**alpha.2 桌面安装与状态工具调用已获用户确认；项目目标读取通过，摘要注入已有手工冒烟反馈，M0 启停与界面验收进行中。**
 本文件随实现提交更新；GitHub Actions 结果与手工验收分别记录，不能互相替代。
 
 GitHub 阶段跟踪：[issue #1](https://github.com/Luchutong/Sapper-DSH/issues/1)。
@@ -10,7 +10,7 @@ GitHub 阶段跟踪：[issue #1](https://github.com/Luchutong/Sapper-DSH/issues/
 | 阶段 | 状态 | 交付 / 下一步 |
 | --- | --- | --- |
 | 骨架 | 完成 | TS 双端工程、SDK 适配边界、模块目录、56 条 KB、许可、测试、CI、打包与计划文档 |
-| M0 技术验证 | 进行中 | 已迁移 0.2 API，隔离安装通过，用户确认桌面安装成功；激活、页面/字段持久化待验收 |
+| M0 技术验证 | 进行中 | 桌面工具注册、空工作区与项目读取获确认；摘要注入有辅助证据，页面、启停/持久化和卸载待验收 |
 | M1 存储与工具 | 未开始 | TS writer、队列、原子写、节点校验、flag ledger、Python golden tests |
 | M2 上下文与召回 | 未开始 | 完整 frontier、bigram recall、KB 查询与 slash commands |
 | M3 编排 | 未开始 | DSH subagent、审批、预算、candidate → verify → confirmed |
@@ -49,13 +49,26 @@ GitHub 阶段跟踪：[issue #1](https://github.com/Luchutong/Sapper-DSH/issues/
 经验文档：[lessons-learned.md](lessons-learned.md)。
 
 原始计划与早期 CI 属于旧版本，不作为当前桌面通过证据。新包和原始旧包使用不同
-文件名交付，M0 的 desktop 激活与交互仍待逐项确认。
+文件名交付，M0 的 desktop 界面与生命周期仍待逐项确认。
 
 ## 桌面验收反馈
 
-2026-11-03：用户确认修复后已能成功安装。该项记录来源为用户反馈；页面显示、
-工具调用、目标摘要注入、开关持久化和卸载行为尚未收到验收结果。
-下一步按 [验证指南](validation-guide.md) 的第 3–5 节完成这些检查。
+2026-11-03：用户确认修复后已能成功安装，并提供两次实际 `sapper_status` 调用
+结果及一次未调用工具的目标回答。记录来源为用户提供的返回内容，未独立采集桌面日志。
+
+| 检查 | 反馈结果 | 结论 |
+| --- | --- | --- |
+| 宿主工具注册和执行 | plugin=sapper-dsh，version=0.1.0-alpha.2，sdk=0.2.1-rc.2，enabled=true | 通过（用户反馈） |
+| 未放入项目数据 | state=uninitialized，goal 为空 | 通过（用户反馈） |
+| 放入最小 project.json | state=active，goal=SAPPER-M0-9B31：验证目标摘要注入 | 项目读取通过（用户反馈） |
+| 未调用工具回答目标 | 回答相同标记并说明来自本轮 Sapper 运行时上下文 | 摘要注入的辅助证据；原始消息来源仍待核对 |
+
+`state=active` 是读取到的 project.json 状态，不单独作为 pre-step 注入证据。
+模型关于自身上下文来源的表述和答对标记属于辅助证据；尚未收到带
+`source.kind=sapper-dsh` / `source.form=snapshot` 的原始请求或消息明细。
+
+下一步确认卡片和设置页显示，测试关闭/开启、重启后开关值保留、配置仅修改 sapper
+条目、项目文件保持不变及卸载清理；操作见 [验证指南](validation-guide.md) 第 5 节。
 
 ## 下一步
 

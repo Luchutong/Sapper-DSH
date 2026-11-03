@@ -26,19 +26,24 @@
 
 ## Windows DSH NEXT 0.2.1-rc.2 手工门禁
 
-2026-11-03 用户反馈桌面安装成功，已记录如下；其余项目仍待验收，M0 为进行中。
+2026-11-03 用户反馈桌面安装成功，并提供状态工具调用与目标读取结果，已记录如下；
+摘要注入获得手工冒烟辅助证据。其余项目仍待验收，M0 为进行中。
 按计划书，在全部通过前不宣布进入 M1。
 
 - [ ] 从 DSH NEXT 的“打开 DSH 终端”进入桌面专用 CLI，核对欢迎信息中的 profile 和环境。
 - [ ] `dsh --version` 为 0.2.1-rc.2；不使用桌面应用版本号或旧包缓存代替运行时版本。
 - [x] 修复后可在桌面安装插件（用户于 2026-11-03 确认成功；未收集本次安装日志）。
-- [ ] 重启后确认 host entry 激活，client module 被发现，无 factory/module 错误。
+- [x] host entry 可用，sapper_status 已实际调用，返回 alpha.2 / SDK 0.2.1-rc.2（用户反馈）。
+- [ ] 重启后确认 client module 被发现，无 factory/module 错误。
 - [ ] 插件页出现 Sapper 卡片，“设置 → Sapper”配置页可打开。
 - [ ] 只打开页面不改写 profile 配置。
 - [ ] 切换启用字段，profile Cordis patch 仅修改 sapper 条目的配置。
 - [ ] 重启后字段值保留。
-- [ ] 在含空格和中文的测试工作区中调用 sapper_status，状态正确。
-- [ ] 使用一份测试 project.json，确认 pre-step 的目标摘要来源可识别。
+- [x] 空工作区调用 sapper_status 返回 uninitialized / 空目标（用户反馈）。
+- [x] 放入最小 project.json 后返回 active / 指定目标标记（用户反馈）。
+- [ ] 确认测试工作区路径含空格和中文；当前反馈未附路径。
+- [x] 未调用工具的回答包含目标标记，作为摘要注入的手工冒烟辅助证据（用户反馈）。
+- [ ] 核对 pre-step 原始消息的 source.kind=sapper-dsh、form=snapshot；仅有模型回答不能独立证明来源。
 - [ ] 关闭插件后下一轮不含摘要，sapper_status 从工具列表消失。
 - [ ] 移除插件后无活动 hook 或工具残留。
 
