@@ -72,3 +72,17 @@ SDK 为 `0.2.1-rc.2`，Cordis 为 `4.0.5`，Schemastery 为 `3.18.5`。
   ```
 
 桌面 profile 激活、WebView 页面与字段持久化仍按 M0 检查表验收。
+
+## 2026-11-03：M1 首轮审批拒绝与会话权限预设
+
+用户首次 sapper_init 返回 `the user rejected tool "sapper_init"`，报告无建图且
+仍为 uninitialized，符合拒绝分支的预期。会话说明还提到审批提示已禁用。
+
+核对安装版 DSH 0.2.1-rc.2 的 dsh-user-approval：effectivePolicy 为 never 时直接
+返回 rejected，工具管线在执行主体前停止。默认 danger-full-access 预设是 never，
+workspace-write 预设是 ask。广泛文件访问和允许审批提示是两个独立策略，never
+不表示自动批准。手动拒绝与自动拒绝可产生相同工具错误，错误文本不能单独证明来源。
+
+验收应在会话 `/permission` 中选择“工作区内修改”，核对可交互审批，再进行先拒绝、
+后明确重试批准的两步。新会话默认权限设置与当前会话切换应分别说明。原始拒绝
+结果保留，批准路径单独验收；不通过关闭插件审批或绕过工具写 JSON 来完成本项。

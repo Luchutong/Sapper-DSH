@@ -59,6 +59,15 @@ SHA256：`0f5e31a6b4fb31db4c1b170e70a9325884ec1f39001c61a306f19458d64e35d6`。
 
 ## 下一步
 
+2026-11-03 M1 首轮反馈：用户以 goal=SAPPER-M1-LOCAL：验证存储、origin=desktop fixture
+调用 sapper_init，返回 `Error: the user rejected tool "sapper_init"`，并报告事实图
+未创建、状态仍为 uninitialized。拒绝路径符合预期（用户反馈，未另采集文件系统日志）；
+批准初始化及后续写入链路仍待验证。用户贴出的会话说明称审批提示已禁用。
+
+已核对安装版 DSH 0.2.1-rc.2：approval=never 在审批服务直接返回 rejected，工具
+主体不执行；默认“完全权限”预设使用 never，“工作区内修改”使用 ask。验收指南已
+补充 `/permission` 当前会话切换入口。该反馈不要求修改插件审批策略或手工初始化。
+
 将 alpha.3 安装到 DSH NEXT 后，按 [M1 验收指南](m1-validation.md) 检查审批拒绝
 无写入、六工具闭环、重启持久化与启停/卸载。完成 M1 验收后推进 M2。
 

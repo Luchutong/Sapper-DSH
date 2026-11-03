@@ -21,6 +21,30 @@ M0 的手工两字段 fixture；sapper_init 不覆盖旧图，sapper_status 会�
 请在同一会话完成领取与结案测试，worker 身份由会话决定。下面每一行都要求模型
 实际调用对应工具，查看调用参数、审批与返回值，避免仅看模型口述。
 
+### 准备可交互的审批会话
+
+在 DSH 会话中输入 `/permission`，选择“工作区内修改”（workspace-write）。当前
+DSH 0.2.1-rc.2 安装版的默认预设使用 approval=ask，可以出现审批提示。
+会话输入框的权限选择器也可切换当前会话；“设置 → 通用 → 权限”选择的是新会话
+的默认权限，修改后需新建会话再测。自定义权限预设以其实际 approval 策略为准。
+
+默认“完全权限”（danger-full-access）采用 approval=never。never 表示需要审批的
+操作自动拒绝，**不表示自动批准**。因此即使允许广泛文件访问，Sapper 主动请求
+审批的写工具仍会被拒绝。请通过 DSH 会话权限入口启用 ask 后测试批准路径。
+
+首次拒绝预期返回 `Error: the user rejected tool "sapper_init"`。手动拒绝和 never
+自动拒绝均可能产生同一错误；仅凭该错误不能区分具体来源。模型所说的“审批提示
+已禁用”与 never 行为一致，可在权限选择器核对。拒绝后调用只读 sapper_status，
+应仍为 uninitialized；也可在前面的 PowerShell 窗口检查：
+
+```powershell
+Test-Path -LiteralPath (Join-Path $workspace '.sapper/project.json')
+```
+
+全新测试工作区的预期为 False。切换权限后，明确要求模型重新调用一次相同参数的
+sapper_init，并在 DSH 提示中批准。成功后再进行下表第 3 步；不以手工写 JSON
+代替工具初始化验收。
+
 ## 2. 最小读写链路
 
 | 顺序 | 调用参数 | 预期 |
