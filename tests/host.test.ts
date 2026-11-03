@@ -2,19 +2,34 @@ import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promis
 import os from 'node:os'
 import path from 'node:path'
 import { Context, Service } from '@deepseek-ai/cordis'
-import { SettingsProvider } from '@deepseek-ai/dsh-settings'
-import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
+import { SettingsForms } from '@deepseek-ai/dsh-settings'
+import { Loader } from '@deepseek-ai/cordis-plugin-loader'
+import type { Entry } from '@deepseek-ai/cordis-plugin-loader'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { afterEach, describe, expect, it } from 'vitest'
 import * as plugin from '../src/index.js'
 
-class MemorySettings extends SettingsProvider {
-  readonly writable = true
+/** Test persistence only; forms, validation and live updates use the real SDK. */
+class TestConfigEditor extends Service {
+  static inject = ['loader']
   writes = 0
-  protected async load() { return {} }
-  protected async persist(_ns: SettingsNamespace, _section: Record<string, unknown>) { this.writes++ }
+  documentPath: string
+  constructor(ctx: Context, config: { cwd: string }) {
+    super(ctx, 'configEditor')
+    this.documentPath = path.join(config.cwd, 'profile.patch.json')
+  }
+  entries() { return [...this.ctx.loader.entries()] }
+  configuration() {
+    return this.entries().map(entry => ({ entry, inherited: {}, override: entry.options.config ?? {} }))
+  }
+  async edit(entry: Entry, change: (raw: Record<string, unknown>, inherited: Record<string, unknown>) => object) {
+    const config = change(entry.options.config ?? {}, {})
+    await entry.update({ config })
+    await writeFile(this.documentPath, JSON.stringify(config), 'utf8')
+    this.writes++
+  }
 }
 
 /** Real Cordis lifecycle and real SDK definitions, with no model/provider/network. */
@@ -37,13 +52,22 @@ async function setup(enabled = true) {
   cleanup.push(() => rm(cwd, { recursive: true, force: true }))
   const ctx = new Context()
   cleanup.push(() => ctx.fiber.dispose())
-  await ctx.plugin(MemorySettings)
+  await ctx.plugin(Loader)
   await ctx.plugin(ToolsProbe)
   ctx.provide('agents', {})
-  const fiber = await ctx.plugin(plugin, { enabled })
+  ctx.provide('profileContext', { home: cwd })
+  await ctx.plugin(TestConfigEditor, { cwd })
+  await ctx.plugin(SettingsForms)
+  const loader = ctx.loader
+  loader.builtins.sapper = plugin
+  const options = { id: 'sapper', name: 'cordis:sapper', config: { enabled } }
+  await loader.create(options)
+  await loader.await()
+  const fiber = loader.resolve('sapper').fiber!
   const tools = ctx.get('tools') as unknown as ToolsProbe
-  const settings = ctx.get('settings') as MemorySettings
-  return { ctx, tools, settings, fiber, cwd }
+  const settings = ctx.settings
+  const editor = ctx.get('configEditor') as unknown as TestConfigEditor
+  return { ctx, tools, settings, editor, loader, fiber, cwd }
 }
 
 async function seed(cwd: string, content: string) {
@@ -63,33 +87,35 @@ async function preStep(ctx: Context, cwd: string, messages = [createUserMessage(
 
 describe('host M0 integration', () => {
   it('loads using real Cordis, reads an absent graph without creating files or settings', async () => {
-    const { tools, settings, cwd } = await setup()
+    const { tools, editor, cwd } = await setup()
     expect([...tools.definitions.keys()]).toEqual(['sapper_status'])
     const tool = tools.definitions.get('sapper_status')!
     const value = await tool.execute({}, { agent: { session: { header: { cwd } } }, signal: new AbortController().signal } as never)
     expect(value).toMatchObject({ state: 'uninitialized', milestone: 'M0-scaffold' })
     expect(await readdir(cwd)).toEqual([])
-    expect(settings.writes).toBe(0)
+    expect(editor.writes).toBe(0)
   })
 
   it('injects one source-marked snapshot, deduplicates it and removes it when disabled', async () => {
-    const { ctx, settings, tools, fiber, cwd } = await setup()
+    const { ctx, settings, tools, fiber, loader, editor, cwd } = await setup()
     const content = JSON.stringify({ goal: '读取证据', status: 'active' })
     await seed(cwd, content)
     const first = await preStep(ctx, cwd)
     expect(first.kind).toBe('enter')
     expect(first.messages).toHaveLength(2)
-    expect(first.messages[1]!.source).toMatchObject({ plugin: 'sapper-dsh', form: 'snapshot' })
+    expect(first.messages[1]!.source).toMatchObject({ kind: 'sapper-dsh', form: 'snapshot' })
     expect((await preStep(ctx, cwd, first.messages)).messages).toHaveLength(2)
     await settings.update('sapper', { enabled: false })
     expect(tools.definitions.size).toBe(0)
+    expect(loader.resolve('sapper').fiber).toBe(fiber)
+    expect(JSON.parse(await readFile(editor.documentPath, 'utf8'))).toMatchObject({ enabled: false })
     expect((await preStep(ctx, cwd, first.messages)).messages).toHaveLength(1)
     await settings.update('sapper', { enabled: true })
     expect(tools.definitions.size).toBe(1)
     expect(await readFile(path.join(cwd, '.sapper/project.json'), 'utf8')).toBe(content)
     await fiber.dispose()
     expect(tools.definitions.size).toBe(0)
-    expect(settings.get('sapper')).toBeUndefined()
+    expect(settings.describe().some(row => row.ns === 'sapper')).toBe(false)
     expect((await preStep(ctx, cwd)).messages).toHaveLength(1)
   })
 
@@ -115,10 +141,18 @@ describe('host M0 integration', () => {
     expect(await readFile(path.join(cwd, '.sapper/project.json'), 'utf8')).toBe('{broken')
   })
 
-  it('registers the settings namespace while starting disabled', async () => {
+  it('exposes the entry Config form while starting disabled', async () => {
     const { tools, settings, cwd, ctx } = await setup(false)
-    expect(settings.get('sapper')).toMatchObject({ enabled: false })
+    expect(settings.describe().find(row => row.ns === 'sapper')).toMatchObject({ value: { enabled: false }, autoGenerate: false })
     expect(tools.definitions.size).toBe(0)
     expect((await preStep(ctx, cwd)).messages).toHaveLength(1)
+  })
+
+  it('rejects stale settings writes using the new form revision fence', async () => {
+    const { settings, tools } = await setup()
+    const revision = settings.describe().find(row => row.ns === 'sapper')!.revision
+    await settings.update('sapper', { enabled: false }, revision)
+    await expect(settings.update('sapper', { enabled: true }, revision)).rejects.toMatchObject({ code: 'SETTINGS_CONFLICT' })
+    expect(tools.definitions.size).toBe(0)
   })
 })

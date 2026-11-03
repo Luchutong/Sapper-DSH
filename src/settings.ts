@@ -9,7 +9,7 @@ function group<T extends Record<string, Schema>>(fields: T) {
 }
 
 /** This schema is also the single source of defaults for the settings namespace. */
-export const Config = group({
+const PlainConfig = group({
   enabled: Schema.boolean().default(true).description('启用 Sapper'),
   store: group({
     mode: Schema.union(['workspace', 'global']).default('workspace'),
@@ -51,14 +51,21 @@ export const Config = group({
   ui: group({ graphPreview: Schema.boolean().default(false) }),
 })
 
-export type Config = ReturnType<typeof Config>
-export type ConfigInput = Parameters<typeof Config>[0]
+// DSH 0.2 settings expose volatile Config fields through the profile editor.
+export const Config = PlainConfig.volatile()
+export type RuntimeConfig = ReturnType<typeof Config>
+export type Config = ReturnType<RuntimeConfig['get']>
+export type ConfigInput = Parameters<typeof PlainConfig>[0]
 
 export function resolveConfig(input: ConfigInput = {}): Config {
-  const config = Config(input)
+  const config = PlainConfig(input)
+  validateConfig(config)
+  return config
+}
+
+export function validateConfig(config: Config): void {
   if (!config.store.dir.trim() || config.store.dir.includes('\0')) {
     throw new Error('store.dir 必须是非空路径，且不能包含 NUL')
   }
   for (const pattern of config.flags.patterns) new RegExp(pattern)
-  return config
 }

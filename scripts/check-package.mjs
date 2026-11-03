@@ -3,6 +3,8 @@ import { readFile, readdir } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import vm from 'node:vm'
 
+await import('./check-compatibility.mjs')
+
 const root = new URL('../', import.meta.url)
 const manifest = JSON.parse(await readFile(new URL('package.json', root), 'utf8'))
 const patch = await readFile(new URL(manifest.dsh.bundle.patch, root), 'utf8')
@@ -31,18 +33,22 @@ assert.equal(typeof client.apply, 'function')
 const registrations = []
 let writes = 0
 const scope = {
-  getSnapshot: () => ({ status: 'ready', writable: true, value: { enabled: true } }),
-  subscribe: () => () => {}, set: async () => { writes++ },
+  getSnapshot: () => ({ status: 'ready', writable: true, value: { enabled: true }, base: {}, user: {}, revision: 0 }),
+  subscribe: () => () => {}, set: async () => { writes++; return true },
 }
 client.apply({
-  settingsScope: { bind: spec => { assert.equal(spec.namespace, 'sapper'); return scope } },
+  configForms: {
+    get: id => { assert.equal(id, 'sapper'); return scope },
+    whileServed: (ids, setup) => { assert.deepEqual([...ids], ['sapper']); return setup(new Set(ids)) },
+  },
+  effect: setup => setup(),
   slots: {
     inject: (_name, setup) => setup(),
-    register: (options, component) => { registrations.push(options); assert.equal(typeof component, 'function') },
+    register: (options, component) => { registrations.push(options); assert.equal(typeof component, 'function'); return () => {} },
   },
 })
 assert.equal(writes, 0, 'opening the client must not write settings')
-assert.deepEqual(registrations.map(row => row.name), ['settings.plugin.item', 'settings.plugins.tab'])
+assert.deepEqual(registrations.map(row => row.name), ['plugins.item', 'settings.section'])
 const kb = (await readdir(new URL('resources/kb/', root))).filter(file => file.endsWith('.json'))
 assert.equal(kb.length, 56)
 console.log('Package checks passed: host import, lazy-CJS client, settings slots, no eager writes, 56 KB resources.')

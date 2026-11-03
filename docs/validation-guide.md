@@ -1,6 +1,6 @@
 # 当前骨架如何验证
 
-当前版本是 `0.1.0-alpha.1` / M0。验证目标是构建、插件加载、状态工具、目标摘要
+当前版本是 `0.1.0-alpha.2` / M0，目标 DSH `0.2.1-rc.2`。验证目标是构建、插件加载、状态工具、目标摘要
 注入与启用开关。完整事实图写入、frontier、召回与解题编排尚未实现。
 
 ## 1. 自动检查
@@ -11,12 +11,14 @@
 cd /home/luchitong/work/Sapper-DSH
 corepack pnpm install --frozen-lockfile
 corepack pnpm check
+corepack pnpm check:compatibility
 corepack pnpm pack --pack-destination dist
 ```
 
-预期：14 个测试通过，类型检查与双端构建成功，输出 `Package checks passed`，
-生成 `dist/sapper-dsh-0.1.0-alpha.1.tgz`。已完成的 Ubuntu/Windows × Node 22/24
-[首次 CI](https://github.com/Luchutong/Sapper-DSH/actions/runs/41604320060) 可作对照。
+预期：19 个测试通过，类型检查与双端构建成功，输出 `Package checks passed`，
+同时应出现 `Compatibility gate passed`，生成 `dist/sapper-dsh-0.1.0-alpha.2.tgz`。
+最新 Ubuntu/Windows × Node 22/24 结果见仓库 Actions；首次 CI 属于旧 SDK，不能
+证明该包可在当前 DSH 安装。
 
 ## 2. 使用桌面应用提供的安装入口
 
@@ -24,12 +26,16 @@ corepack pnpm pack --pack-destination dist
 应显示正常环境和 `Profile: desktop`。这里的专用 dsh shim 由 Electron 提供，
 可以管理桌面 profile；系统通用 CLI 和 WSL 中的 CLI 不具备这个入口。
 
+先执行 `dsh --version`，核对输出为 `0.2.1-rc.2`。桌面应用版本号（例如
+`2.0.19-next`）与 Harness/SDK 版本号不同；兼容性应比较后者。若版本不同，
+先更新 SDK 适配与验证，不把版本豁免当作适配结果。
+
 以下为这台机器的路径示例，在上述 Windows PowerShell 终端内运行。复制包到
 Windows 临时目录后安装，避免把 Linux 路径直接交给 Windows 包管理器：
 
 ```powershell
-$source = '\\wsl.localhost\Ubuntu-24.04\home\luchitong\work\Sapper-DSH\dist\sapper-dsh-0.1.0-alpha.1.tgz'
-$package = Join-Path $env:TEMP 'sapper-dsh-0.1.0-alpha.1.tgz'
+$source = '\\wsl.localhost\Ubuntu-24.04\home\luchitong\work\Sapper-DSH\dist\sapper-dsh-0.1.0-alpha.2.tgz'
+$package = Join-Path $env:TEMP 'sapper-dsh-0.1.0-alpha.2.tgz'
 Copy-Item -LiteralPath $source -Destination $package
 dsh plugin add $package
 ```
@@ -40,7 +46,7 @@ dsh plugin add $package
 
 ## 3. 验证客户端和状态工具
 
-设置 → 插件应出现 Sapper 卡片和 Sapper tab，显示版本与“启用 Sapper”字段。
+插件页面应出现 Sapper 卡片，“设置 → Sapper”显示版本与“启用 Sapper”字段。
 只打开设置页不会主动写入默认值。
 
 先创建一个没有 `.sapper` 的测试工作区，并在 DSH 中选择它：
@@ -57,7 +63,7 @@ $workspace
 ```json
 {
   "plugin": "sapper-dsh",
-  "version": "0.1.0-alpha.1",
+  "version": "0.1.0-alpha.2",
   "milestone": "M0-scaffold",
   "enabled": true,
   "state": "uninitialized",
@@ -83,7 +89,7 @@ $project = '{"goal":"SAPPER-M0-9B31：验证目标摘要注入","status":"active
 工作区的目标。”不要在消息里给出标记值。模型回答目标可作辅助证据；如能查看
 请求或消息明细，应确认存在：
 
-- `source.kind = plugin`、`source.plugin = sapper-dsh`、`source.form = snapshot`。
+- `source.kind = sapper-dsh`、`source.form = snapshot`。
 - 内容含 `[Sapper: UNTRUSTED DATA]` 和上述唯一目标标记。
 - 每轮只添加一个当前 snapshot。
 
@@ -101,6 +107,9 @@ $project = '{"goal":"SAPPER-M0-9B31：验证目标摘要注入","status":"active
 | 关闭后重启 DSH NEXT | 开关仍为关闭，证明设置持久化 |
 | 观察 project.json | 文件内容不变；当前插件不写图 |
 
+设置变更应持久化到 profile 的 `cordis.patch.yml` 中 id 为 `sapper` 的条目。
+DSH 0.2 不再使用旧的 `settings.yaml` 命名空间注册机制。
+
 移除插件也应使用应用打开的 DSH 终端：
 
 ```powershell
@@ -110,4 +119,5 @@ dsh plugin remove sapper-dsh
 重启后卡片、工具与注入均不再出现。测试工作区和已有设置数据不会因此自动删除。
 
 逐项记录 DSH 版本、日期、工具返回与必要日志到 `docs/m0-validation.md` 和 GitHub
-进度 issue。以上桌面安装与交互目前仍未实测；全部通过后才结束 M0。
+进度 issue。目前已通过桌面自带安装器的隔离 profile 安装（退出码 0）；上面的
+desktop 激活和交互仍需实测，全部通过后才结束 M0。

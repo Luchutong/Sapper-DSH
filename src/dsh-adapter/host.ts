@@ -2,6 +2,8 @@ import type { Context } from '@deepseek-ai/cordis'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { UserMessage } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-agent'
+import type {} from '@deepseek-ai/cordis-plugin-loader'
+import type {} from './message.js'
 import type { Config } from '../settings.js'
 import { PLUGIN_NAME } from '../constants.js'
 import { resolveStorePath } from '../store/paths.js'
@@ -11,7 +13,7 @@ import { createStatusTool } from '../tools/status.js'
 
 function isOwnSnapshot(message: unknown): boolean {
   const source = (message as UserMessage).source
-  return source.kind === 'plugin' && source.plugin === PLUGIN_NAME && source.form === 'snapshot'
+  return source.kind === PLUGIN_NAME && source.form === 'snapshot'
 }
 
 export function registerRuntime(ctx: Context, getConfig: () => Config): void {
@@ -25,7 +27,7 @@ export function registerRuntime(ctx: Context, getConfig: () => Config): void {
     }
   }
   syncTool()
-  ctx.on('settings/updated', (ns) => { if (ns === 'sapper') syncTool() })
+  ctx.on('loader/volatile-update', syncTool)
 
   ctx.on('agent/pre-step', async (payload, next) => {
     const decision = await next()
@@ -45,7 +47,7 @@ export function registerRuntime(ctx: Context, getConfig: () => Config): void {
         messages: [...messages, createUserMessage({
           content: [{ type: 'text', text }],
           source: {
-            kind: 'plugin', plugin: PLUGIN_NAME, form: 'snapshot',
+            kind: PLUGIN_NAME, form: 'snapshot',
             sections: [{ name: 'Sapper', text }],
           },
         })],

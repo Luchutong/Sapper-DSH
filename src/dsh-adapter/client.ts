@@ -1,33 +1,26 @@
 import type { ComponentType } from 'react'
+import type { ConfigForm, ConfigForms } from '@deepseek-ai/dsh-client-ui-settings/client'
 
-/** Narrow client service contracts observed in DSH NEXT 0.1.5-rc.1.
+/** Narrow client service contracts observed in DSH 0.2.1-rc.2.
  * Keep this browser-only seam separate from Node/Cordis host augmentations.
  */
-export interface SettingsView {
-  status: 'loading' | 'ready' | 'unavailable'
-  value?: { enabled: boolean; [key: string]: unknown } | undefined
-  revision?: number | undefined
-  writable: boolean
-}
-
-export interface BrowserSettingsScope {
-  getSnapshot(): SettingsView
-  subscribe(listener: () => void): () => void
-  set(field: string, value: unknown): Promise<void>
-}
+export type BrowserSettingsScope = Pick<ConfigForm<unknown>, 'getSnapshot' | 'subscribe' | 'set'>
 
 interface SlotOptions {
-  name: 'settings.plugin.item' | 'settings.plugins.tab'
-  key?: string
-  id?: string
+  name: 'plugins.item' | 'settings.section'
+  id: string
   label?: string
   order?: number
 }
 
 export interface BrowserContext {
-  settingsScope: { bind(spec: { namespace: string }): BrowserSettingsScope }
+  configForms: {
+    get(entryId: string): BrowserSettingsScope
+    whileServed: ConfigForms['whileServed']
+  }
+  effect(setup: () => () => void, label?: string): unknown
   slots: {
-    inject(name: SlotOptions['name'], setup: () => unknown): unknown
-    register(options: SlotOptions, component: ComponentType): unknown
+    inject(name: SlotOptions['name'], setup: () => () => void): () => void
+    register(options: SlotOptions, component: ComponentType<{ view?: string }>): () => void
   }
 }

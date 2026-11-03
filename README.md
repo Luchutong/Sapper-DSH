@@ -3,11 +3,15 @@
 将 [sapper-v2](https://github.com/N1nEmAn/sapper-v2) 的事实图与
 `reason → explore → verify` 解题循环移植为 DSH NEXT 桌面插件。
 
-**当前版本：`0.1.0-alpha.1`，项目骨架 / M0 技术验证中。**
+**当前版本：`0.1.0-alpha.2`，项目骨架 / M0 技术验证中。**
 目前提供一个真实注册的只读工具 `sapper_status`、读取已有项目目标的
-`agent/pre-step` 探针、以及插件自己的客户端设置卡片与设置 tab。
+`agent/pre-step` 探针、以及插件自己的客户端插件卡片与 Sapper 设置页。
 尚未提供建图、事实写入、flag 记账或子代理编排，不适合当作完整解题插件使用。
-Windows DSH NEXT 的实际安装与界面验收仍待完成。
+已通过 Windows DSH NEXT 安装器的隔离 profile 安装验证；桌面界面验收仍待完成。
+
+`alpha.2` 的目标运行时是 **DSH 0.2.1-rc.2**。`alpha.1` 使用旧 SDK，已确认被
+该运行时拒绝安装。修复过程与发布检查要求见
+[版本兼容经验](docs/lessons-learned.md)。
 
 ## 范围
 
@@ -24,18 +28,21 @@ GitHub 阶段跟踪：[issue #1](https://github.com/Luchutong/Sapper-DSH/issues/
 ## 开发
 
 需要 Node.js 22 或更新版本，以及 pnpm 8.15.4。DSH peers 锁定为 NEXT
-`0.1.5-rc.1`；Cordis 为 `4.0.2`，Schemastery 为 `3.18.2`。
+`0.2.1-rc.2`；Cordis 为 `4.0.5`，Schemastery 为 `3.18.5`。
 
 ```sh
 corepack enable
 pnpm install --frozen-lockfile
 pnpm check
+pnpm check:compatibility
 pnpm pack --pack-destination dist
 ```
 
 `check` 执行类型检查、测试、双端构建和产物契约检查。测试使用真实 Cordis
-与 DSH SDK、内存设置 provider 和工具注册探针，不调用模型、不连接目标，
+与 DSH SDK、Loader、SettingsForms 和测试配置编辑器，不调用模型、不连接目标，
 不修改现有 DSH profile。CI 覆盖 Ubuntu / Windows、Node 22 / 24。
+`check:compatibility` 使用 DSH 官方安装检查器，打包时也会自动执行；准确的
+SDK peers 与测试依赖必须一致，仅声明已经适配的运行时版本。
 
 ## 开发包安装
 
@@ -46,10 +53,10 @@ CLI 会拒绝管理保留的 desktop profile，WSL 终端也不是 Windows 桌�
 
 ```powershell
 # 在 DSH NEXT 打开的终端内执行，换成安装包的 Windows 路径
-dsh plugin add "C:\path\to\sapper-dsh-0.1.0-alpha.1.tgz"
+dsh plugin add "C:\path\to\sapper-dsh-0.1.0-alpha.2.tgz"
 ```
 
-重启 DSH NEXT 后，在“设置 → 插件”检查 Sapper 卡片与 Sapper tab，切换启用字段。
+重启 DSH NEXT 后，在插件页面检查 Sapper 卡片，或进入“设置 → Sapper”切换启用字段。
 已有 `.sapper/project.json` 的工作区会注入带不可信声明的目标摘要；没有图时不会
 自动建图。`autoInit` 等字段目前只声明 schema，实际功能按路线图交付。
 禁用后不再注册 `sapper_status`，并清除本轮消息中本插件的旧 snapshot。
@@ -62,13 +69,13 @@ dsh plugin add "C:\path\to\sapper-dsh-0.1.0-alpha.1.tgz"
 ```text
 src/
   index.ts                 Cordis 宿主入口
-  settings.ts              sapper schema 与默认值
+  settings.ts              volatile Config schema 与默认值
   dsh-adapter/             宿主/浏览器 API 边界
   store/                   数据契约、路径边界、只读项目摘要探针
   render/                  M0 目标摘要与字符预算
   tools/                   sapper_status 与后续工具清单
   orchestration/           M3 候选结果/复核接口预留
-  client/                  设置卡片、tab 与图预览占位
+  client/                  插件卡片、设置页与图预览占位
 resources/
   kb/                      56 条原始 KB 条目
   prompts/                 M3 三角色 prompt 草案，尚未注册
@@ -81,7 +88,8 @@ lib/                       构建产物，未提交到 Git
 ```
 
 宿主输出 ESM；浏览器输出以 `window.__ModuleLoader__.load()` 注册的 lazy-CJS
-factory。客户端只引用宿主提供的 React 模块，通过 `settingsScope` 读写设置，
+factory。客户端只引用宿主提供的 React 模块，通过 `configForms.get('sapper')`
+读写插件 Config；变更由 DSH 写入当前 profile 的 Cordis patch，
 没有 Node 文件系统或 shell 依赖。真实 SDK 核对记录在
 [docs/sdk-contract.md](docs/sdk-contract.md)。
 

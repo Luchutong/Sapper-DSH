@@ -1,33 +1,38 @@
 # 架构与边界
 
-该仓库按 `docs/plan.html` 的五项决定搭建。当前交付是 M0 骨架；接口预留不表示
+该仓库按 `docs/plan.html` 的五项决定搭建，并按 DSH 0.2.1-rc.2 调整 API。
+原计划保留为历史快照；当前交付是 M0 骨架，接口预留不表示
 对应功能已实现。
 
 ```text
 DSH agent loop                   WebView
-  │ agent/pre-step                  │ settings.plugin.item / settings.plugins.tab
-  │ tools                           │ settingsScope.bind('sapper')
+  │ agent/pre-step                  │ plugins.item / settings.section
+  │ tools                           │ configForms.get('sapper')
   ▼                                 ▼
 src/dsh-adapter/host.ts           src/client/
   │                                 │
   ├── src/tools/status.ts            └── DSH settings transport
   ├── src/render/context.ts                    │
   └── src/store/project.ts                     ▼
-             │                        ctx.settings namespace: sapper
+             │                        Loader entry Config (volatile)
              ▼
   workspace/.sapper/project.json
 ```
 
 ## 目前实现
 
-- Cordis `apply()` 声明 `tools / agents / settings` 依赖，注册 `sapper` schema。
+- Cordis `apply()` 声明 `tools / agents` 依赖，直接读取 Loader 提供的 volatile Config。
+  `settings` 是可选服务；可用时声明自带页面的策略，表单按 id=sapper 的条目派生。
 - `sapper_status` 用真实 `defineTool()` 提供有 schema 的只读输出；已启用时注册，
   设置关闭时注销。状态读取不创建图、不初始化 settings 文件。
 - `agent/pre-step` 先调用下游 `next()`，保留拒绝和取消结果。只在有工作区、有
   `project.json`、有正常入场消息时增加目标摘要；清除同插件旧 snapshot。
 - 上下文固定包含不可信声明；超预算时整段省略目标，不截断单条数据。
 - 客户端只读宿主设置镜像，用户主动切换后才调用 `scope.set('enabled', value)`。
-- profile、settings.yaml、模型密钥均由宿主管理。
+  DSH 0.2 返回 boolean；false 会显示保存失败，模型凭据仍由宿主管理。
+- 设置持久化由 DSH 配置编辑器写入 profile 的 Cordis patch。通过
+  `loader/volatile-update` 更新工具注册，不再创建独立 settings.yaml section。
+- 消息来源为 producer-owned `kind: sapper-dsh`，保留 snapshot/sections 元数据。
 
 ## 后续模块
 
@@ -37,7 +42,7 @@ src/dsh-adapter/host.ts           src/client/
 | `render/` | 有预算的目标摘要 | M2 frontier、历史和中英文召回 |
 | `tools/` | status + 未注册的工具清单 | M1/M2 写入、文档、flag、KB 与 slash commands |
 | `orchestration/` | candidate / verification 接口 | M3 DSH subagent、审批、上限与失败回退 |
-| `client/` | 卡片、tab、一个启用字段 | M4 五组配置、诊断 RPC、只读图预览与冲突 UI |
+| `client/` | 插件卡片、设置页、一个启用字段 | M4 五组配置、诊断 RPC、只读图预览与冲突 UI |
 
 M0 只支持工作区内的存储子目录。`global` 模式、自动建图、完整 frontier、自动
 flag 捕获等配置已声明但未执行。存储读取目前只校验 project 的 goal/status，
@@ -54,3 +59,6 @@ confirmed；失败保留开放 intent 并记录 hint。此状态扩展与 Python
 `dsh.client.inject` 声明客户端运行前需要加载的插件，顶层 `exports['./client']`
 指向浏览器 artifact。构建后的 VM 检查验证注册是惰性的，并限制浏览器 require
 列表，防止 Node-only 模块意外进入客户端。
+
+安装兼容性使用 `dsh-app-boot` 官方检查器。源代码测试与打包检查都拒绝旧 SDK
+声明，SDK peer 要求与开发依赖保持一致。只通过 Node CI 不能替代桌面安装验收。

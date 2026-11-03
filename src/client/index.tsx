@@ -4,7 +4,7 @@ import { GraphPreview } from './graph.js'
 import { VERSION } from '../constants.js'
 
 export const name = 'sapper-dsh'
-export const inject = ['slots', 'settingsScope']
+export const inject = ['slots', 'configForms']
 
 export function SapperSettings({ scope }: { scope: BrowserSettingsScope }) {
   const state = useSyncExternalStore(
@@ -14,12 +14,16 @@ export function SapperSettings({ scope }: { scope: BrowserSettingsScope }) {
   )
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
+  const enabled = typeof state.value === 'object' && state.value !== null &&
+    'enabled' in state.value && state.value.enabled === true
 
   const toggle = async (enabled: boolean) => {
     setPending(true)
     setError('')
     try {
-      await scope.set('enabled', enabled)
+      if (!await scope.set('enabled', enabled)) {
+        setError('DSH 未接受此次保存。请重新加载设置，确认是否有其他窗口修改了配置。')
+      }
     } catch {
       setError('保存失败。请重新加载设置，确认是否有其他窗口修改了配置。')
     } finally {
@@ -31,14 +35,14 @@ export function SapperSettings({ scope }: { scope: BrowserSettingsScope }) {
     <h3>Sapper <small>{VERSION}</small></h3>
     <p>工作区记忆与任务规划插件 · M0 骨架</p>
     <label>
-      <input type="checkbox" checked={state.value?.enabled ?? false}
+      <input type="checkbox" checked={enabled}
         disabled={state.status !== 'ready' || !state.writable || pending}
         onChange={event => { void toggle(event.target.checked) }} />{' '}
       启用 Sapper
     </label>
     <p role="status">{state.status === 'ready'
-      ? (state.value?.enabled ? '已启用：提供只读状态探针与目标摘要注入。' : '已关闭：工具和上下文注入均不生效。')
-      : '正在等待 DSH 的 sapper 设置命名空间；不会自动写入默认值。'}</p>
+      ? (enabled ? '已启用：提供只读状态探针与目标摘要注入。' : '已关闭：工具和上下文注入均不生效。')
+      : '正在等待 DSH 的 sapper 配置表单；不会自动写入默认值。'}</p>
     {error && <p role="alert">{error}</p>}
     <details>
       <summary>开发进度</summary>
@@ -49,12 +53,17 @@ export function SapperSettings({ scope }: { scope: BrowserSettingsScope }) {
 }
 
 export function apply(ctx: BrowserContext): void {
-  const scope = ctx.settingsScope.bind({ namespace: 'sapper' })
-  const Panel = () => <SapperSettings scope={scope} />
-  ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({
-    name: 'settings.plugin.item', key: 'sapper',
-  }, Panel))
-  ctx.slots.inject('settings.plugins.tab', () => ctx.slots.register({
-    name: 'settings.plugins.tab', id: 'sapper', label: 'Sapper', order: 100,
-  }, Panel))
+  const scope = ctx.configForms.get('sapper')
+  const Panel = ({ view }: { view?: string }) => view === 'summary'
+    ? <p>工作区记忆与任务规划插件 · M0 骨架</p>
+    : <SapperSettings scope={scope} />
+  ctx.effect(() => ctx.configForms.whileServed(['sapper'], () => {
+    const offCard = ctx.slots.inject('plugins.item', () => ctx.slots.register({
+      name: 'plugins.item', id: 'sapper', label: 'Sapper', order: 100,
+    }, Panel))
+    const offSettings = ctx.slots.inject('settings.section', () => ctx.slots.register({
+      name: 'settings.section', id: 'sapper', label: 'Sapper', order: 100,
+    }, Panel))
+    return () => { offSettings(); offCard() }
+  }), 'sapper: configuration pages')
 }

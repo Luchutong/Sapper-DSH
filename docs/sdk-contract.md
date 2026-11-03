@@ -1,41 +1,43 @@
 # DSH SDK 核对记录
 
-日期：2026-11-03。目标：DSH NEXT 0.1.5-rc.1。
+日期：2026-11-03。当前目标：DSH **0.2.1-rc.2**，插件 **0.1.0-alpha.2**。
 
-核对来源为本地 DSH 包缓存、npm 同版本包的实现与类型声明。没有复制 DSH 内部
-代码。版本固定在 package.json 与 pnpm-lock.yaml；不依赖 Windows 应用的内部
-Python/uv 路径。
+版本依据是当前 Windows 安装版 app.asar 内实际加载的包元数据，并与 npm 同版本
+包的实现和类型声明对照。旧 ~/.cache/pkg 中的 0.1.5-rc.1 不能代表当前桌面。
+Cordis 为 4.0.5，Schemastery 为 3.18.5。原计划 HTML 保留为历史快照，具体适配
+以本文件和代码为准。事故记录见 [lessons-learned.md](lessons-learned.md)。
 
-| 契约 | 已核对的来源 | 骨架采用方式 |
+| 契约 | 当前实现 / 来源 | 插件采用方式 |
 | --- | --- | --- |
-| Cordis apply / inject / effect | `@deepseek-ai/cordis@4.0.2` | 宿主 ESM 导出 `apply`、`Config`、`inject` |
-| 工具 | `dsh-tools/lib/types/schema.d.ts` | `defineTool({parameters, output: {schema, render}, execute})` |
-| pre-step | `dsh-agent/lib/types/runtime-types.d.ts` | payload 包含 agent/messages/turn/step/signal，next 返回 enter/reject |
-| 消息来源 | `dsh-llm/lib/types/message.d.ts` | `createUserMessage` + plugin snapshot + sections |
-| 宿主设置 | `dsh-settings/lib/types/index.d.ts` | register('sapper', schema, {base, validate})，热读 scope.get() |
-| 关闭工具 | `dsh-tools` 的 register | 保存 disposer，关闭后注销；重新打开再注册 |
-| 客户端包入口 | `dsh-client-modules/README.md` 和 `lib/index.js` | 顶层 `exports['./client']`，不是 `dsh.client.exports` |
-| 客户端格式 | `dsh-client-modules/README.md` 的 Lazy-CJS model | classic script 只注册 factory，require 在 materialize 时执行 |
-| 插件卡片 | `dsh-client-ui-settings-plugins/lib/client.js` | keyed slot `settings.plugin.item`，key 为 `sapper` |
-| 独立设置 tab | 同上 + plugin-inventory 的客户端实现 | `settings.plugins.tab`，id 为 `sapper` |
-| 客户端设置 | `dsh-client-ui-settings/lib/client.js` | settingsScope.bind({namespace:'sapper'})，getSnapshot/subscribe/set |
-| 通用 CLI 的 desktop 限制 | `@deepseek-ai/dsh` 的 README 和 `lib/bin.js` | 通用 CLI 拒绝管理 Electron 保留的 desktop profile |
-| 桌面专用 CLI | 已安装 DSH NEXT 2.0.19-next 的 `lib/main.js`、`lib/desktop-cli.js` | 应用菜单“打开 DSH 终端”，专用 shim 设置默认 profile 并调用 runCli({manageDesktopProfile:true}) |
+| 安装兼容性 | dsh-app-boot 的 evaluatePluginCompatibility | 空豁免表检查；CI 和 prepack 必须通过 |
+| Cordis | 4.0.5 的 apply / inject / effect | 宿主 ESM；工具和 Agent 服务为必需，Settings 为可选 |
+| 工具 | dsh-tools 的真实 defineTool 声明 | 参数 schema、输出 schema/render、execute |
+| pre-step | dsh-agent 的 runtime-types | payload 含 agent/messages/turn/step/signal，next 返回 enter/reject |
+| 消息来源 | dsh-llm 的 MessageSourceMap | 扩展 producer kind=sapper-dsh，form=snapshot，带 sections |
+| 配置 | Schemastery volatile + Cordis Loader | Config.volatile()；每次从 config.get() 读取当前值 |
+| 更新通知 | loader/volatile-update | 更新工具注册；不依赖已删除的 settings/updated |
+| 宿主表单 | dsh-settings 的 SettingsForms | 自动从 id=sapper 的 Loader 条目派生，不调用 register |
+| 页面策略 | SettingsForms.configure | 自带客户端页面，auto=false；由可选注入子级持有 effect |
+| 持久化 | DSH config-editor | 当前 profile 的 Cordis patch，替代旧 settings.yaml namespace |
+| 客户端表单 | dsh-client-ui-settings/client 的 ConfigForms/ConfigForm 类型 | configForms.get('sapper')，getSnapshot/subscribe/set |
+| 表单返回值 | ConfigForm.set -> Promise<boolean> | false 显示拒绝保存，异常显示传输失败 |
+| 页面生命周期 | configForms.whileServed | 仅在宿主暴露 sapper 配置时显示页面，取消后释放注册 |
+| 插件卡片 | 当前桌面与官方 companion 的 plugins.item | id=sapper；summary 为短描述，其他视图为表单 |
+| 独立设置页 | settings.section | id=sapper，位于“设置 → Sapper” |
+| 客户端产物 | dsh-client-modules 的 lazy-CJS | 顶层 exports['./client']；classic script 只注册 factory |
+| 安装入口 | 桌面 main.js / desktop-cli.js | 应用菜单打开 DSH 终端，再执行 dsh plugin add；专用 shim 允许管理 desktop |
 
-安装说明修正：此前遗漏了“必须从桌面应用打开专用终端”的前提。桌面终端欢迎
-信息明确提供 `dsh plugin add <package>` / `dsh plugin remove <package>`，修改
-后重启桌面应用。该入口已从安装程序代码核对，实际安装验收仍待完成。
+客户端使用真实 SDK 的 ConfigForm 类型收敛读写接口，不再手写旧版 Promise<void>
+契约。浏览器产物仍只外部引用 React 与 JSX runtime；宿主 SDK 由 DSH 提供。
 
-目前宿主可对照 npm 发布的真实 `.d.ts` 编译。浏览器只涉及少量服务方法，采用
-`src/dsh-adapter/client.ts` 的窄结构契约隔离客户端与宿主 Context 的类型扩展；
-尚需 M0 在 Windows WebView 中确认。
+## 验证范围
 
-## 尚不能据此判定通过
-
-- VM 中 lazy-CJS 和卡片注册成功，不等于 DSH NEXT 已实际发现并激活插件。
-- 内存 provider 的设置热更新通过，不等于 Windows settings.yaml 与 WebView
-  transport 已联调。
-- 当前 settingsScope.set 的 SDK 实现可能在写失败后自动恢复镜像；完整的字段
-  错误和并发冲突展示仍属于 M4，本骨架只提供基础的加载/保存状态。
-- Node/Windows CI 是跨平台单测，不替代真实 DSH NEXT 桌面验收。
-- subagent/workflow、工具审批和数据目录 API 只列为后续待核对项，本轮未接入。
+- 测试使用真实 Cordis、Loader、SettingsForms 和测试配置编辑器，覆盖 volatile
+  更新不重启 fiber、关闭/开启、修订号冲突、图读取与自定义消息来源。
+- 官方检查器拒绝旧包声明、接受新声明；未测旧 SDK 或未知下一版本不会被宣称兼容。
+- 打包检查验证 host import、lazy-CJS、当前客户端插槽与 KB 资源。
+- Windows DSH NEXT 自带 desktop-cli 已在独立 DSH_HOME / 临时 profile 中安装
+  alpha.2 成功（退出码 0，dependencies 与 bundles 已登记，无版本豁免）。
+- 当前仍需 desktop profile 的激活、WebView 加载、字段持久化及停用验收。
+  兼容门禁通过、Node CI 通过和桌面交互通过是不同的证据。
+- subagent/workflow、写工具审批和全局数据目录仍属于后续阶段。
