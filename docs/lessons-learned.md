@@ -126,3 +126,30 @@ M2 同时验证预算必须覆盖声明、frontier、历史、recall 和 KB 的�
 分区分别截断；关闭注入要在任何图/KB 读取之前返回。500 节点实盘与读取调用计数
 可以验证这两个约束。上游 Python difflib 与 TS bigram 的差异明确写入契约，避免
 把 Store/frontier 的兼容测试误解为召回分数完全相同。
+
+## 2026-11-03：M3 必须验证真实子代理生命周期与证据来源
+
+当前安装版 ASAR 和 npm 同版本均提供 SubagentRuntime.startActivation。spec.signal
+只覆盖启动取消，不能假定 abort 后已发布子代理就停止；超时、权限撤销与父调用取消
+必须 dispose 持有的精确 activation 并等待退出。真实 AgentLoop/SubagentRuntime
+测试同时断言最终 live agents 只剩父会话，避免“结果已拒绝但后台还在执行”。
+
+仅用 prompt 要求 explore 不写 confirmed 不够。M3 候选放入 runs，角色工具守卫
+阻止写图，普通父工具的 source_intent/conclude 也受存储门禁。晋升需要 explorer 和
+不同 verifier 各自成功工具输出的可核对引用，verified=true 本身不能替代证据。
+
+同一候选的 maxVerify 不能只放在单次 run 的内存计数里。引用最早候选 run_id 重试
+会重置这种计数；本版将候选子会话与尝试数持久化在意图事务中，并保留回归用例。
+
+父工具可能先因取消产生最终 UI 结果，编排清理仍需持有授权快照至执行体真正退出；
+不能在 tools/result 无条件销毁该快照。清理也不绕过已撤销的权限：不能写时保留
+running/claimed，待原执行者退出、权限恢复后显式 recover，并记录恢复者。
+
+确定性模型加真实 SDK 可以证明生命周期与状态机；在线模型是否理解证据、正确
+判断复现仍需桌面实测。按用户安排 M2/M3 统一验收，不能因本地 CI 通过自动登记
+用户已经验收，也不能把 alpha.4 的反馈当作新编排的通过记录。
+
+同版本、同本地 tgz 路径的反复试装可能由包管理器判定 Already up to date，旧安装内容
+不会随源归档改动自动替换。本轮隔离安装增加了最终 host 哈希核对，发现旧副本后，
+使用带归档哈希的唯一临时路径安装并核对归档/已安装 host。发布产物应保持不可变，
+对外更新必须用新版本；不能仅凭安装退出 0 就宣布当前文件已加载。

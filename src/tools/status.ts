@@ -16,7 +16,7 @@ export function createStatusTool(getConfig: () => Config, alive?: () => boolean,
     async execute(args, exec) {
       exec.signal.throwIfAborted()
       const config = getConfig()
-      const base = { plugin: PLUGIN_NAME, version: VERSION, sdk: SDK_VERSION, milestone: 'M2-context', enabled: config.enabled, store_approval: config.store.approval }
+      const base = { plugin: PLUGIN_NAME, version: VERSION, sdk: SDK_VERSION, milestone: 'M3-orchestration', enabled: config.enabled, store_approval: config.store.approval }
       if (!config.enabled) return json({ ...base, state: 'disabled', goal: '', message: 'Sapper 已关闭' })
       if (!resolveStorePath(exec.agent?.session.header.cwd, config)) return json({ ...base, state: 'unscoped', goal: '', message: '需要带绝对工作区路径的 DSH 会话' })
       const { store } = executionStore(getConfig, exec, alive)
@@ -28,7 +28,7 @@ export function createStatusTool(getConfig: () => Config, alive?: () => boolean,
         ...base,
         ...graphStatus(graph, { fullAccess: fullAccess(exec), ...(exec.agent ? { actor: String(exec.agent.id) } : {}) }, args.view === 'frontier'),
         ...(args.view === 'graph' ? { graph_text: renderGraphView(graph, config.context.maxChars) } : {}),
-        message: 'M2 frontier、历史、recall、离线 KB 与 /sapper 命令已实现；子代理编排属于 M3',
+        message: 'M2/M3 frontier、recall、KB 与 reason/explore/verify 编排已实现',
       })
     },
   })

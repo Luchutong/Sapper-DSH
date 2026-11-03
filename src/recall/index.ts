@@ -46,6 +46,7 @@ export function recallGraph(graph: GraphSnapshot, query: string, limit = 5, scop
   return nodes.map(({ node, type }) => ({
     id: node.id, node_type: type, kind: type === 'fact' ? (node as Fact).kind ?? null : null,
     title: node.title ?? null, description: node.description, has_doc: !!node.doc,
-    ...matchText(query, node.title ?? '', node.description),
+    ...('last_failure' in node && typeof node.last_failure === 'string' ? { last_failure: node.last_failure } : {}),
+    ...matchText(query, node.title ?? '', node.description + ('last_failure' in node && typeof node.last_failure === 'string' ? '\n' + node.last_failure : '')),
   })).filter(node => node.score > 0).sort((a, b) => b.score - a.score || compare(a.id, b.id) || compare(a.node_type, b.node_type)).slice(0, limit)
 }

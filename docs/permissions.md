@@ -1,6 +1,6 @@
 # 自动化与权限策略
 
-适用版本：sapper-dsh 0.1.0-alpha.5，DSH 0.2.1-rc.2。
+适用版本：sapper-dsh 0.1.0-alpha.6，DSH 0.2.1-rc.2。
 
 设计目标：用户已授权的任务可以连续推进；正常记忆、任务状态与证据维护不逐次打断。
 约束落在会话文件权限、工作区边界、数据完整性和用户明确要求的决策点。
@@ -52,18 +52,26 @@ frontier 展示不会补写确认。其他 DSH 策略的 ask/deny 即使在完�
 嵌套设置通过 ConfigForm.mutate 的路径数组 ['store', 'approval'] 写入。SDK 的
 set(field, value) 只写顶层字段，不解析点号路径，不能使用 set('store.approval', ...)。
 
-## 自动化范围
+## M3 编排授权与角色约束
 
-M2 已提供 frontier、recall、离线 KB 与只读 slash commands；reason/explore/verify
-调度仍属于 M3，本版本不宣称已经实现完整自主解题器。后续执行命令、网络操作、真实提交等外部能力继续由 DSH
-管理权限与必要审批；内部图写入的自动权限不会授予这些外部能力额外权限。
+sapper_dispatch 的 reason/explore/verify/run 与 recover 是工作区写入操作；status 是只读。
+完全权限沿用持续授权，即使 orchestration.requireApproval=true 或 store.approval=always
+也不额外 ask。workspace-write 中，requireApproval=true 会在启动编排时请求审批；
+已有 requires_confirmation 意图仍需各自的实际确认。设置 false 不授予额外文件权限。
 
-requires_confirmation 默认为 false。普通意图不应为了例行记录而设置为 true；只有
-任务或用户明确要求决策约束时才设置。已有确认标记不会在升级中被删除，完全权限
-会按用户的持续授权记录确认来源。
-M3 的证据复核与预算约束仍按路线图实现，不能用跳过人工提示来代替结果验证。
+reason 仅使用只读 Sapper 工具；explore 可以读取相关图资料和配置白名单中的外部工具；
+verify 不开放 Sapper 图工具。子会话不能通过这些工具写事实、结案、委派或通信；
+M3 意图的存储层门禁同时阻止父会话用普通 fact/conclude 绕过独立复核。
 
-真实 ToolRuntime + SandboxPolicyService 回归覆盖 session/always 两种设置：答复器
-拒绝任何 ask 时，完全权限下受限意图可 confirm、claim、原子结案并完成项目，
-审批调用为 0。另测其他策略 ask/deny 保留、只读/服务缺失/权限撤销阻止写入。
-桌面步骤见 [M2 验收](m2-validation.md)。
+外部工具默认包括文件读取/搜索、bash/pwsh（explore 还可搜索/读取网页）；它们仍受
+实际 DSH 沙箱和其他策略控制。白名单限制工具入口，不构成对任意 shell 脚本的独立
+OS 沙箱。不能把图/KB、候选或角色 prompt 当成外部执行授权。子会话使用 DSH 的
+委派权限继承；DSH 给子会话固定 never 的行为不由插件更改，受限操作可能被拒绝。
+
+执行中的权限撤销、配置改变、关闭/卸载或取消会停止并回收子代理。取消后的本地图
+清理仍重查当前权限；若已失去写权限，不强写失败状态，保留可见 running/claimed。
+恢复权限并确认原执行者已退出后，调用 dispatch recover；同进程活跃运行不能恢复。
+
+requires_confirmation 是决策门，verification_status 是证据复核结果，两者含义不同。
+完全权限可以满足前者，不能代替后者；普通 M1 观察事实也不会因此标成 confirmed。
+详见 [M3 契约](m3-orchestration.md) 和 [统一验收](m2-m3-validation.md)。

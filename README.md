@@ -3,13 +3,13 @@
 将 [sapper-v2](https://github.com/N1nEmAn/sapper-v2) 的事实图与
 `reason → explore → verify` 循环移植为 DSH NEXT 桌面插件。
 
-**当前版本 `0.1.0-alpha.5`：M0/M1 已获用户验收，M2 上下文与召回已实现。**
+**当前版本 `0.1.0-alpha.6`：M0/M1 已获用户验收，M2/M3 上下文、召回与子代理编排已实现，统一桌面验收待完成。**
 目标运行时为 **DSH 0.2.1-rc.2**，Cordis 4.0.5 / Schemastery 3.18.5。
 
 当前可维护工作区事实图、意图、长文档和本地 flag；每轮注入有预算的 frontier、
 历史与相关证据指针，支持中英文召回、56 条离线 KB 及 `/sapper` 只读命令。
 完全权限下 Sapper 自身的确认门自动通过，仍保留工作区、归属和数据完整性约束。
-本轮桌面回归见 [M2 验收指南](docs/m2-validation.md)。子代理编排属于 M3。
+本轮桌面回归见 [M2/M3 统一验收指南](docs/m2-m3-validation.md)。
 
 ## 工具
 
@@ -23,6 +23,7 @@
 | sapper_flag | record / list / update；本地记录与去重，不联网提交 |
 | sapper_recall | 按标题/描述召回事实与意图；返回 ID、摘要、匹配原因，不展开 doc |
 | sapper_kb | search / get / list；离线知识检索，get 才展开详情与命令示例 |
+| sapper_dispatch | reason / explore / verify / run / status / recover；有预算的子代理循环与运行记录 |
 
 普通图写入默认跟随 DSH 会话文件权限自动执行，不逐次请求批准；包括初始化、文档、
 领取/结案、flag 本地状态与项目完成。完全权限视为持续授权，即使意图标有
@@ -38,6 +39,20 @@ requires_confirmation 或设置为 always，也不额外 ask；确认来源记�
 命令不调用模型、不修改图。上下文默认 6000 字符，所有动态分区共用预算；
 `context.inject=false` 停止注入与自动图/KB 读取。配置及召回规则见
 [M2 上下文契约](docs/m2-context.md)。
+
+## 子代理编排
+
+显式调用 `sapper_dispatch {"mode":"run"}` 或 `/sapper run`，开始后连续推进就绪意图，
+必要时 reason 提出新任务，explore 收集候选证据，verify 独立复核后才原子写入
+`verification_status=confirmed` 的事实。`/sapper runs` 只读查看运行摘要。
+
+默认使用 DSH 内置 spawn，模型继承父会话；无需配置第三方 CLI。角色、模型、超时
+和工具权限均通过当前 DSH 接口。候选与失败记录保存在 `.sapper/runs/`，失败意图
+重新开放并留下 hint。模型文字声明不能代替本次真实工具输出。
+
+预算默认最多推进 8 条意图、6 次探索，同一候选最多复核 2 次；并发 2，每子会话
+15 分钟、12 步，每次请求最多输出 4096 token。自动执行由显式启动触发；
+`orchestration.auto` 的普通聊天自动触发仍预留。详见 [M3 契约](docs/m3-orchestration.md)。
 
 ## 存储
 
@@ -56,7 +71,7 @@ flag 事实是权威记录，`flags/ledger.json` 是可重建索引。详细边�
 在 DSH NEXT 菜单“打开 DSH 终端”，执行后重启应用：
 
 ```powershell
-dsh plugin add "D:\BaiduSyncdisk\sapper移植\sapper-dsh-0.1.0-alpha.5.tgz"
+dsh plugin add "D:\BaiduSyncdisk\sapper移植\sapper-dsh-0.1.0-alpha.6.tgz"
 ```
 
 开发需要 Node.js 22+、pnpm 8.15.4 和 Python 3（仅 golden 测试使用）：
@@ -68,20 +83,20 @@ corepack pnpm check:compatibility
 corepack pnpm pack --pack-destination dist
 ```
 
-`check` 包含类型检查、96 项测试、双端构建、两个独立 Node 进程写入检查和产物
+`check` 包含类型检查、116 项测试、双端构建、两个独立 Node 进程写入检查和产物
 检查。CI 覆盖 Ubuntu / Windows × Node 22 / 24。Python 参考代码仅用于测试，
 不进入安装包，桌面用户无需 Python。官方 DSH 兼容门禁在 CI 和打包时运行。
 
 ## 工程与进度
 
 - `src/store/`：校验、路径、队列、原子 IO、事务与图操作。
-- `src/tools/`：八个工具、参数/返回值、写入分类。
+- `src/tools/`：九个工具、参数/返回值、写入分类。
 - `src/dsh-adapter/`：DSH 生命周期、审批、slash commands 和消息来源边界。
 - `src/client/`：插件卡片、Sapper 启用与图写入策略字段，完整表单与图预览待 M4。
 - `src/render/`：frontier、历史、状态和共用预算的上下文；不自动展开 doc。
 - `src/recall/`、`src/kb/`：中英文子串/词边界/bigram 排序，离线 KB 和工作区自定义覆盖。
-- `src/orchestration/`：M3 接口预留。
-- `resources/`：56 条可检索 KB、三个角色 prompt 草案与上游许可；角色调度待 M3。
+- `src/orchestration/`：reason/explore/verify、证据门、预算、取消与子代理回收。
+- `resources/`：56 条可检索 KB、三个已接入的角色 prompt 与上游许可。
 - `tests/reference/`：固定 revision/哈希的上游 Store/frontier/history 快照，仅用于测试。
 
 [项目进度](docs/progress.md) · [架构](docs/architecture.md) ·

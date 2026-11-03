@@ -11,8 +11,9 @@ import { graphStatus } from '../render/status.js'
 import { renderGraphView } from '../render/snapshot.js'
 import { hasFullAccess } from './permissions.js'
 import { UNTRUSTED_NOTICE } from '../render/context.js'
+import { randomUUID } from 'node:crypto'
 
-const USAGE = '/sapper [status | graph | frontier | recall <query> | flag | kb <query|kb001>]'
+const USAGE = '/sapper [status | graph | frontier | recall <query> | flag | kb <query|kb001> | run | runs]'
 export function registerSapperCommand(ctx: Context, getConfig: () => Config, alive: () => boolean): () => void {
   let sync = () => {}
   const kb = new KnowledgeBase()
@@ -25,6 +26,11 @@ export function registerSapperCommand(ctx: Context, getConfig: () => Config, ali
       const [command = 'status', ...tail] = input.split(/\s+/u).filter(Boolean)
       const query = tail.join(' ')
       const cwd = invocation.agent.session.header.cwd
+      if (command === 'run' || command === 'runs') {
+        if (tail.length) return { kind: 'error', text: USAGE }
+        const result = await ctx.tools.execute({ name: 'sapper_dispatch', arguments: { mode: command === 'run' ? 'run' : 'status' }, agent: invocation.agent, callId: randomUUID() as never, signal: invocation.signal })
+        return result.isError ? { kind: 'error', text: result.error.message } : { kind: 'success', text: UNTRUSTED_NOTICE + '\n' + JSON.stringify(result.value, null, 2) }
+      }
       if (command === 'kb') {
         if (!config.kb.enabled) return { kind: 'success', text: 'Sapper KB 已关闭' }
         const snapshot = await kb.read(cwd, config.kb.customDir)
@@ -55,7 +61,7 @@ export function registerSapperCommand(ctx: Context, getConfig: () => Config, ali
     sync = () => {
       if (getConfig().enabled && !dispose) dispose = child.commands.register({
         definitionId: CommandDefinitionId('sapper-dsh:sapper'), name: 'sapper',
-        description: '查看 Sapper 状态、图、frontier、召回、flag 与离线 KB（不调用模型）',
+        description: '查询 Sapper 图、召回、KB 与运行记录，或用 run 启动有预算的子代理编排',
         input: { hint: USAGE }, handler,
       })
       if (!getConfig().enabled && dispose) { dispose(); dispose = undefined }

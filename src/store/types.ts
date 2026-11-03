@@ -11,6 +11,8 @@ export interface Fact {
   created_at: string
   creator: string
   source_intent: string | null
+  verification_status?: 'confirmed'
+  verification?: unknown
 }
 
 export interface Intent {

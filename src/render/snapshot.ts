@@ -31,7 +31,7 @@ export function renderGraphContext(graph: GraphSnapshot, config: Config, extras:
       confirmation: intent.requires_confirmation && !intent.confirmed_at && extras.fullAccess ? 'standing-full-access' : intent.confirmed_at ? 'confirmed' : null,
     })}`)
     const facts = recentFirst(graph.facts.filter(f => f.id !== 'goal')).slice(0, config.context.historyFacts)
-    for (const fact of facts) blocks.push(`\nRecent fact: ${line({ ...brief(fact), kind: fact.kind ?? null })}`)
+    for (const fact of facts) blocks.push(`\nRecent fact: ${line({ ...brief(fact), kind: fact.kind ?? null, verification_status: fact.verification_status ?? 'observed' })}`)
     if (config.context.scope === 'frontier-history') {
       const closed = [...graph.intents.filter(i => i.to !== null)].sort((a, b) => {
         const x = a.concluded_at ?? '', y = b.concluded_at ?? ''
@@ -60,7 +60,7 @@ export function renderGraphContext(graph: GraphSnapshot, config: Config, extras:
 export function renderGraphView(graph: GraphSnapshot, maxChars: number): string {
   const rows = [
     `Project: ${line(graph.project)}`,
-    ...graph.facts.map(f => `Fact: ${line({ ...brief(f), kind: f.kind ?? null, source_intent: f.source_intent })}`),
+    ...graph.facts.map(f => `Fact: ${line({ ...brief(f), kind: f.kind ?? null, source_intent: f.source_intent, verification_status: f.verification_status ?? 'observed' })}`),
     ...graph.intents.map(i => `Intent: ${line({ ...brief(i), from: i.from, to: i.to, status: i.status, worker: i.worker ?? null })}`),
     ...graph.hints.map(h => `Hint: ${line(h)}`),
   ]

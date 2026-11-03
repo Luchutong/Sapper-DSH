@@ -3,10 +3,12 @@ import path from 'node:path'
 import { absent, atomicJson, exists, readJson, safePath, serial } from './io.js'
 import { FACT_KINDS, FLAG_STATUSES, StoreError, factData, id, nullable, object, text, validateNode, validateProject } from './validation.js'
 import type { Fact, FactKind, GraphSnapshot, Hint, Intent, Project } from './types.js'
+import { validateRun, runId } from './runs.js'
+import type { RunRecord, RunOutcome } from './runs.js'
 
 type Entry = { file: string; value: unknown }
 type Changes = Map<string, unknown>
-export interface WriteOptions { signal?: AbortSignal; guard?: () => void; autoConfirm?: () => boolean }
+export interface WriteOptions { signal?: AbortSignal; guard?: () => void; autoConfirm?: () => boolean; managedRun?: string }
 export interface FactInput {
   description: string
   title?: string | null | undefined
@@ -21,6 +23,7 @@ export interface IntentInput {
   title?: string | null | undefined
   doc?: string | null | undefined
   requires_confirmation?: boolean | undefined
+  completes_goal?: boolean
 }
 export type FlagStatus = typeof FLAG_STATUSES[number]
 export interface FlagEntry {
@@ -130,6 +133,9 @@ export class GraphStore {
     } else if (entry.file === 'flags/ledger.json') {
       const ledger = object(entry.value, 'ledger')
       if (ledger.version !== 1 || !Array.isArray(ledger.entries)) throw new StoreError('ledger 格式无效')
+    } else if (/^runs\/r\d{3,}\.json$/.test(entry.file)) {
+      const run = validateRun(entry.value)
+      if (entry.file !== `runs/${run.id}.json`) throw new StoreError('run 文件名与 id 不一致')
     } else {
       const match = /^(facts|intents|hints)\/([a-z][a-z0-9_-]{0,16}\.json)$/.exec(entry.file)
       if (!match) throw new StoreError('事务包含越界或未知路径')
@@ -255,6 +261,7 @@ export class GraphStore {
       if (input.source_intent != null) {
         id(input.source_intent, 'intent')
         source = await this.getNode('intent', input.source_intent) as Intent
+        if (source.orchestration_run) throw new StoreError('M3 意图必须通过独立 verify 晋升，不能直接写结果事实')
         this.permission(source, creator, options?.autoConfirm?.())
       }
       const fact = this.makeFact(await this.nextId(graph.project, 'fact', changes), input, creator)
@@ -287,6 +294,8 @@ export class GraphStore {
         status: 'open', worker: null, requires_confirmation: input.requires_confirmation ?? false,
         confirmed_at: null, concluded_at: null, created_at: now(), creator,
       }
+      if (options?.managedRun) intent.orchestration_run = runId(options.managedRun)
+      if (options?.managedRun && input.completes_goal) intent.completes_goal = true
       changes.set(`intents/${intent.id}.json`, intent)
       return intent
     }, options)
@@ -297,6 +306,11 @@ export class GraphStore {
       const graph = await this.healthy()
       const intent = await this.getNode('intent', nodeId) as Intent
       if (intent.to !== null) throw new StoreError(`${nodeId} 已结案`)
+      if (intent.orchestration_run && ((action === 'claim' && !options?.managedRun) || action === 'conclude')) throw new StoreError('M3 意图只能由编排器领取并经 verify 结案')
+      if (options?.managedRun && action === 'claim') {
+        if (intent.worker && intent.orchestration_run !== options.managedRun) throw new StoreError('意图已由其他运行领取')
+        intent.orchestration_run = runId(options.managedRun)
+      }
       if (action === 'confirm') {
         if (!intent.requires_confirmation) throw new StoreError('该意图无需确认')
         if (intent.confirmed_at) {
@@ -328,6 +342,101 @@ export class GraphStore {
       }
       changes.set(`intents/${nodeId}.json`, intent)
       return intent
+    }, options)
+  }
+  async beginRun(mode: RunRecord['mode'], actor: string, options?: WriteOptions): Promise<RunRecord> {
+    return this.mutate(async changes => {
+      const graph = await this.healthy()
+      if (graph.project.status !== 'active') throw new StoreError('项目已完成，不能启动新编排')
+      let n = graph.project.counters.run
+      while (await exists(await this.checked(`runs/r${String(++n).padStart(3, '0')}.json`))) { if (!Number.isSafeInteger(n)) throw new StoreError('run 计数超限') }
+      const record: RunRecord = { id: `r${String(n).padStart(3, '0')}`, mode, parent_session: actor, state: 'running', created_at: now(), updated_at: now(), steps: 0, explored: 0, outcomes: [], intent_ids: [] }
+      graph.project.counters.run = n
+      changes.set('project.json', graph.project); changes.set(`runs/${record.id}.json`, record)
+      return record
+    }, options)
+  }
+  async readRun(nodeId: string): Promise<RunRecord> {
+    runId(nodeId)
+    return serial(this.root, async () => { await this.idle(); const record = validateRun(await readJson(await this.checked(`runs/${nodeId}.json`))); await this.idle(); return record })
+  }
+  async listRuns(): Promise<RunRecord[]> {
+    return serial(this.root, async () => {
+      await this.idle()
+      let files: string[]
+      try { files = await readdir(await this.checked('runs')) } catch (error) { if (absent(error)) return []; throw error }
+      const records = await Promise.all(files.filter(n => /^r\d{3,}\.json$/.test(n)).sort().map(async name => validateRun(await readJson(await this.checked(`runs/${name}`)))))
+      await this.idle(); return records
+    })
+  }
+  async saveRun(record: RunRecord, options?: WriteOptions): Promise<void> {
+    const snapshot = structuredClone(validateRun(record)); snapshot.updated_at = now()
+    return this.mutate(async changes => { await this.healthy(); changes.set(`runs/${snapshot.id}.json`, snapshot) }, options)
+  }
+  async failManaged(intentId: string, actor: string, record: RunRecord, reason: string, options?: WriteOptions): Promise<void> {
+    return this.mutate(async changes => {
+      const graph = await this.healthy(), intent = await this.getNode('intent', intentId) as Intent
+      if (intent.to || intent.worker !== actor || intent.orchestration_run !== record.id) throw new StoreError('失败回退的意图归属已变化')
+      const message = `${intentId} M3 failure: ${text(reason, 'reason').slice(0, 8000)}`
+      intent.worker = null; intent.status = 'open'; intent.last_failure = message
+      const hint: Hint = { id: await this.nextId(graph.project, 'hint', changes), content: message, creator: actor, created_at: now() }
+      changes.set(`intents/${intent.id}.json`, intent); changes.set(`hints/${hint.id}.json`, hint)
+      changes.set(`runs/${record.id}.json`, structuredClone(record))
+    }, options)
+  }
+  async reserveVerification(intentId: string, actor: string, recordId: string, candidateSession: string, maximum: number, options?: WriteOptions): Promise<number> {
+    return this.mutate(async changes => {
+      await this.healthy()
+      const intent = await this.getNode('intent', intentId) as Intent
+      if (intent.worker !== actor || intent.orchestration_run !== recordId || intent.to) throw new StoreError('复核意图归属不匹配')
+      const previous = intent.verification_budget as { candidate_session?: string; attempts?: number } | undefined
+      const attempts = previous?.candidate_session === candidateSession ? previous.attempts ?? 0 : 0
+      if (!Number.isSafeInteger(attempts) || attempts >= maximum) throw new StoreError('同一候选的复核预算已耗尽')
+      intent.verification_budget = { candidate_session: candidateSession, attempts: attempts + 1 }
+      changes.set(`intents/${intent.id}.json`, intent); return attempts + 1
+    }, options)
+  }
+  async recoverRun(recordId: string, actor: string, options?: WriteOptions): Promise<RunRecord> {
+    runId(recordId)
+    return this.mutate(async changes => {
+      const graph = await this.healthy(), record = validateRun(await readJson(await this.checked(`runs/${recordId}.json`)))
+      if (record.state !== 'running') throw new StoreError('仅遗留 running 记录需要恢复')
+      for (const intent of graph.intents.filter(i => i.orchestration_run === recordId && i.to === null)) {
+        intent.worker = null; intent.status = 'open'; intent.last_failure = `${recordId}: interrupted run recovered by ${actor}`
+        changes.set(`intents/${intent.id}.json`, intent)
+      }
+      const hint: Hint = { id: await this.nextId(graph.project, 'hint', changes), content: `${recordId}: interrupted run recovered by ${actor}; candidates remain unconfirmed`, creator: actor, created_at: now() }
+      record.state = 'cancelled'; record.stop_reason = hint.content
+      changes.set(`hints/${hint.id}.json`, hint); changes.set(`runs/${record.id}.json`, record)
+      return record
+    }, options)
+  }
+  async promoteVerified(record: RunRecord, outcome: RunOutcome, actor: string, options?: WriteOptions): Promise<Fact> {
+    return this.mutate(async changes => {
+      const graph = await this.healthy(), intent = await this.getNode('intent', outcome.intent_id) as Intent
+      const { candidate, verification } = outcome
+      if (graph.project.status !== 'active') throw new StoreError('项目已完成，不再晋升其他 M3 候选')
+      if (!candidate?.evidence.length || !verification?.verified || !verification.evidence.length || verification.verifier_session === candidate.explorer_session) throw new StoreError('缺少独立复核的有效证据')
+      if (intent.orchestration_run !== record.id) throw new StoreError('候选与意图运行归属不一致')
+      this.permission(intent, actor, options?.autoConfirm?.())
+      if (candidate.kind === 'flag' && this.flagEntries(graph.facts).some(e => e.value === normalizeFlag(candidate.description))) throw new StoreError('候选 flag 已有本地记录，不重复晋升')
+      const fact = this.makeFact(await this.nextId(graph.project, 'fact', changes), {
+        title: candidate.title, description: candidate.description, kind: candidate.kind,
+        doc: JSON.stringify({ candidate, verification }, null, 2), source_intent: intent.id,
+        ...(candidate.kind === 'flag' ? { data: { value: candidate.description, status: 'recorded' } } : {}),
+      }, actor)
+      fact.verification_status = 'confirmed'; fact.verification = { run_id: record.id, explorer_session: candidate.explorer_session, verifier_session: verification.verifier_session }
+      outcome.state = 'confirmed'; outcome.fact_id = fact.id
+      Object.assign(intent, { to: fact.id, worker: actor, status: 'done', concluded_at: now() })
+      changes.set(`facts/${fact.id}.json`, fact); changes.set(`intents/${intent.id}.json`, intent)
+      changes.set(`runs/${record.id}.json`, structuredClone(record))
+      if (intent.completes_goal === true && verification.goal_achieved === true) {
+        const completion: Intent = { id: await this.nextId(graph.project, 'intent', changes), from: [fact.id], to: 'goal', description: 'Independently verified project goal', doc: `Verified by ${verification.verifier_session}; run ${record.id}`, status: 'complete', worker: actor, requires_confirmation: false, confirmed_at: now(), concluded_at: now(), created_at: now(), creator: actor, orchestration_run: record.id }
+        graph.project.status = 'completed'; graph.project.completed_at = now()
+        changes.set(`intents/${completion.id}.json`, completion); changes.set('project.json', graph.project)
+      }
+      if (fact.kind === 'flag') changes.set('flags/ledger.json', { version: 1, entries: this.flagEntries([...graph.facts, fact]) })
+      return fact
     }, options)
   }
   async updateDoc(nodeId: string, doc: string | null, expectedDoc: string | null, options?: WriteOptions): Promise<Fact | Intent> {

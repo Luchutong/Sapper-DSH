@@ -19,6 +19,8 @@ import { KnowledgeBase } from '../kb/index.js'
 import { recallGraph } from '../recall/index.js'
 import { renderGraphContext } from '../render/snapshot.js'
 import { registerSapperCommand } from './commands.js'
+import { Orchestrator } from '../orchestration/engine.js'
+import { createDispatchTool } from '../tools/dispatch.js'
 
 function isOwnSnapshot(message: unknown): boolean {
   const source = (message as UserMessage).source
@@ -44,7 +46,11 @@ export function registerRuntime(ctx: Context, getConfig: () => Config): void {
     return permission.fullAccess
   }
   const fullAccess = (exec: Pick<ToolExecution, 'agent'>) => hasFullAccess(ctx, exec)
-  const tools = [...createGraphTools(getConfig, () => alive, authorize, fullAccess), ...createRecallTools(getConfig, () => alive)]
+  const dispatcher = new Orchestrator(ctx, getConfig, () => alive)
+  const dispatching = new Set<symbol>()
+  const tools = [...createGraphTools(getConfig, () => alive, authorize, fullAccess), ...createRecallTools(getConfig, () => alive), createDispatchTool(getConfig, () => alive, authorize, dispatcher, {
+    start: exec => { dispatching.add(exec.token) }, finish: exec => { dispatching.delete(exec.token); bindings.delete(exec.token) },
+  })]
   const syncCommand = registerSapperCommand(ctx, getConfig, () => alive)
   const kb = new KnowledgeBase()
   let unregister: (() => void) | undefined
@@ -75,6 +81,8 @@ export function registerRuntime(ctx: Context, getConfig: () => Config): void {
     } catch (error) { return (error as Error).message }
   })
   ctx.on('tools/pre-execute', async (exec, next) => {
+    const roleDenial = dispatcher.denial(exec)
+    if (roleDenial) return { kind: 'deny', reason: roleDenial }
     if (!tools.some(tool => tool.name === exec.name)) return next()
     const binding: { config: string; cwd: string | undefined; permission?: string } = {
       config: JSON.stringify(getConfig()), cwd: exec.agent?.session.header.cwd,
@@ -101,16 +109,18 @@ export function registerRuntime(ctx: Context, getConfig: () => Config): void {
         }
       }
     } catch (error) { return { kind: 'deny', reason: (error as Error).message } }
-    if (hasFullAccess(ctx, exec) || (getConfig().store.approval !== 'always' && !requiresExplicitApproval(exec.name, exec.arguments))) return decision
+    const dispatchApproval = exec.name === 'sapper_dispatch' && getConfig().orchestration.requireApproval
+    if (hasFullAccess(ctx, exec) || (getConfig().store.approval !== 'always' && !requiresExplicitApproval(exec.name, exec.arguments) && !dispatchApproval)) return decision
     return { kind: 'ask', reason: `Sapper workspace write: ${exec.name}`,
       displayReason: { en: 'Allow Sapper to modify the current workspace graph?', zh: '允许 Sapper 修改当前工作区的事实图？' } }
   })
-  ctx.on('tools/result', exec => { bindings.delete(exec.token) })
+  ctx.on('tools/result', exec => { if (!dispatching.has(exec.token)) bindings.delete(exec.token) })
 
   ctx.on('agent/pre-step', async (payload, next) => {
     const decision = await next()
     if (decision.kind === 'reject' || payload.signal.aborted) return decision
     const messages = decision.messages.filter(message => !isOwnSnapshot(message))
+    if (dispatcher.isChild(payload.agent)) return { ...decision, messages }
     const config = getConfig()
     if (!config.enabled || !config.context.inject || messages.length === 0) return { ...decision, messages }
     try {

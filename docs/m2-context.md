@@ -1,6 +1,8 @@
 # M2 上下文、召回与离线知识契约
 
-版本 alpha.5，目标 DSH 0.2.1-rc.2。M2 不创建子代理，不执行 KB 中的命令。
+本页描述 alpha.5 引入的 M2，alpha.6 继续沿用。目标 DSH 0.2.1-rc.2。
+M3 扩展见 m3-orchestration.md，桌面按 m2-m3-validation.md 统一验收。
+M2 查询/KB 不创建子代理或执行命令；/sapper run 是单独的 M3 执行入口。
 
 ## 每轮上下文
 
@@ -91,3 +93,7 @@ command/run 与 command/done 生命周期事件。服务暂不可用时不阻断
 自动回归覆盖 500 节点纯渲染/实际磁盘图、各 scope/预算、注入关闭时零图/KB 读取、
 真实 CommandRuntime、56 条打包 KB 和自定义路径边界。桌面反馈只按实际收到的证据
 登记，见 [验收指南](m2-validation.md) 与 [进度](progress.md)。
+
+M3 的 intent.last_failure 额外参与召回，用于定位失败经验；近期事实和 graph 显示
+verification_status（普通观察为 observed）。M3 子会话跳过这里的自动全图注入，
+由编排器提供对应角色所需的数据。

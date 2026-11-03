@@ -1,6 +1,6 @@
 # M1 存储与工具契约
 
-版本：0.1.0-alpha.5；SDK：DSH 0.2.1-rc.2。M0/M1 已由用户确认验收完成。
+版本：0.1.0-alpha.6；SDK：DSH 0.2.1-rc.2。M0/M1 已由用户确认验收完成。
 
 ## 权威数据与兼容
 
@@ -12,6 +12,7 @@
   intents/i001.json        from[] → to；open / claimed / done / complete
   hints/h001.json          后续编排可用的提示；当前无独立 hint 工具
   flags/ledger.json        由 flag 事实重建的索引，按需创建
+  runs/r001.json          M3 候选、复核、预算与运行状态（非事实图节点）
   meta.json                可重建的插件写入元数据，format=1
   LOCK/owner.json          TS 写者排他目录锁，记录 pid 与时间
   .transaction.json       仅未完成提交期间存在的事务日志
@@ -93,3 +94,14 @@ orchestration.requireApproval 不控制图数据，已有配置无需手工删�
 统一显式调用 sapper_init。M2 上下文/召回保持只读，详见 m2-context.md。
 M0 两字段 project.json 可以继续被目标摘要回退读取，但不满足完整图校验，
 不能直接写入；请保存旧 fixture 并换新测试目录初始化，不进行静默升级。
+
+## M3 扩展
+
+M3 意图包含 orchestration_run，原始观察仍保持兼容字段；普通 fact/source_intent 与
+intent conclude 不能绕过 M3 晋升。确认事实有 verification_status=confirmed 与运行/
+子会话来源，完整证据在 doc 和 runs。晋升、结案、运行记录、必要时终态意图为同一
+日志事务。失败释放领取、写 hint/last_failure 和运行记录亦使用事务。
+
+M3 扩展是本 TS 插件的约束，上游 Python 不提供其门禁，不要用 Python 写者结案
+M3 意图。普通旧图无需批量迁移，未知字段仍保留。run recover 是取消遗留执行，
+init recover 是重放文件事务，两者不同。详见 m3-orchestration.md。

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.0-alpha.6 — 2026-11-03
+
+- M3：真实 DSH spawn 子会话，reason/explore/verify 结构化输出与独立角色工具约束。
+- 新增 sapper_dispatch reason/explore/verify/run/status/recover，以及 /sapper run、/sapper runs。
+- 候选保存在 runs，不直接写事实；晋升要求两次独立子会话的实际成功工具输出，普通结案工具不能绕过 M3 门禁。
+- 复核失败回退为开放意图、hint 与可召回 last_failure；同一候选跨调用复核预算持久化。
+- 步数、探索、复核、并发、超时、每子会话步数/输出 token 上限、角色模型与外部工具白名单。
+- 完全权限自动授权，保留受限模式审批、只读、其他策略、权限撤销、禁用和取消；回收已发布的子代理。
+- 项目完成要求 reason 标注目标意图且独立 verifier 确认整个目标；事实、结案、运行记录和终态同一事务。
+- 116 项测试（含 20 项真实 AgentLoop/SubagentRuntime 集成）；M2/M3 改为统一桌面验收，尚未登记用户验收通过。
+
 ## 0.1.0-alpha.5 — 2026-11-03
 
 - 用户确认 alpha.4 功能正常；完全权限成为 Sapper 自身确认门的持续授权，覆盖 always 和 requires_confirmation，自动确认记录 dsh-full-access 来源。

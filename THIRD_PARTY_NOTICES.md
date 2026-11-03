@@ -5,7 +5,7 @@
 `ba3d3d4`. Their original `source` fields are retained. The upstream MIT license
 is included at `resources/licenses/sapper-v2-MIT.txt`.
 
-The TypeScript implementation and draft prompts in this repository are new.
+The TypeScript implementation and role prompts in this repository are new.
 `tests/reference/sapper_store.py` is an unchanged prefix of the upstream
 `lib/sapper.py` at the same revision, through `render_graph_text`. It is the
 behavioral reference for Python/TypeScript golden round-trip tests. Provenance

@@ -36,7 +36,7 @@ export function createGraphTools(getConfig: () => Config, alive: () => boolean =
     }),
     defineTool({
       name: 'sapper_fact',
-      description: 'Create/list/get immutable evidence facts. create with source_intent atomically closes that open intent with the new fact. This does not perform M3 candidate verification.',
+      description: 'Create/list/get immutable manually observed facts. create with source_intent atomically closes an ordinary open intent. M3 managed intents must instead pass sapper_dispatch independent verification; this tool cannot bypass that gate.',
       parameters: {
         action: { type: 'string', enum: ['create', 'get', 'list'], required: true },
         id: nodeId, ...fields,
@@ -118,6 +118,7 @@ export function createGraphTools(getConfig: () => Config, alive: () => boolean =
 }
 
 export function isMutation(name: string, args: unknown): boolean {
+  if (name === 'sapper_dispatch') return !(args && typeof args === 'object' && 'mode' in args && args.mode === 'status')
   if (name === 'sapper_init') return true
   const action = args && typeof args === 'object' && 'action' in args ? args.action : undefined
   if (name === 'sapper_fact' || name === 'sapper_intent') return action !== 'get' && action !== 'list'

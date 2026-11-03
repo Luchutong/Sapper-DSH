@@ -43,9 +43,9 @@ function value(result: ToolExecutionResult): Record<string, any> {
 }
 
 describe('real DSH ToolRuntime and M1 approval pipeline', () => {
-  it('registers eight tools, approves initialization, and reads status without further approval', async () => {
+  it('registers nine tools, approves initialization, and reads status without further approval', async () => {
     const { execute, request, cwd } = await setup('allowed-once', 'always')
-    expect(value(await execute('sapper_status', {}))).toMatchObject({ state: 'uninitialized', milestone: 'M2-context' })
+    expect(value(await execute('sapper_status', {}))).toMatchObject({ state: 'uninitialized', milestone: 'M3-orchestration' })
     expect(await readdir(cwd)).toEqual([])
     expect(request).not.toHaveBeenCalled()
     expect(value(await execute('sapper_init', { goal: 'tool integration' }))).toMatchObject({ goal: 'tool integration' })

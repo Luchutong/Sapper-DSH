@@ -1,6 +1,6 @@
 # 架构与边界
 
-当前交付为 0.1.0-alpha.5 / M2，目标 DSH 0.2.1-rc.2。M0/M1 已获用户验收。
+当前交付为 0.1.0-alpha.6 / M2/M3，目标 DSH 0.2.1-rc.2。M0/M1 已获用户验收。
 原计划保留在 docs/plan.html，SDK 和实现细节以当前代码与 sdk-contract.md 为准。
 
 ```text
@@ -11,7 +11,7 @@ DSH agent loop                          WebView
          │                                      │
   src/dsh-adapter/host.ts                src/client/
          │                                      │
-  src/tools/ 八个工具 + /sapper                      DSH Config transport
+  src/tools/ 九个工具 + /sapper                      DSH Config transport
          │                                      │
   GraphStore → per-root queue              Loader volatile Config
          │
@@ -26,7 +26,7 @@ Cordis apply 声明 tools / agents 依赖，读取 Loader 提供的 volatile Con
 Settings 为可选服务；有服务时声明自带客户端页面、auto=false，由 id=sapper
 条目派生表单。设置变更由 DSH 配置编辑器写入 profile Cordis patch。
 
-启用时注册 status / init / fact / intent / doc / flag / recall / kb 八个工具。普通图写入默认跟随
+启用时注册 status / init / fact / intent / doc / flag / recall / kb / dispatch 九个工具。普通图写入默认跟随
 真实 SandboxPolicyService 的会话写权限自动执行，read-only 或缺失策略服务时拒绝。
 workspace-write 的 confirm/always 才询问，完全权限作为持续授权自动通过自身确认门，
 事务记录 dsh-full-access 来源。其他策略的 ask/deny 保留，
@@ -46,8 +46,9 @@ Sapper snapshot；producer-owned source.kind=sapper-dsh，form=snapshot。所有
 读取检查锁与事务，不自动初始化或恢复；旧两字段 M0 fixture 仅目标回退。
 
 recall 采用归一化子串、英文词边界与中英文 bigram Dice。KB 从插件资源加载，
-支持受工作区约束的自定义覆盖。可选 commands 服务注册只读 /sapper，直接返回
-结果，不调用模型或改图。细节见 [M2 契约](m2-context.md)。
+支持受工作区约束的自定义覆盖。可选 commands 服务注册 /sapper 查询命令，直接返回
+结果，不调用模型或改图；run 经 tools.execute 启动 M3，runs 查询运行摘要。
+细节见 [M2 契约](m2-context.md) 与 [M3 契约](m3-orchestration.md)。
 
 客户端通过 configForms 读取宿主镜像；启用字段使用 set，嵌套的图写入策略使用
 mutate 路径数组，仅用户主动切换后写入。false 显示拒绝
@@ -58,14 +59,15 @@ mutate 路径数组，仅用户主动切换后写入。false 显示拒绝
 | 模块 | 当前职责 | 后续 |
 | --- | --- | --- |
 | store | 校验、workspace 路径、队列、锁、原子 IO、恢复、图与 flag 操作 | global 数据目录策略、显式迁移 |
-| tools | 八个工具与读写分类，按需展开 doc | M3 dispatch |
+| tools | 九个工具与读写分类，按需展开 doc 和运行记录 | M4 诊断入口 |
 | render | 有来源/共用预算的 frontier、历史、图与状态 | M3 证据/候选状态展示 |
 | recall / kb | 中英文图召回、56 条离线知识、自定义覆盖 | M3 证据复用 |
-| orchestration | 接口预留 | M3 DSH 子代理、审批、预算、candidate/verify 流程 |
+| orchestration | 真实 spawn 子会话、角色约束、证据门、预算、模型、取消/恢复 | M4 诊断与 M5 迁移验收 |
 | client | 插件卡片、启用/图写入策略字段、失败提示 | M4 完整配置、诊断与只读图预览 |
 
 workspace 是当前唯一支持的存储模式。global / autoInit 仍为预留配置。
-M2 不提供自动探测、网络提交、子代理执行或证据自动验证。
+M3 通过显式 dispatch/run 启动受预算约束的子代理执行与独立复核；不联网提交 flag。
+候选存于 runs，晋升与结案使用同一事务，见 [M3 契约](m3-orchestration.md)。
 
 ## 构建与验证
 

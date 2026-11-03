@@ -7,6 +7,6 @@ export const TOOL_CATALOG = [
   { name: 'sapper_doc', milestone: 'M1', implemented: true },
   { name: 'sapper_flag', milestone: 'M1', implemented: true },
   { name: 'sapper_recall', milestone: 'M2', implemented: true },
-  { name: 'sapper_dispatch', milestone: 'M3', implemented: false },
+  { name: 'sapper_dispatch', milestone: 'M3', implemented: true },
   { name: 'sapper_kb', milestone: 'M2', implemented: true },
 ] as const

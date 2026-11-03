@@ -7,7 +7,7 @@ export function graphStatus(graph: GraphSnapshot, access: AccessView = {}, inclu
   const groups = ['ready', 'pending_confirmation', 'missing_dependencies', 'in_flight', 'blocked_by_integrity'] as const
   return {
     state: graph.project.status, goal: graph.project.goal,
-    counts: { facts: graph.facts.filter(f => f.id !== 'goal').length, intents: graph.intents.length,
+    counts: { facts: graph.facts.filter(f => f.id !== 'goal').length, intents: graph.intents.length, runs: graph.project.counters.run, verified_facts: graph.facts.filter(f => f.verification_status === 'confirmed').length,
       open_intents: graph.intents.filter(i => i.to === null).length, hints: graph.hints.length, flags: graph.facts.filter(f => f.kind === 'flag').length },
     frontier: Object.fromEntries(groups.map(key => [key, { total: view[key].length, ids: view[key].slice(0, 20).map(i => i.id) }])),
     ...(includeRows ? { frontier_rows: Object.fromEntries(groups.map(key => [key, view[key].slice(0, 20).map(({ doc: _doc, ...node }) => node)])) } : {}),

@@ -27,13 +27,17 @@ const PlainConfig = group({
     recallTopK: positive(5, 20),
   }),
   orchestration: group({
-    auto: Schema.boolean().default(false),
+    auto: Schema.boolean().default(false).description('预留自动触发；当前用 sapper_dispatch 或 /sapper run 显式启动，启动后自动推进'),
     maxSteps: positive(8, 100),
     maxExplore: positive(6, 100),
     maxVerify: positive(2, 10),
     concurrency: positive(2, 8),
     timeoutMin: positive(15, 120),
-    requireApproval: Schema.boolean().default(true).description('预留：外部编排审批策略；不控制图数据写入'),
+    maxChildSteps: positive(12, 100),
+    maxOutputTokens: positive(4096, 32768),
+    requireApproval: Schema.boolean().default(true).description('工作区写入模式启动编排需审批；完全权限自动授权，不控制普通图写入'),
+    exploreTools: Schema.array(Schema.string()).default(['read', 'glob', 'grep', 'bash', 'pwsh', 'web_search', 'web_fetch']),
+    verifyTools: Schema.array(Schema.string()).default(['read', 'glob', 'grep', 'bash', 'pwsh']),
     models: group({
       reason: Schema.string().default('inherit'),
       explore: Schema.string().default('inherit'),
@@ -69,4 +73,10 @@ export function validateConfig(config: Config): void {
     throw new Error('store.dir 必须是非空路径，且不能包含 NUL')
   }
   for (const pattern of config.flags.patterns) new RegExp(pattern)
+  for (const selected of Object.values(config.orchestration.models)) {
+    if (!selected.trim() || selected.startsWith(':') || selected.endsWith(':')) throw new Error('角色模型必须是 inherit、model 或 provider:model')
+  }
+  for (const tool of [...config.orchestration.exploreTools, ...config.orchestration.verifyTools]) {
+    if (!/^[a-z][a-z0-9_]*$/.test(tool) || tool.startsWith('sapper_') || ['structured_output', 'run_code', 'send_message', 'interrupt_agent'].includes(tool)) throw new Error('M3 外部工具白名单无效；禁止图写入、PTC 传输和代理通信')
+  }
 }
