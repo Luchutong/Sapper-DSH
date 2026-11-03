@@ -43,14 +43,14 @@ active / SAPPER-M0-9B31 的两次返回，随后提供未调用工具回答目�
 - 打包检查包含两个独立 Node 进程写入同一图，争锁后有限重试，验证数量、ID 与引用一致。
 - 官方安装兼容门禁对 alpha.3 / DSH 0.2.1-rc.2 通过，无版本豁免。
 - Windows DSH NEXT 自带安装器在临时 DSH_HOME 中完成 alpha.2 → alpha.3 升级，
-  最终 alpha.3 包又在新的 sapper-m1-final profile 安装成功，退出码均为 0。
+  最终 alpha.3 包又在新的 sapper-m1-release profile 安装成功，退出码均为 0。
   本地日志为 dist/validation/windows-upgrade-alpha3.log 与 windows-install-alpha3.log；
   未修改现有 desktop profile，桌面页面/模型交互仍待 M1 验收。
 - CI 配置覆盖 Ubuntu / Windows × Node 22 / 24，Python 3.12 仅供 golden 测试。
 - 本轮验证在临时图中进行，未修改现有 desktop profile，未调用模型或连接目标。
 
 本机交付：`D:\BaiduSyncdisk\sapper移植\sapper-dsh-0.1.0-alpha.3.tgz`，附 SHA256 文件。
-SHA256：`6194a036108db8b4d96fd407fc34b07f246b8968383e59773c27b9cf1a37b984`。
+SHA256：`0f5e31a6b4fb31db4c1b170e70a9325884ec1f39001c61a306f19458d64e35d6`。
 
 当前开放 workspace 存储。global / autoInit 仍为预留项，显式 sapper_init 是建图入口。
 上下文仍只注入目标；尚无完整 frontier、recall 或编排。M0 两字段测试文件只保留
