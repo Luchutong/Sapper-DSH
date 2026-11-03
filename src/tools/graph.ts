@@ -3,6 +3,7 @@ import type { Config } from '../settings.js'
 import { FACT_KINDS, FLAG_STATUSES, StoreError } from '../store/validation.js'
 import { createStatusTool } from './status.js'
 import { executionStore, json, output } from './shared.js'
+import type { AuthorizeWrite } from './shared.js'
 
 const fields = {
   description: { type: 'string', description: 'Observed evidence or a concrete task; cannot be empty for create.' },
@@ -15,19 +16,20 @@ function required<T>(value: T | undefined, field: string): T {
   return value
 }
 
-export function createGraphTools(getConfig: () => Config, alive: () => boolean = () => true) {
+export function createGraphTools(getConfig: () => Config, alive: () => boolean = () => true, authorize?: AuthorizeWrite) {
+  const storeFor = (exec: Parameters<typeof executionStore>[1]) => executionStore(getConfig, exec, alive, authorize)
   return [
     createStatusTool(getConfig, alive),
     defineTool({
       name: 'sapper_init',
-      description: 'Initialize a Python-compatible .sapper graph in the current workspace, without overwriting existing files. action=recover replays a pending transaction after approval.',
+      description: 'Initialize a Python-compatible workspace graph without overwriting files. Continue authorized Sapper work without extra chat confirmations; ordinary writes follow DSH session permissions. action=recover replays a pending transaction.',
       parameters: {
         action: { type: 'string', enum: ['create', 'recover'], description: 'Default: create.' },
         origin: { type: 'string', description: 'Project source/context, not a command.' },
         goal: { type: 'string', description: 'Nonempty project goal; defaults to Sapper settings.goal.' },
       }, output,
       async execute(args, exec) {
-        const { store, options } = executionStore(getConfig, exec, alive)
+        const { store, options } = storeFor(exec)
         return json(args.action === 'recover' ? await store.recover(options) : await store.init(args.origin ?? '', args.goal ?? getConfig().goal, options))
       },
     }),
@@ -42,7 +44,7 @@ export function createGraphTools(getConfig: () => Config, alive: () => boolean =
         source_intent: { type: 'string', description: 'Optional intent to conclude; current session must own any claim and confirmation must exist.' },
       }, output, isConcurrencySafe: args => args.action !== 'create',
       async execute(args, exec) {
-        const { store, creator, options } = executionStore(getConfig, exec, alive)
+        const { store, creator, options } = storeFor(exec)
         if (args.action === 'get') return json(await store.readNode('fact', required(args.id, 'id')))
         if (args.action === 'list') {
           const graph = await store.read()
@@ -54,16 +56,16 @@ export function createGraphTools(getConfig: () => Config, alive: () => boolean =
     }),
     defineTool({
       name: 'sapper_intent',
-      description: 'Create/list/get, claim/release, confirm or conclude an intent. Dependencies must exist. Confirm and conclusion to goal require explicit DSH approval. Worker identity comes from this session.',
+      description: 'Create/list/get, claim/release, confirm or conclude an intent. Ordinary actions follow DSH session write permissions. Only confirm of an explicitly confirmation-required intent requests approval. Worker identity comes from this session.',
       parameters: {
         action: { type: 'string', enum: ['create', 'get', 'list', 'claim', 'release', 'confirm', 'conclude'], required: true },
         id: nodeId, ...fields,
         from: { type: 'array', items: { type: 'string' }, description: 'Nonempty dependency facts; goal cannot be a dependency.' },
         to: { type: 'string', description: 'Existing fact ID, or goal to complete the project.' },
-        requires_confirmation: { type: 'boolean', description: 'Prevent claim/conclusion until a user-approved confirm call.' },
+        requires_confirmation: { type: 'boolean', description: 'Default false for autonomous work. Set true only when the task/user explicitly requires a human decision; claim/conclusion then wait for an approved confirm.' },
       }, output, isConcurrencySafe: args => args.action === 'get' || args.action === 'list',
       async execute(args, exec) {
-        const { store, creator, options } = executionStore(getConfig, exec, alive)
+        const { store, creator, options } = storeFor(exec)
         if (args.action === 'get') return json(await store.readNode('intent', required(args.id, 'id')))
         if (args.action === 'list') {
           const graph = await store.read()
@@ -84,7 +86,7 @@ export function createGraphTools(getConfig: () => Config, alive: () => boolean =
         expected_doc: { oneOf: [{ type: 'string' }, { type: 'null' }] },
       }, output, isConcurrencySafe: args => args.action === 'get',
       async execute(args, exec) {
-        const { store, options } = executionStore(getConfig, exec, alive)
+        const { store, options } = storeFor(exec)
         if (args.action === 'set') return json(await store.updateDoc(args.id, required(args.doc, 'doc'), required(args.expected_doc, 'expected_doc'), options))
         const graph = await store.read()
         const node = graph.facts.find(f => f.id === args.id) ?? graph.intents.find(i => i.id === args.id)
@@ -94,14 +96,14 @@ export function createGraphTools(getConfig: () => Config, alive: () => boolean =
     }),
     defineTool({
       name: 'sapper_flag',
-      description: 'Record/deduplicate flags locally, list captures or explicitly update recorded/submitted/rejected/duplicate status. Never submits over the network. Updates always require DSH approval.',
+      description: 'Record/deduplicate flags locally, list captures or update recorded/submitted/rejected/duplicate status from observed outcomes. Local metadata follows DSH session permissions; this never submits or validates a flag over the network.',
       parameters: {
         action: { type: 'string', enum: ['record', 'list', 'update'], required: true },
         id: nodeId, value: { type: 'string' }, status: { type: 'string', enum: FLAG_STATUSES },
         source_fact: { type: 'string' }, challenge: { type: 'string' }, note: { type: 'string' },
       }, output, isConcurrencySafe: args => args.action === 'list',
       async execute(args, exec) {
-        const { store, creator, options } = executionStore(getConfig, exec, alive)
+        const { store, creator, options } = storeFor(exec)
         if (args.action === 'list') {
           const graph = await store.read()
           return json({ entries: store.flagEntries(graph.facts), warnings: graph.warnings, integrity: graph.integrity })
@@ -122,9 +124,8 @@ export function isMutation(name: string, args: unknown): boolean {
   if (name === 'sapper_flag') return action !== 'list'
   return false
 }
-export function alwaysApprove(name: string, args: unknown): boolean {
+export function requiresExplicitApproval(name: string, args: unknown): boolean {
   if (!args || typeof args !== 'object') return false
   const value = args as Record<string, unknown>
-  return (name === 'sapper_intent' && (value.action === 'confirm' || (value.action === 'conclude' && value.to === 'goal'))) ||
-    (name === 'sapper_flag' && value.action === 'update')
+  return name === 'sapper_intent' && value.action === 'confirm'
 }

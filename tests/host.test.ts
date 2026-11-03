@@ -61,7 +61,9 @@ async function setup(enabled = true) {
   await ctx.plugin(SettingsForms)
   const loader = ctx.loader
   loader.builtins.sapper = plugin
-  const options = { id: 'sapper', name: 'cordis:sapper', config: { enabled } }
+  const options = { id: 'sapper', name: 'cordis:sapper', config: {
+    enabled, store: { mode: 'workspace', dir: '.sapper' }, orchestration: { requireApproval: true },
+  } }
   await loader.create(options)
   await loader.await()
   const fiber = loader.resolve('sapper').fiber!
@@ -155,5 +157,12 @@ describe('host lifecycle integration', () => {
     await settings.update('sapper', { enabled: false }, revision)
     await expect(settings.update('sapper', { enabled: true }, revision)).rejects.toMatchObject({ code: 'SETTINGS_CONFLICT' })
     expect(tools.definitions.size).toBe(0)
+  })
+  it('derives the new storage policy for legacy entries and persists explicit manual mode', async () => {
+    const { settings, editor } = await setup()
+    expect(settings.describe().find(row => row.ns === 'sapper')).toMatchObject({ value: { store: { approval: 'session' } } })
+    await settings.mutate('sapper', [{ op: 'set', path: ['store', 'approval'], value: 'always' }])
+    expect(settings.describe().find(row => row.ns === 'sapper')).toMatchObject({ value: { store: { approval: 'always' } } })
+    expect(JSON.parse(await readFile(editor.documentPath, 'utf8'))).toMatchObject({ store: { approval: 'always', dir: '.sapper' }, orchestration: { requireApproval: true } })
   })
 })

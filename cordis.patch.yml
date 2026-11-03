@@ -6,6 +6,7 @@
         store:
           mode: workspace
           dir: .sapper
+          approval: session
         orchestration:
           auto: false
           requireApproval: true

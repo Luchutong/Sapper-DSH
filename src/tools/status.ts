@@ -13,7 +13,7 @@ export function createStatusTool(getConfig: () => Config, alive?: () => boolean)
     async execute(_args, exec) {
       exec.signal.throwIfAborted()
       const config = getConfig()
-      const base = { plugin: PLUGIN_NAME, version: VERSION, sdk: SDK_VERSION, milestone: 'M1-storage', enabled: config.enabled }
+      const base = { plugin: PLUGIN_NAME, version: VERSION, sdk: SDK_VERSION, milestone: 'M1-storage', enabled: config.enabled, store_approval: config.store.approval }
       if (!config.enabled) return json({ ...base, state: 'disabled', goal: '', message: 'Sapper 已关闭' })
       if (!resolveStorePath(exec.agent?.session.header.cwd, config)) return json({ ...base, state: 'unscoped', goal: '', message: '需要带绝对工作区路径的 DSH 会话' })
       const { store } = executionStore(getConfig, exec, alive)

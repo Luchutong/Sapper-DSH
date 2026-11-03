@@ -1,12 +1,12 @@
 # 架构与边界
 
-当前交付为 0.1.0-alpha.3 / M1，目标 DSH 0.2.1-rc.2。M0 已获用户验收。
+当前交付为 0.1.0-alpha.4 / M1 权限修复，目标 DSH 0.2.1-rc.2。M0/M1 已获用户验收。
 原计划保留在 docs/plan.html，SDK 和实现细节以当前代码与 sdk-contract.md 为准。
 
 ```text
 DSH agent loop                          WebView
   agent/pre-step                          plugins.item / settings.section
-  tools/pre-execute → approval            configForms.get('sapper')
+  tools/pre-execute → session policy            configForms.get('sapper')
   tools.guard                             Config.set / subscribe
          │                                      │
   src/dsh-adapter/host.ts                src/client/
@@ -26,9 +26,10 @@ Cordis apply 声明 tools / agents 依赖，读取 Loader 提供的 volatile Con
 Settings 为可选服务；有服务时声明自带客户端页面、auto=false，由 id=sapper
 条目派生表单。设置变更由 DSH 配置编辑器写入 profile Cordis patch。
 
-启用时注册 status / init / fact / intent / doc / flag 六个工具。写操作默认走
-DSH ask 审批；关掉普通写入询问后，confirm、结案到 goal、flag update 仍需审批。
-策略链中的已有拒绝保留。guard 和写入前检查阻止审批等待/队列期间关闭插件后的写入。
+启用时注册 status / init / fact / intent / doc / flag 六个工具。普通图写入默认跟随
+真实 SandboxPolicyService 的会话写权限自动执行，read-only 或缺失策略服务时拒绝。
+confirm 显式人工确认点和用户选择的 always 模式才请求审批。其他策略拒绝保留，
+guard 和提交前检查阻止会话撤销写权限、配置改变或插件关闭后的未提交写入。
 工具分类只把只读操作标记为可并发；内部存储仍有共享队列。
 
 Store 保留 Python 的事实、意图、文档与 hint 布局。flag 事实为权威记录，ledger
@@ -42,7 +43,8 @@ agent/pre-step 先执行 next，保留拒绝/取消。只在已选择工作区�
 producer-owned source.kind=sapper-dsh，form=snapshot。M1 仍只注入目标，M2 才提供
 完整 frontier 和历史/召回。探针检查锁和事务状态，不进行自动初始化或恢复写入。
 
-客户端通过 configForms 读取宿主镜像，只有用户切换后才调用 set。false 显示拒绝
+客户端通过 configForms 读取宿主镜像；启用字段使用 set，嵌套的图写入策略使用
+mutate 路径数组，仅用户主动切换后写入。false 显示拒绝
 保存；仅打开页面不写默认值。完整表单和图预览为 M4，当前 GraphPreview 是进度提示。
 
 ## 模块状态
@@ -53,7 +55,7 @@ producer-owned source.kind=sapper-dsh，form=snapshot。M1 仍只注入目标，
 | tools | 六个 M1 工具与读写分类，按需展开 doc | M2 recall / KB，M3 dispatch |
 | render | 有来源/预算的只读目标摘要 | M2 frontier、历史与中英文召回 |
 | orchestration | 接口预留 | M3 DSH 子代理、审批、预算、candidate/verify 流程 |
-| client | 插件卡片、启用字段、失败提示 | M4 完整配置、诊断与只读图预览 |
+| client | 插件卡片、启用/图写入策略字段、失败提示 | M4 完整配置、诊断与只读图预览 |
 
 workspace 是当前唯一支持的存储模式。global / autoInit 仍为预留配置。
 M1 不提供自动探测、网络提交、子代理执行或证据自动验证。

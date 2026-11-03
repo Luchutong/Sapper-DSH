@@ -1,120 +1,78 @@
-# M1 桌面验收指南
+# M1 验收与权限修复验证
 
-安装包：sapper-dsh-0.1.0-alpha.3.tgz，运行时 DSH 0.2.1-rc.2。
-M0 已由用户确认通过；下面是新版本的存储与写工具验收。所有数据均为本地 fixture，
-无需连接目标或提交真实 flag。自动化检查不替代这些桌面交互结果。
+M1 已由用户确认验收完成。当前包为 **0.1.0-alpha.4**，运行时 **DSH 0.2.1-rc.2**。
+本轮重点验证正常图维护连续自动执行，以及必要约束仍有效。
 
-## 1. 升级与新工作区
+## 升级
 
-从 DSH NEXT 菜单“打开 DSH 终端”，升级后完全重启应用：
+从 DSH NEXT 菜单“打开 DSH 终端”，执行后完全重启：
 
 ```powershell
-dsh plugin add "D:\BaiduSyncdisk\sapper移植\sapper-dsh-0.1.0-alpha.3.tgz"
-$workspace = Join-Path $env:TEMP ('sapper M1 中文-' + [guid]::NewGuid().ToString('N').Substring(0,8))
+dsh plugin add "D:\BaiduSyncdisk\sapper移植\sapper-dsh-0.1.0-alpha.4.tgz"
+```
+
+“设置 → Sapper → 图写入确认”默认为“跟随会话权限（自动）”。旧配置中的
+orchestration.requireApproval=true 不会导致图工具继续逐次询问，无需手工修改旧配置。
+sapper_status 的 version 应为 alpha.4、store_approval=session。
+
+普通图写入需要会话文件权限允许工作区写入；“工作区内修改”和默认“完全权限”均可。
+“完全权限”附带的审批策略 never 不再影响普通图写入。无需为本轮正常链路切换成
+可交互审批模式。只读会话仍禁止写入，插件不会自动提高会话权限。
+
+已有 alpha.3 完整图可直接读取，格式不变。原 M0 两字段 fixture 仍不满足完整图格式，
+初始化不会覆盖旧文件。建议为下面的自检创建独立工作区：
+
+```powershell
+$workspace = Join-Path $env:TEMP ('sapper alpha4 中文-' + [guid]::NewGuid().ToString('N').Substring(0,8))
 New-Item -ItemType Directory -Path $workspace | Out-Null
 $workspace
 ```
 
-在 DSH 中选择该目录并新建会话。确认设置页显示 alpha.3。使用新目录是为了保留
-M0 的手工两字段 fixture；sapper_init 不覆盖旧图，sapper_status 会校验完整格式。
+在 DSH 中选择该目录并新建会话。领取与结案在同一会话完成，使用工具实际返回的 ID。
 
-请在同一会话完成领取与结案测试，worker 身份由会话决定。下面每一行都要求模型
-实际调用对应工具，查看调用参数、审批与返回值，避免仅看模型口述。
+## 一次指令完成正常链路
 
-### 准备可交互的审批会话
+可以直接向模型发送：
 
-在 DSH 会话中输入 `/permission`，选择“工作区内修改”（workspace-write）。当前
-DSH 0.2.1-rc.2 安装版的默认预设使用 approval=ask，可以出现审批提示。
-会话输入框的权限选择器也可切换当前会话；“设置 → 通用 → 权限”选择的是新会话
-的默认权限，修改后需新建会话再测。自定义权限预设以其实际 approval 策略为准。
+> 在当前新建的测试工作区完成一次 Sapper 本地存储自检，连续实际调用工具，不要每一步停下来问我。先查询状态，未初始化则用目标 SAPPER-ALPHA4-LOCAL 和来源 desktop fixture 初始化；创建一条本地主机事实和一条普通意图（requires_confirmation=false），领取意图，再创建带 doc 的结果事实并原子结案。读取 doc，用返回内容作为 expected_doc 更新一次。记录虚拟 flag{SAPPER-ALPHA4-LOCAL}，重复记录验证去重，再把它的本地状态改为 rejected，备注“本地验收虚拟结果，没有网络提交”。最后创建一个完成意图并结案到 goal，输出状态、计数和完整性结果。使用实际返回的 ID，不访问网络、不运行探测命令。若遇到只读权限、现有图冲突或损坏，报告具体原因并停止对应写入。
 
-默认“完全权限”（danger-full-access）采用 approval=never。never 表示需要审批的
-操作自动拒绝，**不表示自动批准**。因此即使允许广泛文件访问，Sapper 主动请求
-审批的写工具仍会被拒绝。请通过 DSH 会话权限入口启用 ask 后测试批准路径。
+预期：整个普通链路不弹出 Sapper 的逐次审批，不需要中间人工确认。关键证据：
 
-首次拒绝预期返回 `Error: the user rejected tool "sapper_init"`。手动拒绝和 never
-自动拒绝均可能产生同一错误；仅凭该错误不能区分具体来源。模型所说的“审批提示
-已禁用”与 never 行为一致，可在权限选择器核对。拒绝后调用只读 sapper_status，
-应仍为 uninitialized；也可在前面的 PowerShell 窗口检查：
+| 环节 | 预期 |
+| --- | --- |
+| 初始 status | uninitialized，状态查询不创建图 |
+| init | 自动成功，active；同目录再次 init 不覆盖旧图 |
+| fact create | 类型化 data 保持兼容，数字保存为字符串 |
+| 普通 intent create / claim | 不请求审批，领取者为当前会话 |
+| 带 source_intent 的结果事实 | 新事实与意图结案同一事务，重复调用不新增孤立事实 |
+| doc get / set | 使用准确 expected_doc；旧值覆盖保存会被拒绝 |
+| flag record 两次 | 第二次返回相同 ID、duplicate=true，计数不增加 |
+| flag update / 结案到 goal | 自动记录本地状态，无网络提交 |
+| 最终 status | completed，store_approval=session，warnings/integrity 为空 |
 
-```powershell
-Test-Path -LiteralPath (Join-Path $workspace '.sapper/project.json')
-```
+在 fresh 图上，上述流程通常产生 3 条普通事实（含 1 条 flag）、2 条已结案意图，
+open_intents=0；goal 终态事实不计入普通 facts 数。普通意图被 claim 后仍计入
+open_intents，只有结案才减少。
 
-全新测试工作区的预期为 False。切换权限后，明确要求模型重新调用一次相同参数的
-sapper_init，并在 DSH 提示中批准。成功后再进行下表第 3 步；不以手工写 JSON
-代替工具初始化验收。
+## 必要约束回归
 
-## 2. 最小读写链路
+以下按需在独立测试图进行，不是正常任务每一步的必经确认流程：
 
-| 顺序 | 调用参数 | 预期 |
-| --- | --- | --- |
-| 1 | sapper_status `{}` | version=alpha.3，milestone=M1-storage，state=uninitialized；没有自动建图 |
-| 2 | sapper_init `{"goal":"SAPPER-M1-LOCAL：验证存储","origin":"desktop fixture"}` | 出现写入审批；先拒绝一次，确认没有项目写入，再调用并批准 |
-| 3 | sapper_status `{}` | active，facts/intents/flags=0，warnings/integrity 为空 |
-| 4 | sapper_fact `{"action":"create","title":"本地主机","description":"本地验收数据，不发起网络连接","kind":"host","data":{"host":"127.0.0.1","port":8080}}` | f001；data.port 以字符串保存 |
-| 5 | sapper_intent `{"action":"create","from":["f001"],"description":"验证本地证据写入","requires_confirmation":true}` | i001，open，to=null |
-| 6 | sapper_intent `{"action":"claim","id":"i001"}` | 提示需先 confirm，图不产生结果事实 |
-| 7 | sapper_intent `{"action":"confirm","id":"i001"}`，再调用 claim | 用户审批后允许确认/领取 |
-| 8 | sapper_fact `{"action":"create","description":"本地 fixture 证据","kind":"note","doc":"原始证据第一行\n第二行","source_intent":"i001"}` | f002；i001 同时变为 done，to=f002 |
-| 9 | sapper_intent `{"action":"get","id":"i001"}` | worker 为当前会话，结案时间已保存 |
-| 10 | 再次重复步骤 8 | 已结案错误，不新增 f003 |
+- 切换会话到只读，init / fact / doc 等写入应拒绝，status 仍可读取，不自动请求提权。
+- 单独创建 requires_confirmation=true 的意图：claim 在确认前失败，confirm 仍需批准。
+  在 never 策略下该 confirm 会被拒绝，原意图保持未确认；普通任务不应设置此标记。
+- 用户主动选择“每次写入确认”后，写入才逐次询问。此模式遇到 never 会被拒绝；
+  切回“跟随会话权限（自动）”后普通链路恢复。设置切换及重启后值应保持。
+- 模拟其他 DSH 策略拒绝，插件不能将其变为允许。审批或执行等待期间撤销文件写权限，
+  未提交写入应取消。
+- 文档比较更新冲突、意图归属、确认门、坏节点与引用检查、路径/符号链接边界继续生效。
+- 关闭/卸载后工具与摘要清理；重启后已有图与启用开关保留。只读查询和打开页面不改图。
 
-ID 示例基于刚初始化的空图；若之前已写入节点，请用实际返回的 ID。
+## 恢复与开发检查
 
-## 3. 文档、flag 与完成项目
-
-先执行 sapper_doc `{"action":"get","id":"f002"}`，再使用返回的完整 doc 作为
-expected_doc 执行 set：
-
-```json
-{"action":"set","id":"f002","doc":"补充后的本地证据","expected_doc":"原始证据第一行\n第二行"}
-```
-
-应保存成功。使用旧 expected_doc 再保存应拒绝，并保留最近内容。fact/intent list
-只返回短信息，doc 长文可单独读取。
-
-依次调用 sapper_flag：
-
-```json
-{"action":"record","value":"flag{SAPPER-M1-LOCAL}","source_fact":"f002","challenge":"local-only"}
-```
-
-首次返回 duplicate=false、status=recorded，fresh 图中 ID 为 f003。用首尾带空白的
-同一个值重复 record，应返回相同 ID、duplicate=true，计数器不增加。
-
-```json
-{"action":"update","id":"f003","status":"submitted","note":"本地验收模拟状态，没有网络提交"}
-```
-
-此操作需显式审批。随后 list 应显示 submitted。检查工具没有调用网络或平台提交。
-
-可选终态测试：创建依赖 f002 的新意图，再 conclude 到 goal。应出现审批，项目
-状态变为 completed，意图状态为 complete。重复结案应拒绝。这里的完成是测试
-图的数据变更，不代表自动验证了真实任务。
-
-## 4. 持久化与生命周期
-
-- 完全重启 DSH，在同一工作区新建会话，status 的目标、数量、完整性诊断与重启前一致。
-- 关闭 Sapper 后六个工具均消失，后续请求没有 Sapper snapshot；重启后开关值保留。
-- 重新开启后六个工具恢复，已保存的图保持原样。
-- 读取 status / list / doc 和打开设置页不改变图文件内容；读操作不生成 ledger。
-- 模型提出写入时拒绝审批，确认没有对应节点。审批等待期间关闭插件，再同意该次
-  请求，guard 应阻止写入。
-- 移除插件并重启后，卡片、工具与 hook 清理；已有图保留，重新安装可以继续读取。
-
-## 5. 故障检查与恢复
-
-只在可丢弃测试图的副本中进行。破坏一个事实 JSON：status 应报告 warnings/
-引用完整性问题，写工具停止写入；恢复备份后继续使用，插件不会自动修复原证据。
-
-如出现 `.transaction.json`，先检查 LOCK 的 owner。确认写进程已退出后，备份图
-并清理遗留 LOCK，随后调用 sapper_init `{"action":"recover"}` 并审批。应重放原事务，
-status 恢复可读。禁止用删除事务日志来绕过错误，也不要盲目重复创建事实。
-
-TS/Python 只做顺序交接写入；两种锁不互通。Windows 无需安装 Python即可使用插件。
-
-## 开发检查
+事务日志恢复和 TS/Python 顺序交接见 [存储契约](m1-storage.md)。不要删除未完成
+事务来绕过错误；清理遗留 LOCK 前需确认旧写者已经退出。Python 仅用于开发测试，
+桌面用户无需安装。
 
 ```sh
 corepack pnpm install --frozen-lockfile
@@ -123,8 +81,6 @@ corepack pnpm check:compatibility
 corepack pnpm pack --pack-destination dist
 ```
 
-开发测试需 Python 3，使用固定哈希的上游 Store 进行往返。自动检查覆盖 56 项
-用例以及打包后两个独立 Node 写者的争锁/重试，不调用模型，不修改现有 desktop profile。
-
-将验收结果记录到 docs/progress.md 和 GitHub issue #1，包括运行时版本、拒绝审批
-是否无写入、六工具链路、持久化和重启结果。不要提交真实凭据或真实 flag。
+本轮自动测试覆盖默认连续写入零审批、真实 SandboxPolicyService 的只读拒绝与
+权限撤销、旧配置默认值、手动覆盖与显式确认点，同时保留 Python 往返和两进程写入。
+权限策略详见 [permissions.md](permissions.md)。

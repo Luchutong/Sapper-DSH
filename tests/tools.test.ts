@@ -3,6 +3,8 @@ import os from 'node:os'
 import path from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import { ToolRuntime } from '@deepseek-ai/dsh-tools'
+import { SandboxPolicyService } from '@deepseek-ai/dsh-sandbox-policy'
+import type { SandboxMode } from '@deepseek-ai/dsh-sandbox'
 import type { ToolExecutionResult } from '@deepseek-ai/dsh-tools'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -11,24 +13,28 @@ import { resolveConfig } from '../src/settings.js'
 
 const cleanup: Array<() => Promise<unknown>> = []
 afterEach(async () => { for (const dispose of cleanup.splice(0).reverse()) await dispose() })
-async function setup(outcome: string | undefined = 'allowed-once', requireApproval = true) {
+async function setup(outcome: string | undefined = 'allowed-once', approval: 'session' | 'always' = 'session', initialMode: SandboxMode = 'workspace-write') {
   const cwd = await mkdtemp(path.join(os.tmpdir(), 'sapper tools 中文 '))
   cleanup.push(() => rm(cwd, { recursive: true, force: true }))
   const ctx = new Context()
   cleanup.push(() => ctx.fiber.dispose())
-  ctx.provide('systemPrompt', { tools: () => () => {}, section: () => () => {} })
+  ctx.provide('systemPrompt', { tools: () => () => {}, section: () => () => {}, context: () => () => {}, getContextOrder: () => 0 })
+  let mode = initialMode
+  ctx.provide('sessionProjections', { register: () => () => {}, stateOf: () => mode })
+  const policyFiber = await ctx.plugin(SandboxPolicyService, { mode: initialMode, workspaceRoot: cwd })
   await ctx.plugin(ToolRuntime)
-  let config = resolveConfig({ orchestration: { requireApproval } })
+  let config = resolveConfig({ store: { approval }, orchestration: { requireApproval: true } })
   registerRuntime(ctx, () => config)
   const request = vi.fn(async (_input: unknown) => outcome)
   if (outcome !== undefined) ctx.provide('approval', { request })
-  const agent = { id: 'test-session', session: { header: { cwd } } } as unknown as Agent
+  const agent = { id: 'test-session', session: { id: 'test-session', header: { cwd } } } as unknown as Agent
   let call = 0
   const execute = (name: string, args: unknown, signal = new AbortController().signal) => ctx.tools.execute({
     name, arguments: args, agent, callId: `tool-${++call}` as never, signal,
   })
   const setConfig = (input: Parameters<typeof resolveConfig>[0]) => { config = resolveConfig(input) }
-  return { ctx, cwd, execute, request, setConfig, agent }
+  const setMode = (next: SandboxMode) => { mode = next }
+  return { ctx, cwd, execute, request, setConfig, setMode, agent, disposePolicy: () => policyFiber.dispose() }
 }
 function value(result: ToolExecutionResult): Record<string, any> {
   expect(result.isError, JSON.stringify(result.content)).toBe(false)
@@ -38,7 +44,7 @@ function value(result: ToolExecutionResult): Record<string, any> {
 
 describe('real DSH ToolRuntime and M1 approval pipeline', () => {
   it('registers six tools, approves initialization, and reads status without further approval', async () => {
-    const { execute, request, cwd } = await setup()
+    const { execute, request, cwd } = await setup('allowed-once', 'always')
     expect(value(await execute('sapper_status', {}))).toMatchObject({ state: 'uninitialized', milestone: 'M1-storage' })
     expect(await readdir(cwd)).toEqual([])
     expect(request).not.toHaveBeenCalled()
@@ -48,19 +54,19 @@ describe('real DSH ToolRuntime and M1 approval pipeline', () => {
     expect(request).toHaveBeenCalledTimes(1)
   })
   it.each(['rejected', 'cancelled', 'unavailable'])('does not create directories when approval is %s', async outcome => {
-    const { execute, cwd } = await setup(outcome)
+    const { execute, cwd } = await setup(outcome, 'always')
     expect((await execute('sapper_init', { goal: 'must not write' })).isError).toBe(true)
     expect(await readdir(cwd)).toEqual([])
   })
   it('fails closed when the approval service is absent', async () => {
-    const { ctx, execute, cwd } = await setup()
+    const { ctx, execute, cwd } = await setup('allowed-once', 'always')
     // Removing a provided service simulates an unmounted approval channel.
     ctx.set('approval', undefined)
     expect((await execute('sapper_init', { goal: 'must not write' })).isError).toBe(true)
     expect(await readdir(cwd)).toEqual([])
   })
   it('executes fact/intent/doc/flag operations with canonical outputs and session-owned identity', async () => {
-    const { execute } = await setup()
+    const { execute, request } = await setup()
     value(await execute('sapper_init', { goal: 'round trip' }))
     const fact = value(await execute('sapper_fact', { action: 'create', description: 'Observed host', kind: 'host', data: { host: 'localhost', port: 80 }, creator: 'spoofed' }))
     expect(fact).toMatchObject({ id: 'f001', creator: 'test-session', data: { port: '80' } })
@@ -80,26 +86,84 @@ describe('real DSH ToolRuntime and M1 approval pipeline', () => {
     value(await execute('sapper_flag', { action: 'update', id: flag.entry.id, status: 'rejected', note: 'local test only' }))
     expect(value(await execute('sapper_flag', { action: 'list' })).entries[0].status).toBe('rejected')
     expect(value(await execute('sapper_status', {}))).toMatchObject({ counts: { facts: 3, flags: 1 }, warnings: [], integrity: [] })
-  })
-  it('keeps confirmation, project completion and flag lifecycle approval mandatory when ordinary write prompts are disabled', async () => {
-    const { execute, request } = await setup('allowed-once', false)
-    value(await execute('sapper_init', { goal: 'gated completion' }))
-    const fact = value(await execute('sapper_fact', { action: 'create', description: 'seed' }))
-    const intent = value(await execute('sapper_intent', { action: 'create', from: [fact.id], description: 'finish', requires_confirmation: true }))
     expect(request).not.toHaveBeenCalled()
-    expect((await execute('sapper_intent', { action: 'claim', id: intent.id })).isError).toBe(true)
-    value(await execute('sapper_intent', { action: 'confirm', id: intent.id }))
-    expect(request).toHaveBeenCalledTimes(1)
-    value(await execute('sapper_intent', { action: 'conclude', id: intent.id, to: 'goal' }))
-    expect(request).toHaveBeenCalledTimes(2)
+  })
+  it('completes ordinary metadata work with a never-style answerer without asking once', async () => {
+    const { execute, request } = await setup('rejected', 'session', 'danger-full-access')
+    value(await execute('sapper_init', { goal: 'automatic metadata' }))
+    const fact = value(await execute('sapper_fact', { action: 'create', description: 'seed', doc: 'v1' }))
+    value(await execute('sapper_doc', { action: 'set', id: fact.id, doc: 'v2', expected_doc: 'v1' }))
+    const intent = value(await execute('sapper_intent', { action: 'create', from: [fact.id], description: 'inspect' }))
+    expect((await execute('sapper_intent', { action: 'confirm', id: intent.id })).isError).toBe(true)
+    value(await execute('sapper_intent', { action: 'claim', id: intent.id }))
+    const result = value(await execute('sapper_fact', { action: 'create', description: 'evidence', source_intent: intent.id }))
     const flag = value(await execute('sapper_flag', { action: 'record', value: 'flag{LOCAL}' }))
     value(await execute('sapper_flag', { action: 'update', id: flag.entry.id, status: 'submitted' }))
-    expect(request).toHaveBeenCalledTimes(3)
+    const completion = value(await execute('sapper_intent', { action: 'create', from: [result.id], description: 'finish' }))
+    value(await execute('sapper_intent', { action: 'conclude', id: completion.id, to: 'goal' }))
+    expect(value(await execute('sapper_status', {}))).toMatchObject({ state: 'completed', store_approval: 'session', integrity: [] })
+    expect(request).not.toHaveBeenCalled()
+  })
+  it('retains the explicit human gate only for intents deliberately marked as requiring confirmation', async () => {
+    const { execute, request } = await setup('allowed-once')
+    value(await execute('sapper_init', { goal: 'optional gate' }))
+    const fact = value(await execute('sapper_fact', { action: 'create', description: 'seed' }))
+    const intent = value(await execute('sapper_intent', { action: 'create', from: [fact.id], description: 'human decision', requires_confirmation: true }))
+    expect((await execute('sapper_intent', { action: 'claim', id: intent.id })).isError).toBe(true)
+    expect(request).not.toHaveBeenCalled()
+    value(await execute('sapper_intent', { action: 'confirm', id: intent.id }))
+    expect(request).toHaveBeenCalledTimes(1)
+    value(await execute('sapper_intent', { action: 'claim', id: intent.id }))
+    value(await execute('sapper_intent', { action: 'conclude', id: intent.id, to: 'goal' }))
+    expect(request).toHaveBeenCalledTimes(1)
+  })
+  it('does not require an approval provider for routine writes under a writable session policy', async () => {
+    const { ctx, execute } = await setup()
+    ctx.set('approval', undefined)
+    expect(value(await execute('sapper_init', { goal: 'automatic local graph' })).goal).toBe('automatic local graph')
+  })
+  it('denies all writes in a read-only session before requesting approval, while keeping status readable', async () => {
+    const { execute, request, cwd } = await setup('allowed-once', 'session', 'read-only')
+    const result = await execute('sapper_init', { goal: 'must not write' })
+    expect(result.isError).toBe(true)
+    expect(JSON.stringify(result.content)).toContain('只读')
+    expect(value(await execute('sapper_status', {}))).toMatchObject({ state: 'uninitialized' })
+    expect(await readdir(cwd)).toEqual([])
+    expect(request).not.toHaveBeenCalled()
+  })
+  it('fails closed on missing file policy without breaking readonly status', async () => {
+    const { disposePolicy, execute, cwd } = await setup()
+    await disposePolicy()
+    expect((await execute('sapper_init', { goal: 'must not write' })).isError).toBe(true)
+    expect(value(await execute('sapper_status', {}))).toMatchObject({ state: 'uninitialized' })
+    expect(await readdir(cwd)).toEqual([])
+  })
+  it('rechecks session permission after the pre-execute gate and before disk writes', async () => {
+    const { ctx, setMode, execute, cwd } = await setup()
+    ctx.on('tools/execute', async (_exec, next) => { setMode('read-only'); return next() })
+    expect((await execute('sapper_init', { goal: 'revoked permission' })).isError).toBe(true)
+    expect(await readdir(cwd)).toEqual([])
+  })
+  it('blocks a queued manual approval if session write permissions were revoked while waiting', async () => {
+    const { setMode, execute, request, cwd } = await setup('allowed-once', 'always')
+    request.mockImplementationOnce(async () => { setMode('read-only'); return 'allowed-once' })
+    expect((await execute('sapper_init', { goal: 'revoked permission' })).isError).toBe(true)
+    expect(await readdir(cwd)).toEqual([])
+  })
+  it('keeps deliberately confirmation-required intents blocked when their approval is rejected', async () => {
+    const { execute, request } = await setup('rejected')
+    value(await execute('sapper_init', { goal: 'explicit decision' }))
+    const fact = value(await execute('sapper_fact', { action: 'create', description: 'seed' }))
+    const intent = value(await execute('sapper_intent', { action: 'create', from: [fact.id], description: 'requires human', requires_confirmation: true }))
+    expect((await execute('sapper_intent', { action: 'confirm', id: intent.id })).isError).toBe(true)
+    expect((await execute('sapper_intent', { action: 'get', id: intent.id })).isError).toBe(false)
+    expect(value(await execute('sapper_intent', { action: 'get', id: intent.id }))).toMatchObject({ confirmed_at: null, worker: null, status: 'open' })
+    expect(request).toHaveBeenCalledTimes(1)
   })
   it.each([
     { enabled: false }, { store: { dir: 'changed-store' } }, { goal: 'changed goal' },
   ])('blocks a previously approved call if its configuration changes while awaiting approval: %j', async input => {
-    const { execute, request, setConfig, cwd } = await setup()
+    const { execute, request, setConfig, cwd } = await setup('allowed-once', 'always')
     request.mockImplementationOnce(async () => { setConfig(input); return 'allowed-once' })
     expect((await execute('sapper_init', { goal: 'must not write' })).isError).toBe(true)
     expect(await readdir(cwd)).toEqual([])

@@ -10,6 +10,8 @@ describe('settings and workspace boundary', () => {
     expect(config.context.historyFacts).toBe(8)
     expect(config.orchestration.auto).toBe(false)
     expect(config.orchestration.requireApproval).toBe(true)
+    expect(config.store.approval).toBe('session')
+    expect(resolveConfig({ orchestration: { requireApproval: true } }).store.approval).toBe('session')
     expect(resolveConfig().context.maxChars).toBe(6000)
   })
 

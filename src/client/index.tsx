@@ -16,12 +16,16 @@ export function SapperSettings({ scope }: { scope: BrowserSettingsScope }) {
   const [error, setError] = useState('')
   const enabled = typeof state.value === 'object' && state.value !== null &&
     'enabled' in state.value && state.value.enabled === true
+  const storeValue = typeof state.value === 'object' && state.value !== null && 'store' in state.value ? state.value.store : null
+  const approval = typeof storeValue === 'object' && storeValue !== null && 'approval' in storeValue && storeValue.approval === 'always' ? 'always' : 'session'
 
-  const toggle = async (enabled: boolean) => {
+  const save = async (path: string[], value: boolean | string) => {
     setPending(true)
     setError('')
     try {
-      if (!await scope.set('enabled', enabled)) {
+      const accepted = path.length === 1 ? await scope.set(path[0]!, value)
+        : await scope.mutate([{ op: 'set', path, value }])
+      if (!accepted) {
         setError('DSH 未接受此次保存。请重新加载设置，确认是否有其他窗口修改了配置。')
       }
     } catch {
@@ -37,9 +41,19 @@ export function SapperSettings({ scope }: { scope: BrowserSettingsScope }) {
     <label>
       <input type="checkbox" checked={enabled}
         disabled={state.status !== 'ready' || !state.writable || pending}
-        onChange={event => { void toggle(event.target.checked) }} />{' '}
+        onChange={event => { void save(['enabled'], event.target.checked) }} />{' '}
       启用 Sapper
     </label>
+    <label style={{ display: 'block', marginTop: 12 }}>
+      图写入确认{' '}
+      <select aria-label="图写入确认" value={approval}
+        disabled={state.status !== 'ready' || !state.writable || pending}
+        onChange={event => { void save(['store', 'approval'], event.target.value) }}>
+        <option value="session">跟随会话权限（自动）</option>
+        <option value="always">每次写入确认</option>
+      </select>
+    </label>
+    <p>自动写入仅限当前工作区的事实图，仍遵守会话权限。标记为需确认的任务仍会请求批准。</p>
     <p role="status">{state.status === 'ready'
       ? (enabled ? '已启用：提供事实图存储工具与目标摘要。' : '已关闭：工具和上下文注入均不生效。')
       : '正在等待 DSH 的 sapper 配置表单；不会自动写入默认值。'}</p>

@@ -14,6 +14,7 @@ const PlainConfig = group({
   store: group({
     mode: Schema.union(['workspace', 'global']).default('workspace'),
     dir: Schema.string().default('.sapper'),
+    approval: Schema.union(['session', 'always']).default('session').description('图写入默认跟随 DSH 会话权限；always 为每次写入确认'),
   }),
   autoInit: Schema.boolean().default(true).description('预留：当前请显式调用 sapper_init，状态查询与上下文注入不自动写入'),
   goal: Schema.string().default('拿到 flag'),
@@ -32,7 +33,7 @@ const PlainConfig = group({
     maxVerify: positive(2, 10),
     concurrency: positive(2, 8),
     timeoutMin: positive(15, 120),
-    requireApproval: Schema.boolean().default(true),
+    requireApproval: Schema.boolean().default(true).description('预留：外部编排审批策略；不控制图数据写入'),
     models: group({
       reason: Schema.string().default('inherit'),
       explore: Schema.string().default('inherit'),

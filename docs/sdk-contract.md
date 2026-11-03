@@ -1,6 +1,6 @@
 # DSH SDK 核对记录
 
-日期：2026-11-03。当前目标：DSH **0.2.1-rc.2**，插件 **0.1.0-alpha.3**。
+日期：2026-11-03。当前目标：DSH **0.2.1-rc.2**，插件 **0.1.0-alpha.4**。
 
 版本依据是当前 Windows 安装版 app.asar 内实际加载的包元数据，并与 npm 同版本
 包的实现和类型声明对照。旧 ~/.cache/pkg 中的 0.1.5-rc.1 不能代表当前桌面。
@@ -12,8 +12,9 @@ Cordis 为 4.0.5，Schemastery 为 3.18.5。原计划 HTML 保留为历史快照
 | 安装兼容性 | dsh-app-boot 的 evaluatePluginCompatibility | 空豁免表检查；CI 和 prepack 必须通过 |
 | Cordis | 4.0.5 的 apply / inject / effect | 宿主 ESM；工具和 Agent 服务为必需，Settings 为可选 |
 | 工具 | dsh-tools 的真实 defineTool 声明 | 参数 schema、输出 schema/render、execute |
-| 写入审批 | tools/pre-execute / PreToolDecision.ask | 保留其他策略决定，缺失审批服务时由运行时拒绝 |
-| 单调守卫 | ctx.tools.guard | 防止等待审批期间关闭插件后继续写入；提交前另有 live config 检查 |
+| 文件写权限 | dsh-sandbox-policy 的 SandboxPolicyService.resolve | 每次读取会话 mode / workspaceRoot，提交前再次核对；只读或服务缺失时拒绝 |
+| 额外审批 | tools/pre-execute / PreToolDecision.ask | 普通图写入不额外 ask；只有显式确认点和 always 模式请求审批，其他策略决定保留 |
+| 单调守卫 | ctx.tools.guard | 绑定配置/工作区/会话权限快照；提交前重查，阻止权限撤销或插件关闭后的未提交写入 |
 | pre-step | dsh-agent 的 runtime-types | payload 含 agent/messages/turn/step/signal，next 返回 enter/reject |
 | 消息来源 | dsh-llm 的 MessageSourceMap | 扩展 producer kind=sapper-dsh，form=snapshot，带 sections |
 | 配置 | Schemastery volatile + Cordis Loader | Config.volatile()；每次从 config.get() 读取当前值 |
@@ -22,7 +23,7 @@ Cordis 为 4.0.5，Schemastery 为 3.18.5。原计划 HTML 保留为历史快照
 | 页面策略 | SettingsForms.configure | 自带客户端页面，auto=false；由可选注入子级持有 effect |
 | 持久化 | DSH config-editor | 当前 profile 的 Cordis patch，替代旧 settings.yaml namespace |
 | 客户端表单 | dsh-client-ui-settings/client 的 ConfigForms/ConfigForm 类型 | configForms.get('sapper')，getSnapshot/subscribe/set |
-| 表单返回值 | ConfigForm.set -> Promise<boolean> | false 显示拒绝保存，异常显示传输失败 |
+| 表单返回值 | ConfigForm.set / mutate -> Promise<boolean> | 顶层启用字段用 set，嵌套写入策略用 mutate 路径数组；false 显示拒绝保存 |
 | 页面生命周期 | configForms.whileServed | 仅在宿主暴露 sapper 配置时显示页面，取消后释放注册 |
 | 插件卡片 | 当前桌面与官方 companion 的 plugins.item | id=sapper；summary 为短描述，其他视图为表单 |
 | 独立设置页 | settings.section | id=sapper，位于“设置 → Sapper” |
@@ -40,6 +41,6 @@ Cordis 为 4.0.5，Schemastery 为 3.18.5。原计划 HTML 保留为历史快照
 - 打包检查验证 host import、lazy-CJS、当前客户端插槽与 KB 资源。
 - Windows DSH NEXT 自带 desktop-cli 已在独立 DSH_HOME / 临时 profile 中安装
   alpha.2 成功（退出码 0，dependencies 与 bundles 已登记，无版本豁免）。
-- M0 desktop 验收已获用户确认。alpha.3 新增六工具、写审批、存储与恢复，
-  已通过真实 ToolRuntime 的自动测试，新版本桌面交互按 M1 指南另行验收。
-- subagent/workflow、写工具审批和全局数据目录仍属于后续阶段。
+- M0/M1 桌面验收均获用户确认。alpha.4 改为会话授权范围内自动维护图数据，
+  新策略通过真实 ToolRuntime / SandboxPolicyService 的自动测试；新包桌面回归按 M1 指南验证。
+- subagent/workflow、外部执行策略和全局数据目录仍属于后续阶段。

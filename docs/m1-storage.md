@@ -1,6 +1,6 @@
 # M1 存储与工具契约
 
-版本：0.1.0-alpha.3；SDK：DSH 0.2.1-rc.2。M0 由用户于 2026-11-03 确认验收完成。
+版本：0.1.0-alpha.4；SDK：DSH 0.2.1-rc.2。M0/M1 已由用户确认验收完成。
 
 ## 权威数据与兼容
 
@@ -39,8 +39,8 @@ LOCK 不与 Python 的 `.lock` / flock 互通：**TS 与 Python 必须顺序交�
 + rename 替换，最后移除事务日志。不会先删除目标来替换；Windows 的临时占用
 做有限重试。文件编码为无 BOM UTF-8，JSON 文件行结束符为 LF。
 
-多文件写入中断时，日志保留，读操作报告恢复要求，不偷偷改文件。用户批准
-`sapper_init {"action":"recover"}` 后重放全部条目；下一次获准写入也先重放日志。
+多文件写入中断时，日志保留，读操作报告恢复要求，不偷偷改文件。调用
+`sapper_init {"action":"recover"}` 后按会话写权限重放全部条目；下一次获准写入也先重放日志。
 路径、节点结构、重复事务路径均先验证，非法日志会保留供检查。提交日志落盘后
 会完成本次提交，不在取消时停在半个事务；取消后的重试应先查看状态，避免重复建事实。
 这提供进程故障后的可恢复提交，不声称跨文件瞬时原子性、网络文件系统事务或
@@ -64,7 +64,7 @@ LOCK 不与 Python 的 `.lock` / flock 互通：**TS 与 Python 必须顺序交�
   worker/creator。未确认的受限意图无法领取/结案，其他会话不能替领取者结案。
 - 创建结果事实和结案意图属于同一可恢复事务；重复结案不会产生孤立事实。
   conclude 到 goal 同时更新项目 completed，不能重复完成。
-- M1 是人工记录证据与任务的工具层，不提供 M3 的 candidate → verify → confirmed 流程。
+- M1 是记录证据与任务的工具层，不提供 M3 的 candidate → verify → confirmed 流程。
 
 ## Flag 语义
 
@@ -73,16 +73,20 @@ flag 仍是 Python 可读的 `kind=flag` 事实；ledger 是索引。读取时�
 新增值做 NFKC 与首尾空白归一化，保留大小写；重复 record 返回原条目和 duplicate=true。
 
 新 flag 状态只能是 recorded；submitted / rejected / duplicate / recorded 的变更
-通过 sapper_flag update 显式审批后记录。submitted 仅表示用户指定的状态，插件不
+通过 sapper_flag update 按会话写权限记录。submitted 是本地图记录的状态，插件不
 联网、不推断平台是否接受。source_fact、challenge、captured_at、result 保存来源、
 时间与备注；不会因重复捕获自动改变已有提交状态。
 
 ## DSH 审批与保留项
 
-写操作进入 tools/pre-execute 的 ask，DSH 无审批服务或拒绝时不写文件。默认配置
-orchestration.requireApproval=true。设为 false 可关闭普通写入询问；confirm、
-conclude 到 goal 和 flag update 仍始终询问。其他 DSH 策略的 deny/ask 保留，
-关闭/卸载插件有 guard，排队和提交前再次检查配置、启用状态与取消信号。
+默认 store.approval=session，普通写操作跟随 DSH 会话文件权限自动执行。读取真实
+sandboxPolicy 的当前 mode 与 workspaceRoot，拒绝只读、越界和缺失权限服务的写入。
+在调用前、排队后和提交前检查权限与配置，保留其他 DSH 策略的 deny/ask。
+
+只有显式 requires_confirmation 意图的 confirm，或用户主动设置 store.approval=always，
+才由插件发起 ask。普通结案到 goal 和 flag 状态记录不再附加审批。旧
+orchestration.requireApproval 不控制图数据，已有配置无需手工删除。
+更多迁移、客户端字段协议和自动化边界见 [permissions.md](permissions.md)。
 
 当前只有 workspace 模式。global 和 autoInit 仍保留 schema，尚未执行；初始化
 统一显式调用 sapper_init。上下文探针保持只读、目标摘要范围，frontier 与 recall

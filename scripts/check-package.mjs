@@ -59,6 +59,7 @@ let writes = 0
 const scope = {
   getSnapshot: () => ({ status: 'ready', writable: true, value: { enabled: true }, base: {}, user: {}, revision: 0 }),
   subscribe: () => () => {}, set: async () => { writes++; return true },
+  mutate: async () => { writes++; return true },
 }
 client.apply({
   configForms: {

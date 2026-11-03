@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.0-alpha.4 — 2026-11-03
+
+- M1 已获用户验收；修复普通图写入反复审批与 never 策略冲突的问题。
+- 默认 store.approval=session，图维护连续执行；显式确认点和可选 always 模式保留审批。
+- 接入同版本 SandboxPolicyService，拒绝只读/越界/缺失策略服务，提交前检查权限撤销。
+- 旧 orchestration.requireApproval 不控制图存储，升级无需手工迁移配置或图文件。
+- 设置页新增图写入策略，使用真实嵌套 mutation 协议；更新连续执行验收与权限契约。
+
 ## 0.1.0-alpha.3 — 2026-11-03
 
 - M0 由用户确认验收完成，交付 M1 存储与六个工具。

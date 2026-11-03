@@ -41,6 +41,9 @@ devDependencies:
   '@deepseek-ai/dsh-sandbox':
     specifier: 0.2.1-rc.2
     version: 0.2.1-rc.2(@deepseek-ai/cordis@4.0.5)(@deepseek-ai/dsh-llm@0.2.1-rc.2)
+  '@deepseek-ai/dsh-sandbox-policy':
+    specifier: 0.2.1-rc.2
+    version: 0.2.1-rc.2(@deepseek-ai/cordis@4.0.5)(@deepseek-ai/dsh-agent@0.2.1-rc.2)(@deepseek-ai/dsh-sandbox@0.2.1-rc.2)
   '@deepseek-ai/dsh-scope':
     specifier: 0.2.1-rc.2
     version: 0.2.1-rc.2(@deepseek-ai/cordis@4.0.5)
@@ -49,7 +52,7 @@ devDependencies:
     version: 0.2.1-rc.2(@deepseek-ai/cordis-plugin-include@1.0.10)(@deepseek-ai/cordis@4.0.5)(@deepseek-ai/dsh-app-boot@0.2.1-rc.2)(@deepseek-ai/schemastery@3.18.5)
   '@deepseek-ai/dsh-tools':
     specifier: 0.2.1-rc.2
-    version: 0.2.1-rc.2(@deepseek-ai/cordis@4.0.5)(@deepseek-ai/dsh-agent@0.2.1-rc.2)(@deepseek-ai/dsh-llm@0.2.1-rc.2)(@deepseek-ai/dsh-sandbox@0.2.1-rc.2)(@deepseek-ai/dsh-scope@0.2.1-rc.2)
+    version: 0.2.1-rc.2(@deepseek-ai/cordis@4.0.5)(@deepseek-ai/dsh-agent@0.2.1-rc.2)(@deepseek-ai/dsh-llm@0.2.1-rc.2)(@deepseek-ai/dsh-sandbox-policy@0.2.1-rc.2)(@deepseek-ai/dsh-sandbox@0.2.1-rc.2)(@deepseek-ai/dsh-scope@0.2.1-rc.2)
   '@deepseek-ai/schemastery':
     specifier: 3.18.5
     version: 3.18.5
@@ -324,6 +327,23 @@ packages:
       '@deepseek-ai/cordis': 4.0.5(@deepseek-ai/cordis-plugin-include@1.0.10)(@deepseek-ai/cordis-plugin-loader@1.0.6)
     dev: true
 
+  /@deepseek-ai/dsh-sandbox-policy@0.2.1-rc.2(@deepseek-ai/cordis@4.0.5)(@deepseek-ai/dsh-agent@0.2.1-rc.2)(@deepseek-ai/dsh-sandbox@0.2.1-rc.2):
+    resolution: {integrity: sha512-fBb8zQ13CLKM60ynl3EHvFmO8F0GARofQYf7CXUkqJEuBcjxXUG14rzDKRS/PhE8oJ023lEvd5HJjE6qUjslhw==}
+    peerDependencies:
+      '@deepseek-ai/cordis': ~4.0.5
+      '@deepseek-ai/dsh-agent': 0.2.1-rc.2
+      '@deepseek-ai/dsh-sandbox': 0.2.1-rc.2
+      '@deepseek-ai/dsh-session': 0.2.1-rc.2
+      '@deepseek-ai/dsh-session-projection': 0.2.1-rc.2
+      '@deepseek-ai/dsh-system-prompt': 0.2.1-rc.2
+    dependencies:
+      '@deepseek-ai/cordis': 4.0.5(@deepseek-ai/cordis-plugin-include@1.0.10)(@deepseek-ai/cordis-plugin-loader@1.0.6)
+      '@deepseek-ai/dsh-agent': 0.2.1-rc.2(@deepseek-ai/cordis@4.0.5)(@deepseek-ai/dsh-llm@0.2.1-rc.2)(@deepseek-ai/dsh-scope@0.2.1-rc.2)
+      '@deepseek-ai/dsh-sandbox': 0.2.1-rc.2(@deepseek-ai/cordis@4.0.5)(@deepseek-ai/dsh-llm@0.2.1-rc.2)
+      '@deepseek-ai/schemastery': 3.18.5
+      zod: 4.4.3
+    dev: true
+
   /@deepseek-ai/dsh-sandbox@0.2.1-rc.2(@deepseek-ai/cordis@4.0.5)(@deepseek-ai/dsh-llm@0.2.1-rc.2):
     resolution: {integrity: sha512-nnxNIkgi4A4tkPrTV8sbVMse3c32OT0U+mwYhLqDz/+cIm5tUGufQD+Ax0zqVeClyzXsxZo0/pVtcqDJrsp+7w==}
     peerDependencies:
@@ -374,7 +394,7 @@ packages:
       '@deepseek-ai/cordis': 4.0.5(@deepseek-ai/cordis-plugin-include@1.0.10)(@deepseek-ai/cordis-plugin-loader@1.0.6)
     dev: true
 
-  /@deepseek-ai/dsh-tools@0.2.1-rc.2(@deepseek-ai/cordis@4.0.5)(@deepseek-ai/dsh-agent@0.2.1-rc.2)(@deepseek-ai/dsh-llm@0.2.1-rc.2)(@deepseek-ai/dsh-sandbox@0.2.1-rc.2)(@deepseek-ai/dsh-scope@0.2.1-rc.2):
+  /@deepseek-ai/dsh-tools@0.2.1-rc.2(@deepseek-ai/cordis@4.0.5)(@deepseek-ai/dsh-agent@0.2.1-rc.2)(@deepseek-ai/dsh-llm@0.2.1-rc.2)(@deepseek-ai/dsh-sandbox-policy@0.2.1-rc.2)(@deepseek-ai/dsh-sandbox@0.2.1-rc.2)(@deepseek-ai/dsh-scope@0.2.1-rc.2):
     resolution: {integrity: sha512-K3gET3VPbtxM66pkeRsEGrZ+bQKiBqrTbNXiIreBKu0hP+qPvlSwhiSI5MTnFp2tMFK5rpuYMZosRIdbfrbJ/g==}
     peerDependencies:
       '@deepseek-ai/cordis': ~4.0.5
@@ -394,6 +414,7 @@ packages:
       '@deepseek-ai/dsh-brand': 0.2.1-rc.2(@deepseek-ai/cordis@4.0.5)
       '@deepseek-ai/dsh-llm': 0.2.1-rc.2(@deepseek-ai/cordis@4.0.5)
       '@deepseek-ai/dsh-sandbox': 0.2.1-rc.2(@deepseek-ai/cordis@4.0.5)(@deepseek-ai/dsh-llm@0.2.1-rc.2)
+      '@deepseek-ai/dsh-sandbox-policy': 0.2.1-rc.2(@deepseek-ai/cordis@4.0.5)(@deepseek-ai/dsh-agent@0.2.1-rc.2)(@deepseek-ai/dsh-sandbox@0.2.1-rc.2)
       '@deepseek-ai/dsh-scope': 0.2.1-rc.2(@deepseek-ai/cordis@4.0.5)
       '@deepseek-ai/dsh-util-values': 0.2.1-rc.2(@deepseek-ai/cordis@4.0.5)
       '@deepseek-ai/schemastery': 3.18.5

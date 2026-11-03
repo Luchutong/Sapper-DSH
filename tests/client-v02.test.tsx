@@ -6,7 +6,7 @@ import type { BrowserContext, BrowserSettingsScope } from '../src/dsh-adapter/cl
 
 function makeScope(accepted = true): BrowserSettingsScope {
   const state = { status: 'ready' as const, writable: true, value: { enabled: true }, base: {}, user: {}, revision: 0 }
-  return { getSnapshot: () => state, subscribe: () => () => {}, set: vi.fn(async () => accepted) }
+  return { getSnapshot: () => state, subscribe: () => () => {}, set: vi.fn(async () => accepted), mutate: vi.fn(async () => accepted) }
 }
 
 describe('DSH 0.2 client entry', () => {
@@ -30,6 +30,7 @@ describe('DSH 0.2 client entry', () => {
     expect(rows).toEqual(['plugins.item', 'settings.section'])
     expect(renderToStaticMarkup(<SapperSettings scope={scope} />)).toContain('启用 Sapper')
     expect(scope.set).not.toHaveBeenCalled()
+    expect(scope.mutate).not.toHaveBeenCalled()
     cleanup()
     expect(disposed).toEqual(['settings.section', 'plugins.item'])
   })
@@ -41,6 +42,16 @@ describe('DSH 0.2 client entry', () => {
     expect(scope.set).toHaveBeenCalledWith('enabled', false)
     expect(renderer.root.findByProps({ role: 'alert' }).children.join('')).toContain('未接受此次保存')
     expect(renderer.root.findByType('input').props.checked).toBe(true)
+    renderer.unmount()
+  })
+  it('exposes automatic storage by default and writes only its nested setting on explicit selection', async () => {
+    const scope = makeScope()
+    const renderer = create(<SapperSettings scope={scope} />)
+    expect(renderer.root.findByType('select').props.value).toBe('session')
+    expect(scope.set).not.toHaveBeenCalled()
+    await act(async () => { renderer.root.findByType('select').props.onChange({ target: { value: 'always' } }) })
+    expect(scope.mutate).toHaveBeenCalledExactlyOnceWith([{ op: 'set', path: ['store', 'approval'], value: 'always' }])
+    expect(scope.set).not.toHaveBeenCalled()
     renderer.unmount()
   })
 })

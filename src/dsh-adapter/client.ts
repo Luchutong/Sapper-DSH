@@ -4,7 +4,7 @@ import type { ConfigForm, ConfigForms } from '@deepseek-ai/dsh-client-ui-setting
 /** Narrow client service contracts observed in DSH 0.2.1-rc.2.
  * Keep this browser-only seam separate from Node/Cordis host augmentations.
  */
-export type BrowserSettingsScope = Pick<ConfigForm<unknown>, 'getSnapshot' | 'subscribe' | 'set'>
+export type BrowserSettingsScope = Pick<ConfigForm<unknown>, 'getSnapshot' | 'subscribe' | 'set' | 'mutate'>
 
 interface SlotOptions {
   name: 'plugins.item' | 'settings.section'

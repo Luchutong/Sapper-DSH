@@ -5,6 +5,8 @@ import { GraphStore } from '../store/graph.js'
 import { resolveStorePath } from '../store/paths.js'
 import { StoreError } from '../store/validation.js'
 
+export type AuthorizeWrite = (exec: ToolRunContext, root: string) => void
+
 export const output = {
   schema: { type: 'json' } as const,
   render: (_args: unknown, value: unknown) => [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }],
@@ -12,7 +14,7 @@ export const output = {
 export function json(value: unknown): InferValue<typeof output.schema> {
   return JSON.parse(JSON.stringify(value)) as InferValue<typeof output.schema>
 }
-export function executionStore(getConfig: () => Config, exec: ToolRunContext, alive: () => boolean = () => true) {
+export function executionStore(getConfig: () => Config, exec: ToolRunContext, alive: () => boolean = () => true, authorize?: AuthorizeWrite) {
   exec.signal.throwIfAborted()
   const cwd = exec.agent?.session.header.cwd
   const config = getConfig()
@@ -27,6 +29,8 @@ export function executionStore(getConfig: () => Config, exec: ToolRunContext, al
       signal: exec.signal,
       guard: () => {
         if (!alive() || !getConfig().enabled || JSON.stringify(getConfig()) !== fingerprint || exec.agent?.session.header.cwd !== cwd) throw new StoreError('插件已关闭或配置/工作区已变化；写入已取消')
+        if (!authorize) throw new StoreError('缺少 DSH 图写入权限检查')
+        authorize(exec, root)
       },
     },
   }
