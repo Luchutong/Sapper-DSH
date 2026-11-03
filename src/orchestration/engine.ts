@@ -5,13 +5,14 @@ import path from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent, AgentOptions } from '@deepseek-ai/dsh-agent'
 import type { SessionId } from '@deepseek-ai/dsh-session'
+import { scopeParentOf } from '@deepseek-ai/dsh-scope'
 import type {} from '@deepseek-ai/dsh-subagent'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
 import type { Config } from '../settings.js'
 import { validateConfig } from '../settings.js'
 import { GraphStore } from '../store/graph.js'
 import type { WriteOptions } from '../store/graph.js'
-import type { RunRecord, RunOutcome } from '../store/runs.js'
+import type { RunRecord, RunOutcome, ChildCapabilities } from '../store/runs.js'
 import { StoreError } from '../store/validation.js'
 import { frontier } from '../render/frontier.js'
 import { renderGraphContext } from '../render/snapshot.js'
@@ -24,6 +25,13 @@ import type { DispatchMode, CapturedCall } from './types.js'
 interface Child {
   role: 'reason' | 'explore' | 'verify'; controller: AbortController; calls: Map<string, CapturedCall>
   steps: number; config: Config; guard: () => void
+  onReady: (capabilities: ChildCapabilities) => Promise<void>
+  parent: Agent
+}
+class StopRunError extends StoreError {}
+function mustStop(error: unknown): boolean {
+  return error instanceof StopRunError || (error instanceof Error && error.cause !== undefined && mustStop(error.cause)) ||
+    (error instanceof AggregateError && error.errors.some(mustStop))
 }
 const require = createRequire(import.meta.url)
 const readTools = new Set(['sapper_status', 'sapper_fact', 'sapper_intent', 'sapper_doc', 'sapper_flag', 'sapper_recall', 'sapper_kb'])
@@ -33,17 +41,21 @@ export class Orchestrator {
   private children = new Map<string, Child>()
   private active = new Map<string, AbortController>()
   constructor(private ctx: Context, private getConfig: () => Config, private alive: () => boolean) {
-    ctx.on('agent/created', ({ agent }) => {
+    ctx.on('agent/created', async ({ agent }) => {
       const child = this.children.get(String(agent.id))
       if (!child) return
-      const names = ctx.tools.schemas(agent).map(t => t.name).filter(name => ctx.tools.get(name) && ((child.role !== 'verify' && readTools.has(name)) || this.external(child, name)))
-      // The child-local structured_output tool remains visible through restrict().
-      if (names.length) agent.ctx.tools.restrict({ allow: names })
-      else {
-        const globals = ctx.tools.schemas().map(t => t.name).filter(name => ctx.tools.get(name))
-        if (globals.length) agent.ctx.tools.restrict({ deny: globals })
-      }
+      // Preset tools live on ancestor scopes, not necessarily the global registry.
+      // A child-local native declaration also keeps structured_output callable under a PTC preset.
+      agent.ctx.tools.presentAs('native')
+      const inherited = scopeParentOf(agent)
+      const names = ctx.tools.schemas(agent).map(t => t.name).filter(name => name !== 'run_code' && ctx.tools.get(name, inherited) && ctx.tools.get(name, child.parent) &&
+        ((child.role !== 'verify' && readTools.has(name)) || this.external(child, name)))
+      agent.ctx.tools.restrict({ allow: names })
       agent.ctx.tools.guard(exec => this.denial(exec))
+      const tools = ctx.tools.schemas(agent).map(t => t.name)
+      const external = tools.filter(name => this.external(child, name))
+      await child.onReady({ role: child.role, session_id: String(agent.id), tools, external_tools: external, max_output_tokens: child.config.orchestration.maxOutputTokens })
+      if (child.role !== 'reason' && !external.length) throw new StopRunError(`SAPPER_M3_TOOL_UNAVAILABLE: ${child.role} 未获得白名单中的外部取证工具；可见工具: ${tools.join(', ')}。请检查 DSH preset 与 orchestration.${child.role === 'explore' ? 'exploreTools' : 'verifyTools'}，增加 token 预算无法补齐工具。`)
       return undefined
     })
     ctx.tools.guard(exec => this.denial(exec))
@@ -56,7 +68,7 @@ export class Orchestrator {
     ctx.on('agent/pre-step', async (payload, next) => {
       const child = this.children.get(String(payload.agent.id))
       if (!child) return next()
-      try { child.guard(); if (++child.steps > child.config.orchestration.maxChildSteps) throw new StoreError('子代理步数预算耗尽') }
+      try { child.guard(); if (++child.steps > child.config.orchestration.maxChildSteps) throw new StopRunError('子代理步数预算耗尽') }
       catch (error) { child.controller.abort(error); return { kind: 'reject' } }
       return next()
     })
@@ -72,10 +84,12 @@ export class Orchestrator {
   isActive(root: string): boolean { return this.active.has(root) }
   private external(child: Child, name: string): boolean {
     return child.role !== 'reason' && !name.startsWith('sapper_') && name !== 'structured_output' &&
+      !!this.ctx.tools.get(name, child.parent) &&
       (child.role === 'explore' ? child.config.orchestration.exploreTools : child.config.orchestration.verifyTools).includes(name)
   }
   private allowed(child: Child, name: string, args: unknown): boolean {
     if (name === 'structured_output') return true
+    if (!this.ctx.tools.get(name, child.parent)) return false
     if (child.role === 'verify') return this.external(child, name)
     return (readTools.has(name) && !isMutation(name, args)) || this.external(child, name)
   }
@@ -92,15 +106,15 @@ export class Orchestrator {
     if (provider.inheritsParentContext || !provider.prepareContinuable || !provider.capabilities.outputSchema || !provider.capabilities.agentOptions || !provider.capabilities.depthLimit) throw new StoreError('M3 需要独立上下文、结构化输出、模型选择与深度限制的本地 spawn 提供者')
     return service
   }
-  private async child(role: Child['role'], data: unknown, parent: Agent, config: Config, signal: AbortSignal, guard: () => void) {
+  private async child(role: Child['role'], data: unknown, parent: Agent, config: Config, signal: AbortSignal, guard: () => void, onReady: Child['onReady']) {
     guard(); signal.throwIfAborted()
     const service = this.preflight(), session = randomUUID() as SessionId
     const controller = new AbortController(), onAbort = () => controller.abort(signal.reason)
     signal.addEventListener('abort', onAbort, { once: true })
     if (signal.aborted) onAbort()
-    const child: Child = { role, controller, config, guard, calls: new Map(), steps: 0 }
+    const child: Child = { role, controller, config, guard, calls: new Map(), steps: 0, onReady, parent }
     this.children.set(session, child)
-    const timer = setTimeout(() => controller.abort(new StoreError('子代理超时')), config.orchestration.timeoutMin * 60000)
+    const timer = setTimeout(() => controller.abort(new StopRunError('子代理超时')), config.orchestration.timeoutMin * 60000)
     const poll = setInterval(() => { try { guard() } catch (error) { controller.abort(error) } }, 500)
     let activation: Awaited<ReturnType<typeof service.startActivation>> | undefined
     const stop = () => { void activation?.dispose().catch(() => {}) }
@@ -121,7 +135,7 @@ export class Orchestrator {
       if (controller.signal.aborted) stop()
       const result = await activation.result
       controller.signal.throwIfAborted(); guard()
-      if (result.stopReason !== 'completed' || result.structured === undefined) throw new StoreError(`子代理 ${role} 未完成结构化结果：${result.stopReason}`)
+      if (result.stopReason !== 'completed' || result.structured === undefined) throw new StopRunError(`子代理 ${role} 未完成结构化结果：${result.stopReason}（maxOutputTokens=${config.orchestration.maxOutputTokens}）；本次运行停止，不重复 reason 消耗预算`)
       return { value: result.structured, session, calls: child.calls }
     } finally {
       try { await activation?.dispose() } finally { controller.signal.removeEventListener('abort', stop); clearTimeout(timer); clearInterval(poll); signal.removeEventListener('abort', onAbort); this.children.delete(session) }
@@ -141,9 +155,14 @@ export class Orchestrator {
       guard()
       record = await store.beginRun(mode, actor, runOptions)
       const run = record, managed = { ...runOptions, managedRun: run.id }
+      const onReady = async (capabilities: ChildCapabilities) => {
+        run.children ??= []
+        run.children.push(capabilities)
+        await store.saveRun(run, runOptions)
+      }
       const reason = async () => {
         const graph = await store.read()
-        const output = await this.child('reason', { graph: renderGraphContext(graph, { ...config, context: { ...config.context, scope: 'frontier-history' } }, { fullAccess: options.autoConfirm?.() ?? false, actor }).text }, parent, config, signal, guard)
+        const output = await this.child('reason', { graph: renderGraphContext(graph, { ...config, context: { ...config.context, scope: 'frontier-history' } }, { fullAccess: options.autoConfirm?.() ?? false, actor }).text }, parent, config, signal, guard, onReady)
         const proposals = parseProposals(output.value)
         // Validate the entire batch before creating the first intent.
         const keys = new Set(graph.intents.map(i => normalize(i.description) + ':' + [...i.from].sort().join(',')))
@@ -162,7 +181,7 @@ export class Orchestrator {
         await store.saveRun(run, runOptions)
         const intent = await store.readNode('intent', outcome.intent_id)
         // No explorer transcript, reasoning, graph history, or unrelated facts are sent.
-        const output = await this.child('verify', { goal: (await store.read()).project.goal, intent: { id: intent.id, description: intent.description, success_criteria: intent.doc, completes_goal: intent.completes_goal === true }, candidate: outcome.candidate }, parent, config, signal, guard)
+        const output = await this.child('verify', { goal: (await store.read()).project.goal, intent: { id: intent.id, description: intent.description, success_criteria: intent.doc, completes_goal: intent.completes_goal === true }, candidate: outcome.candidate }, parent, config, signal, guard, onReady)
         outcome.verification = parseVerification(output.value, output.session, output.calls)
         if (!outcome.verification.verified) throw new StoreError('verify rejected: ' + outcome.verification.issues)
         await store.promoteVerified(run, outcome, actor, managed)
@@ -178,7 +197,7 @@ export class Orchestrator {
           if (!existing) {
             run.explored++
             const graph = await store.read(), intent = graph.intents.find(i => i.id === nodeId)!
-            const output = await this.child('explore', { goal: graph.project.goal, intent, facts: graph.facts.filter(f => intent.from.includes(f.id)) }, parent, config, signal, guard)
+            const output = await this.child('explore', { goal: graph.project.goal, intent, facts: graph.facts.filter(f => intent.from.includes(f.id)) }, parent, config, signal, guard, onReady)
             outcome.candidate = parseCandidate(output.value, output.session, output.calls)
             await store.saveRun(run, runOptions)
           }
@@ -189,7 +208,7 @@ export class Orchestrator {
           // Cleanup may record a cancellation, but still rechecks current file permissions/config.
           const { signal: _cancelled, ...cleanup } = options
           try { await store.failManaged(nodeId, actor, run, outcome.error, cleanup) } catch { /* Revoked writes leave a visible claimed intent for explicit recovery. */ }
-          if (signal.aborted) throw error
+          if (signal.aborted || mustStop(error)) throw error
         }
       }
       if (mode === 'reason') await reason()

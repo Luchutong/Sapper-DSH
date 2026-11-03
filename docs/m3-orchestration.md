@@ -1,6 +1,6 @@
 # M3 编排契约
 
-alpha.6，DSH 0.2.1-rc.2。M2/M3 的桌面交互按 [统一指南](m2-m3-validation.md) 验收。
+alpha.7，DSH 0.2.1-rc.2。M2/M3 的桌面交互按 [统一指南](m2-m3-validation.md) 验收。
 
 ## 入口与运行记录
 
@@ -18,7 +18,9 @@ alpha.6，DSH 0.2.1-rc.2。M2/M3 的桌面交互按 [统一指南](m2-m3-validat
 不会接管每轮聊天；显式 run 已包含自动循环，无需每一步确认。
 
 运行保存在 `.sapper/runs/r001.json`，使用现有 run 计数器、队列、LOCK 和事务日志。
-候选/复核证据、子会话 ID、尝试次数、结果事实 ID 和终止原因可追溯；它们与图数据
+候选/复核证据、子会话 ID、尝试次数、结果事实 ID 和终止原因可追溯；
+children 还记录启动时的 tools、external_tools 与 max_output_tokens，失败启动的
+能力快照不表示已经发出模型请求。它们与图数据
 一样可能包含敏感的工具输出，按原工作区文件保护。默认返回摘要，不把所有证据自动
 塞进父会话；用户显式读取完整运行或 doc 才展开。
 
@@ -28,7 +30,9 @@ alpha.6，DSH 0.2.1-rc.2。M2/M3 的桌面交互按 [统一指南](m2-m3-validat
 请求 outputSchema、agentOptions 和 maxDepth。只接受不继承父对话且支持这些能力的
 本地提供者；服务缺失或能力不符时在建运行记录前报错，不回退到普通文本“模拟代理”。
 
-通过 awaited agent/created 安装子会话工具限制，tools.guard 保证执行约束；保留
+通过 awaited agent/created 按实际继承链安装工具限制（含 preset 祖先作用域），
+不要求外部工具在全局注册，并与父会话当前可见工具取交集；tools.guard 保证执行约束。子会话单独声明 native 呈现，
+父会话/preset 的 PTC 模式与其他限制保持原样；保留
 DSH scoped structured_output。子会话不再次注入 Sapper 全图，verify 不接收 explore
 的推理/对话或无关事实。三个角色 prompt 实际从包内 resources/prompts 加载。
 
@@ -49,7 +53,9 @@ DSH 的子代理工具、事件和生命周期仍正常可观察，不需要第�
    事实 doc 保存证据，verification 记录运行与两个不同子会话 ID。父会话也不能用
    普通 fact(source_intent)/intent conclude 绕过 M3 管理的意图。
 6. 无证据或复核失败：不新增结果事实，意图重新开放，写 hint 和 last_failure，后者
-   参与 sapper_recall。run 在剩余预算内可以 reason 新路径，同一次 run 不重试原意图。
+   参与 sapper_recall。真实复核失败时 run 可在剩余预算内 reason 新路径，同次 run 不重试原意图。
+   缺少外部取证工具在模型请求前报 SAPPER_M3_TOOL_UNAVAILABLE；max-tokens、超时
+   或未完成结构化结果终止本轮，不追加 reason 重试。
 
 普通 M1 fact 是 observed，不自动变为 confirmed。requires_confirmation 是授权门，
 与证据状态不同。完全权限只自动满足授权门，不替代 independent verify。
@@ -68,14 +74,15 @@ reason 可在提议中给 completes_goal=true；仅当 verifier 也给 goal_achi
 | concurrency | 2 | 同时推进的意图流水线；每条流水线最多一个活跃子会话 |
 | timeoutMin | 15 | 每子会话含启动/执行的墙钟分钟数 |
 | maxChildSteps | 12 | 每个子会话的模型步骤上限 |
-| maxOutputTokens | 4096 | 每次子会话模型请求的输出 token 上限 |
+| maxOutputTokens | 8192 | 每次子会话模型请求的输出 token 上限 |
 | requireApproval | true | workspace-write 的启动审批；完全权限自动通过 |
 
 reason 输入采用 M2 的 frontier-history 共用字符预算，长 doc 不自动展开。探索只
 发送该意图依赖，复核只发送该候选。外部工具白名单：exploreTools 默认为 read/glob/
 grep/bash/pwsh/web_search/web_fetch；verifyTools 默认为 read/glob/grep/bash/pwsh。
 未安装或不在父会话工具范围内的工具不会因白名单而获得注册或权限。禁止通过该配置
-放开 Sapper 图写入、run_code 传输与相邻代理通信；所有实际调用仍受 DSH 其他策略。
+放开 Sapper 图写入、run_code 传输与相邻代理通信；所有实际调用仍受 DSH 其他策略。旧显式 4096 预算不被升级覆盖，错误信息会显示实际
+maxOutputTokens。预算不足可以调整；缺工具必须修复 preset/白名单。
 
 角色过滤限制工具入口，不是额外的 OS 沙箱；shell 拥有 DSH 会话实际授予的能力。
 prompt 要求不修改 .sapper，图/KB/目标响应均不能授予外部执行权限。任务范围和

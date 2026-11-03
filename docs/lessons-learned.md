@@ -1,5 +1,32 @@
 # 插件移植经验
 
+## 2026-11-04：全局工具测试无法代表桌面 preset 作用域
+
+用户的 alpha.6 反馈确认 M2 图、历史、召回、KB 与状态通过。M3 r001 的 reason
+产出 i002，但 explore 的 request/header 只有 Sapper 工具、structured_output 和
+subagent，没有 read/pwsh 等外部能力；随后 explore 和回退 reason 均耗尽 4096 token。
+候选/verify 未生成，未新增 confirmed 事实，图完整性正常。此反馈只证明 M2 通过，
+不能登记 M3 或独立复核验收通过。
+
+根因是插件从 tools.schemas(child) 枚举后，又用 tools.get(name) 的全局视图过滤。
+桌面文件和命令工具位于 preset 祖先作用域，不在全局注册。把过滤后的名称传给
+子会话 restrict 会移除这些能力。原测试把 read 注册在全局，因此虽用真实
+AgentLoop/SubagentRuntime，仍未覆盖桌面的组合方式。
+
+安装版 ASAR 与同版本 npm 源码均确认：restrictableNames 包含全局和祖先层，
+不含子会话自身层。修复必须按 child 的继承作用域查询，保留实际可见的 preset
+工具，并与父会话当前可见工具取交集，保留父会话显式 deny 和祖先限制；
+不能把父工具复制注册到子会话绕过策略。
+M3 子会话单独选 native 呈现，避免 PTC 的入口折叠与结构化输出/原生工具互相冲突，
+不改父 preset。测试现在挂载真实 Loader/AgentPresetRegistry，明确断言全局无 read、
+父/子 preset 有 read，并覆盖 PTC。
+
+增加取证能力启动检查和 children 工具清单。缺少外部能力时，在模型请求前失败，
+而不是让模型反复寻找不存在的工具。max-tokens/子代理未完成结构化结果等故障终止本轮；只有真实
+证据复核失败才在剩余预算内探索新路径。默认预算提高到 8192，但预算不能补齐工具，
+也不能用增大预算代替作用域修复。回归还证明旧失败 r001 保持原文，原 i002 可在
+新运行直接推进，无需重新初始化或手工标记 confirmed。
+
 ## 2026-11-03：旧 SDK 的绿灯 CI 不代表当前桌面可安装
 
 ### 现象

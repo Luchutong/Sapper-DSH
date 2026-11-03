@@ -13,3 +13,7 @@ issues if evidence cannot be reproduced. Never claim success solely from model t
 For an intent marked completes_goal, additionally judge the complete project goal.
 Set optional goal_achieved=true only if your independent evidence establishes it;
 otherwise leave false even when the narrower candidate is verified.
+
+The output-token budget also covers reasoning. Keep reasoning brief and finish with
+structured_output as soon as you have the required result. Do not search repeatedly
+for unavailable tools; report a missing capability instead of inventing evidence.

@@ -3,7 +3,7 @@
 将 [sapper-v2](https://github.com/N1nEmAn/sapper-v2) 的事实图与
 `reason → explore → verify` 循环移植为 DSH NEXT 桌面插件。
 
-**当前版本 `0.1.0-alpha.6`：M0/M1 已获用户验收，M2/M3 上下文、召回与子代理编排已实现，统一桌面验收待完成。**
+**当前版本 `0.1.0-alpha.7`：M0/M1 已验收，M2 获用户反馈通过；本版修复 M3 桌面工具作用域阻塞，待重跑验收。**
 目标运行时为 **DSH 0.2.1-rc.2**，Cordis 4.0.5 / Schemastery 3.18.5。
 
 当前可维护工作区事实图、意图、长文档和本地 flag；每轮注入有预算的 frontier、
@@ -45,13 +45,15 @@ requires_confirmation 或设置为 always，也不额外 ask；确认来源记�
 显式调用 `sapper_dispatch {"mode":"run"}` 或 `/sapper run`，开始后连续推进就绪意图，
 必要时 reason 提出新任务，explore 收集候选证据，verify 独立复核后才原子写入
 `verification_status=confirmed` 的事实。`/sapper runs` 只读查看运行摘要。
+子代理从实际 preset 继承文件/命令工具，启动时记录 tools/external_tools 清单；
+缺工具或 max-tokens 时停止本轮并报告原因。alpha.6 的失败图可直接重跑，不需重建。
 
 默认使用 DSH 内置 spawn，模型继承父会话；无需配置第三方 CLI。角色、模型、超时
 和工具权限均通过当前 DSH 接口。候选与失败记录保存在 `.sapper/runs/`，失败意图
 重新开放并留下 hint。模型文字声明不能代替本次真实工具输出。
 
 预算默认最多推进 8 条意图、6 次探索，同一候选最多复核 2 次；并发 2，每子会话
-15 分钟、12 步，每次请求最多输出 4096 token。自动执行由显式启动触发；
+15 分钟、12 步，每次请求最多输出 8192 token。自动执行由显式启动触发；
 `orchestration.auto` 的普通聊天自动触发仍预留。详见 [M3 契约](docs/m3-orchestration.md)。
 
 ## 存储
@@ -71,7 +73,7 @@ flag 事实是权威记录，`flags/ledger.json` 是可重建索引。详细边�
 在 DSH NEXT 菜单“打开 DSH 终端”，执行后重启应用：
 
 ```powershell
-dsh plugin add "D:\BaiduSyncdisk\sapper移植\sapper-dsh-0.1.0-alpha.6.tgz"
+dsh plugin add "D:\BaiduSyncdisk\sapper移植\sapper-dsh-0.1.0-alpha.7.tgz"
 ```
 
 开发需要 Node.js 22+、pnpm 8.15.4 和 Python 3（仅 golden 测试使用）：
@@ -83,7 +85,7 @@ corepack pnpm check:compatibility
 corepack pnpm pack --pack-destination dist
 ```
 
-`check` 包含类型检查、116 项测试、双端构建、两个独立 Node 进程写入检查和产物
+`check` 包含类型检查、124 项测试、双端构建、两个独立 Node 进程写入检查和产物
 检查。CI 覆盖 Ubuntu / Windows × Node 22 / 24。Python 参考代码仅用于测试，
 不进入安装包，桌面用户无需 Python。官方 DSH 兼容门禁在 CI 和打包时运行。
 

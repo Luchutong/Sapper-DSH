@@ -2,9 +2,12 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
+import { Loader } from '@deepseek-ai/cordis-plugin-loader'
+import AgentPresetRegistry from '@deepseek-ai/dsh-agent-preset-registry'
 import { LlmAdapter, ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
+import { scopeParentOf } from '@deepseek-ai/dsh-scope'
 import { CommandRuntime } from '@deepseek-ai/dsh-commands'
 import { mountAgentLoopTestDependencies, mountAgentLoopTestHarness } from '@deepseek-ai/dsh-agent-loop-testkit'
 import SubagentRuntime from '@deepseek-ai/dsh-subagent'
@@ -20,7 +23,7 @@ import { GraphStore } from '../src/store/graph.js'
 
 const cleanup: Array<() => Promise<unknown>> = []
 afterEach(async () => { for (const f of cleanup.splice(0).reverse()) await f() })
-interface Scenario { noEvidence?: boolean; forged?: boolean; reject?: boolean; noVerifyEvidence?: boolean; delay?: number; attack?: boolean; proposals?: number; emptyReason?: boolean; hang?: boolean; completesGoal?: boolean; denyGoal?: boolean }
+interface Scenario { noEvidence?: boolean; forged?: boolean; reject?: boolean; noVerifyEvidence?: boolean; delay?: number; attack?: boolean; proposals?: number; emptyReason?: boolean; hang?: boolean; completesGoal?: boolean; denyGoal?: boolean; maxTokens?: 'reason' | 'explore' | 'verify' }
 class FixtureModel extends LlmAdapter {
   requests: GenerateOptions[] = []
   constructor(readonly scenario: Scenario) { super() }
@@ -29,6 +32,7 @@ class FixtureModel extends LlmAdapter {
     const raw = JSON.stringify(options.messages)
     const role = raw.includes('# Sapper verify') ? 'verify' : raw.includes('# Sapper explore') ? 'explore' : 'reason'
     const tools = options.messages.filter(m => m.role === 'tool')
+    if (this.scenario.maxTokens === role) { yield { type: 'finish', reason: { kind: 'max-tokens' } }; return }
     if (this.scenario.hang && role === 'explore') {
       await new Promise<void>((_, reject) => { const stop = () => reject(options.signal?.reason); options.signal?.addEventListener('abort', stop, { once: true }); if (options.signal?.aborted) stop() })
       return
@@ -44,7 +48,7 @@ class FixtureModel extends LlmAdapter {
     yield { type: 'finish', reason: { kind: 'tool-calls' } }
   }
 }
-async function setup(scenario: Scenario = {}, input: ConfigInput = {}, commands = false, maxDepth = 1) {
+async function setup(scenario: Scenario = {}, input: ConfigInput = {}, commands = false, maxDepth = 1, topology: 'global' | 'preset' | 'preset-ptc' = 'global') {
   const cwd = await mkdtemp(path.join(os.tmpdir(), 'sapper M3 中文 '))
   cleanup.push(() => rm(cwd, { recursive: true, force: true }))
   await writeFile(path.join(cwd, 'fixture.txt'), 'VERIFIED-LOCAL-7C42\n')
@@ -57,12 +61,23 @@ async function setup(scenario: Scenario = {}, input: ConfigInput = {}, commands 
   const model = new FixtureModel(scenario)
   ctx.llm.registerAdapter(['fixture'], model)
   const read = vi.fn(async () => { if (scenario.delay) await new Promise(r => setTimeout(r, scenario.delay)); return await readFile(path.join(cwd, 'fixture.txt'), 'utf8') })
-  ctx.tools.register(defineTool({ name: 'read', description: 'Read local fixture', parameters: { path: { type: 'string', required: true } }, output: { schema: { type: 'string' }, render: (_a, v) => [{ type: 'text', text: v }] }, execute: read }))
+  const readDefinition = defineTool({ name: 'read', description: 'Read local fixture', parameters: { path: { type: 'string', required: true } }, output: { schema: { type: 'string' }, render: (_a, v) => [{ type: 'text', text: v }] }, execute: read })
+  if (topology === 'global') ctx.tools.register(readDefinition)
+  else {
+    await ctx.plugin(Loader)
+    await ctx.plugin(AgentPresetRegistry, { default: 'fixture' })
+    ctx.loader.builtins.fixtureTools = { inject: ['tools', 'systemPrompt'], apply(scoped: Context) {
+      scoped.tools.register(readDefinition)
+      if (topology === 'preset-ptc') scoped.tools.presentAs('ptc')
+    } }
+    await ctx.agentPresets.register({ id: 'fixture', plugins: [{ name: 'cordis:fixtureTools' }] })
+  }
   let config = resolveConfig({ ...input, orchestration: { maxExplore: 1, maxSteps: 1, ...input?.orchestration } })
   if (commands) await ctx.plugin(CommandRuntime)
   registerRuntime(ctx, () => config)
   const harness = await mountAgentLoopTestHarness(ctx)
-  const parent = await harness.create(SessionId('m3-parent'), { provider: 'fixture', model: 'fixture-model' }, { cwd })
+  const parent = topology === 'global' ? await harness.create(SessionId('m3-parent'), { provider: 'fixture', model: 'fixture-model' }, { cwd })
+    : (await ctx.agents.create({ sessionId: SessionId('m3-parent'), agentOptions: { provider: 'fixture', model: 'fixture-model' }, meta: { cwd, agentPreset: 'fixture' }, setup: async childCtx => { await ctx.agentPresets.mount(childCtx, 'fixture'); if (topology === 'preset-ptc') childCtx.tools.presentAs('native') } })).agent
   let count = 0
   const execute = async (name: string, args: unknown, signal = new AbortController().signal) => {
     const result = await ctx.tools.execute({ name, arguments: args, agent: parent, callId: ToolCallId('parent-' + ++count), signal })
@@ -160,9 +175,10 @@ describe('M3 evidence gates, budgets and cancellation', () => {
     expect(ctx.agents.list()).toEqual([parent])
   })
   it('stops a child at its step budget and leaves a retryable intent', async () => {
-    const { dispatch, store, ctx, parent } = await setup({}, { orchestration: { maxChildSteps: 1 } })
+    const { dispatch, store, ctx, parent } = await setup({}, { orchestration: { maxSteps: 4, maxExplore: 4, maxChildSteps: 1 } })
     const run = await dispatch()
     expect(run.outcomes[0]?.error).toContain('步数预算')
+    expect(run.stop_reason).toContain('步数预算')
     expect((await store.read()).intents[0]?.status).toBe('open')
     expect(ctx.agents.list()).toEqual([parent])
   })
@@ -257,4 +273,78 @@ it('respects the DSH delegation-depth cap instead of expanding it for a nested c
   expect(run.stop_reason).toMatch(/depth|深度/i)
   expect(model.requests).toHaveLength(0)
   expect((await store.read()).facts.filter(f => f.id !== 'goal')).toHaveLength(1)
+})
+
+
+it('inherits preset-scoped file tools into fresh explore/verify sessions', async () => {
+  const { dispatch, ctx, parent, model, read } = await setup({}, {}, false, 1, 'preset')
+  expect(ctx.tools.get('read')).toBeUndefined()
+  expect(ctx.tools.get('read', parent)).toBeDefined()
+  const run = await dispatch()
+  expect(run, JSON.stringify(run)).toMatchObject({ state: 'completed', outcomes: [{ state: 'confirmed' }] })
+  expect(read).toHaveBeenCalledTimes(2)
+  for (const request of model.requests.filter(r => !JSON.stringify(r.messages).includes('# Sapper reason'))) expect(request.tools?.map(t => t.name)).toContain('read')
+})
+
+
+it('keeps preset PTC presentation intact while M3 children use native evidence and structured tools', async () => {
+  const { dispatch, ctx, parent, model, read } = await setup({}, {}, false, 1, 'preset-ptc')
+  const preset = scopeParentOf(parent)
+  expect(ctx.tools.get('run_code', preset)).toBeDefined()
+  const run = await dispatch()
+  expect(run, JSON.stringify(run)).toMatchObject({ state: 'completed', outcomes: [{ state: 'confirmed' }] })
+  expect(read).toHaveBeenCalledTimes(2)
+  expect(ctx.tools.get('run_code', preset)).toBeDefined()
+  for (const request of model.requests) {
+    expect(request.tools?.map(t => t.name)).toContain('structured_output')
+    expect(request.tools?.map(t => t.name)).not.toContain('run_code')
+  }
+})
+
+it('fails once on missing preset evidence tools, then retries the existing i002 without rebuilding the graph', async () => {
+  const { dispatch, execute, setConfig, store, model, cwd } = await setup({}, { orchestration: { exploreTools: ['pwsh'] } }, false, 1, 'preset')
+  const history = await execute('sapper_intent', { action: 'create', from: ['f001'], description: 'M2 history setup' }) as { id: string }
+  await execute('sapper_fact', { action: 'create', description: 'M2 history result', source_intent: history.id })
+  const failed = await dispatch()
+  expect(failed.state).toBe('failed')
+  expect(failed.stop_reason).toContain('SAPPER_M3_TOOL_UNAVAILABLE')
+  expect(model.requests).toHaveLength(1)
+  expect((await store.read()).intents.find(i => i.id === 'i002')).toMatchObject({ status: 'open', worker: null, to: null })
+  const original = await readFile(path.join(cwd, '.sapper/runs/r001.json'), 'utf8')
+  setConfig({ orchestration: { maxSteps: 1, maxExplore: 1 } })
+  const before = model.requests.length
+  const retried = await dispatch()
+  expect(retried).toMatchObject({ id: 'r002', state: 'completed', outcomes: [{ intent_id: 'i002', state: 'confirmed' }] })
+  expect(model.requests.slice(before).some(r => JSON.stringify(r.messages).includes('# Sapper reason'))).toBe(false)
+  expect(retried.children?.filter(c => c.role !== 'reason').every(c => c.external_tools.includes('read'))).toBe(true)
+  expect(await readFile(path.join(cwd, '.sapper/runs/r001.json'), 'utf8')).toBe(original)
+})
+
+it('rejects a verifier with no external tools before a verifier model request', async () => {
+  const { dispatch, model, store } = await setup({}, { orchestration: { verifyTools: ['pwsh'] } }, false, 1, 'preset')
+  const run = await dispatch()
+  expect(run.stop_reason).toContain('SAPPER_M3_TOOL_UNAVAILABLE')
+  expect(run.outcomes[0]?.candidate).toBeDefined()
+  expect(model.requests.some(r => JSON.stringify(r.messages).includes('# Sapper verify'))).toBe(false)
+  expect((await store.read()).facts.some(f => f.verification_status === 'confirmed')).toBe(false)
+})
+
+it.each(['reason', 'explore', 'verify'] as const)('stops the run on %s max-tokens without another reasoning cycle', async role => {
+  const { dispatch, model, store } = await setup({ maxTokens: role }, { orchestration: { maxSteps: 4, maxExplore: 4, maxOutputTokens: 4096 } })
+  const run = await dispatch()
+  expect(run.state).toBe('failed')
+  expect(run.stop_reason).toContain('max-tokens')
+  expect(run.stop_reason).toContain('maxOutputTokens=4096')
+  expect(model.requests.filter(r => JSON.stringify(r.messages).includes('# Sapper reason'))).toHaveLength(1)
+  expect((await store.read()).facts.some(f => f.verification_status === 'confirmed')).toBe(false)
+})
+
+it('does not restore a preset tool explicitly denied in the parent session', async () => {
+  const { dispatch, parent, ctx, model, read } = await setup({}, {}, false, 1, 'preset')
+  parent.ctx.tools.restrict({ deny: ['read'] })
+  expect(ctx.tools.get('read', parent)).toBeUndefined()
+  const run = await dispatch()
+  expect(run.stop_reason).toContain('SAPPER_M3_TOOL_UNAVAILABLE')
+  expect(read).not.toHaveBeenCalled()
+  expect(model.requests).toHaveLength(1)
 })

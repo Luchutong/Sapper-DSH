@@ -1,6 +1,6 @@
 # 架构与边界
 
-当前交付为 0.1.0-alpha.6 / M2/M3，目标 DSH 0.2.1-rc.2。M0/M1 已获用户验收。
+当前交付为 0.1.0-alpha.7 / M2/M3，目标 DSH 0.2.1-rc.2。M0/M1 已获用户验收。
 原计划保留在 docs/plan.html，SDK 和实现细节以当前代码与 sdk-contract.md 为准。
 
 ```text

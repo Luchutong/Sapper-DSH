@@ -11,6 +11,8 @@ describe('settings and workspace boundary', () => {
     expect(config.orchestration.auto).toBe(false)
     expect(config.orchestration.requireApproval).toBe(true)
     expect(config.store.approval).toBe('session')
+    expect(config.orchestration.maxOutputTokens).toBe(8192)
+    expect(resolveConfig({ orchestration: { maxOutputTokens: 4096 } }).orchestration.maxOutputTokens).toBe(4096)
     expect(resolveConfig({ orchestration: { requireApproval: true } }).store.approval).toBe('session')
     expect(resolveConfig().context.maxChars).toBe(6000)
   })

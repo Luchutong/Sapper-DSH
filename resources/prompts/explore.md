@@ -11,3 +11,7 @@ use an empty call_id; the orchestrator must resolve an unambiguous matching outp
 No evidence means failure: do not invent output, call IDs, or observations.
 A flag candidate must put only its literal value in description. Your result is only
 a candidate; an independent verifier decides whether it becomes a confirmed fact.
+
+The output-token budget also covers reasoning. Keep reasoning brief and finish with
+structured_output as soon as you have the required result. Do not search repeatedly
+for unavailable tools; report a missing capability instead of inventing evidence.

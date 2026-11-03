@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.0-alpha.7 — 2026-11-04
+
+- 根据桌面反馈记录 M2 通过、M3 的 r001 因缺少外部工具与 max-tokens 失败；M3 桌面回归仍待完成。
+- 修复仅查询全局工具而过滤掉 preset 祖先作用域中 read/pwsh 等能力的问题；按子会话继承链应用白名单。
+- M3 子会话独立声明 native 呈现，兼容父 preset 的 PTC 模式，保留父会话、preset 与其他策略的限制。
+- 启动时检查 explore/verify 外部取证能力；缺失则在模型请求前报错，并终止本轮，不回退 reason 空耗 token。
+- 单次输出默认预算由 4096 调为 8192；保留显式配置。max-tokens/未完成结构化结果与超时停止本轮，不追加 reason 重试。
+- 运行记录新增 children 工具清单与预算；旧图/运行记录无需迁移，已开放 i002 可直接在新运行继续推进。
+- 新增真实 AgentPresetRegistry/Loader、preset-scoped 工具、PTC、工具缺失、旧 i002 重跑及各角色 token 耗尽回归。
+
 ## 0.1.0-alpha.6 — 2026-11-03
 
 - M3：真实 DSH spawn 子会话，reason/explore/verify 结构化输出与独立角色工具约束。

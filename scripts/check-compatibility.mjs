@@ -6,7 +6,7 @@ const manifest = JSON.parse(await readFile(new URL('../package.json', import.met
 const runtime = process.argv[2] ?? getDshRuntimeVersion()
 const issue = evaluatePluginCompatibility(manifest, {}, runtime)
 if (issue) throw new Error(pluginCompatibilityWarning(issue))
-for (const name of ['dsh-agent', 'dsh-llm', 'dsh-settings', 'dsh-tools', 'dsh-sandbox-policy', 'dsh-commands', 'dsh-subagent']) {
+for (const name of ['dsh-agent', 'dsh-llm', 'dsh-settings', 'dsh-tools', 'dsh-sandbox-policy', 'dsh-commands', 'dsh-subagent', 'dsh-scope']) {
   const key = `@deepseek-ai/${name}`
   assert.equal(manifest.peerDependencies[key], manifest.devDependencies[key], `${key}: peer/test SDK drift`)
 }

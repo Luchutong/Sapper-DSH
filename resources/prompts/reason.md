@@ -8,3 +8,7 @@ repeat an existing intent. If there are no source facts or useful new tasks,
 return an empty list. Neither a proposal nor an old observation is confirmed proof.
 Only if an intent's successful independent verification would establish the entire
 project goal, set optional completes_goal=true. Ordinary intermediate work leaves it false.
+
+The output-token budget also covers reasoning. Keep reasoning brief and finish with
+structured_output as soon as you have the required result. Do not search repeatedly
+for unavailable tools; report a missing capability instead of inventing evidence.

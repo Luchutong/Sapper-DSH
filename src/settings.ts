@@ -34,7 +34,7 @@ const PlainConfig = group({
     concurrency: positive(2, 8),
     timeoutMin: positive(15, 120),
     maxChildSteps: positive(12, 100),
-    maxOutputTokens: positive(4096, 32768),
+    maxOutputTokens: positive(8192, 32768),
     requireApproval: Schema.boolean().default(true).description('工作区写入模式启动编排需审批；完全权限自动授权，不控制普通图写入'),
     exploreTools: Schema.array(Schema.string()).default(['read', 'glob', 'grep', 'bash', 'pwsh', 'web_search', 'web_fetch']),
     verifyTools: Schema.array(Schema.string()).default(['read', 'glob', 'grep', 'bash', 'pwsh']),
