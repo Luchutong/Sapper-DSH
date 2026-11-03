@@ -2,7 +2,7 @@
 
 更新日期：2026-11-03（Asia/Shanghai）。
 
-当前交付：**alpha.2 已适配 DSH 0.2.1-rc.2；M0 技术验证进行中，桌面门禁待验证。**
+当前交付：**alpha.2 已适配 DSH 0.2.1-rc.2；用户已确认桌面安装成功，M0 激活与交互验收进行中。**
 本文件随实现提交更新；GitHub Actions 结果与手工验收分别记录，不能互相替代。
 
 GitHub 阶段跟踪：[issue #1](https://github.com/Luchutong/Sapper-DSH/issues/1)。
@@ -10,7 +10,7 @@ GitHub 阶段跟踪：[issue #1](https://github.com/Luchutong/Sapper-DSH/issues/
 | 阶段 | 状态 | 交付 / 下一步 |
 | --- | --- | --- |
 | 骨架 | 完成 | TS 双端工程、SDK 适配边界、模块目录、56 条 KB、许可、测试、CI、打包与计划文档 |
-| M0 技术验证 | 进行中 | 已迁移 0.2 API，Windows 桌面安装器隔离安装通过；desktop 激活、页面/字段持久化待验收 |
+| M0 技术验证 | 进行中 | 已迁移 0.2 API，隔离安装通过，用户确认桌面安装成功；激活、页面/字段持久化待验收 |
 | M1 存储与工具 | 未开始 | TS writer、队列、原子写、节点校验、flag ledger、Python golden tests |
 | M2 上下文与召回 | 未开始 | 完整 frontier、bigram recall、KB 查询与 slash commands |
 | M3 编排 | 未开始 | DSH subagent、审批、预算、candidate → verify → confirmed |
@@ -50,6 +50,12 @@ GitHub 阶段跟踪：[issue #1](https://github.com/Luchutong/Sapper-DSH/issues/
 
 原始计划与早期 CI 属于旧版本，不作为当前桌面通过证据。新包和原始旧包使用不同
 文件名交付，M0 的 desktop 激活与交互仍待逐项确认。
+
+## 桌面验收反馈
+
+2026-11-03：用户确认修复后已能成功安装。该项记录来源为用户反馈；页面显示、
+工具调用、目标摘要注入、开关持久化和卸载行为尚未收到验收结果。
+下一步按 [验证指南](validation-guide.md) 的第 3–5 节完成这些检查。
 
 ## 下一步
 
