@@ -14,6 +14,7 @@ import SubagentRuntime from '@deepseek-ai/dsh-subagent'
 import * as Spawn from '@deepseek-ai/dsh-subagent-spawn-in-process'
 import { SandboxPolicyService } from '@deepseek-ai/dsh-sandbox-policy'
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { registerRuntime } from '../src/dsh-adapter/host.js'
 import { resolveConfig } from '../src/settings.js'
@@ -23,7 +24,7 @@ import { GraphStore } from '../src/store/graph.js'
 
 const cleanup: Array<() => Promise<unknown>> = []
 afterEach(async () => { for (const f of cleanup.splice(0).reverse()) await f() })
-interface Scenario { noEvidence?: boolean; forged?: boolean; reject?: boolean; noVerifyEvidence?: boolean; delay?: number; attack?: boolean; proposals?: number; emptyReason?: boolean; hang?: boolean; completesGoal?: boolean; denyGoal?: boolean; maxTokens?: 'reason' | 'explore' | 'verify' }
+interface Scenario { noEvidence?: boolean; forged?: boolean; reject?: boolean; noVerifyEvidence?: boolean; beforeRead?: (signal: AbortSignal) => Promise<void>; attack?: boolean; proposals?: number; emptyReason?: boolean; hang?: boolean; completesGoal?: boolean; denyGoal?: boolean; maxTokens?: 'reason' | 'explore' | 'verify' }
 class FixtureModel extends LlmAdapter {
   requests: GenerateOptions[] = []
   constructor(readonly scenario: Scenario) { super() }
@@ -60,7 +61,7 @@ async function setup(scenario: Scenario = {}, input: ConfigInput = {}, commands 
   await ctx.plugin(Spawn, { providerName: 'spawn' })
   const model = new FixtureModel(scenario)
   ctx.llm.registerAdapter(['fixture'], model)
-  const read = vi.fn(async () => { if (scenario.delay) await new Promise(r => setTimeout(r, scenario.delay)); return await readFile(path.join(cwd, 'fixture.txt'), 'utf8') })
+  const read = vi.fn(async (_args: unknown, exec: ToolRunContext) => { await scenario.beforeRead?.(exec.signal); return await readFile(path.join(cwd, 'fixture.txt'), 'utf8') })
   const readDefinition = defineTool({ name: 'read', description: 'Read local fixture', parameters: { path: { type: 'string', required: true } }, output: { schema: { type: 'string' }, render: (_a, v) => [{ type: 'text', text: v }] }, execute: read })
   if (topology === 'global') ctx.tools.register(readDefinition)
   else {
@@ -164,7 +165,16 @@ describe('M3 evidence gates, budgets and cancellation', () => {
     expect(model.requests.some(r => JSON.stringify(r.messages).includes('sapper_fact'))).toBe(true)
   })
   it('caps concurrent children and total exploration while applying per-role model selection', async () => {
-    const { dispatch, ctx, parent, model } = await setup({ proposals: 3, delay: 25 }, { orchestration: { maxSteps: 3, maxExplore: 2, concurrency: 2, models: { reason: 'fixture:reason-route', explore: 'explore-route', verify: 'verify-route' } } })
+    let arrivals = 0, release!: () => void
+    const pair = new Promise<void>(resolve => { release = resolve })
+    const beforeRead = async (signal: AbortSignal) => {
+      if (++arrivals === 2) release()
+      signal.throwIfAborted()
+      let abort!: () => void
+      const cancelled = new Promise<never>((_resolve, reject) => { abort = () => reject(signal.reason); signal.addEventListener('abort', abort, { once: true }) })
+      try { await Promise.race([pair, cancelled]) } finally { signal.removeEventListener('abort', abort) }
+    }
+    const { dispatch, ctx, parent, model } = await setup({ proposals: 3, beforeRead }, { orchestration: { maxSteps: 3, maxExplore: 2, concurrency: 2, models: { reason: 'fixture:reason-route', explore: 'explore-route', verify: 'verify-route' } } })
     let active = 0, peak = 0
     ctx.on('subagent/start', () => { active++; peak = Math.max(peak, active) })
     ctx.on('subagent/end', () => { active-- })
