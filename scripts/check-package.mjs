@@ -23,6 +23,10 @@ const host = await import(new URL('lib/index.js', root))
 assert.equal(typeof host.apply, 'function')
 assert.ok(host.inject.includes('tools'))
 assert.equal(typeof host.GraphStore, 'function')
+const knowledge = new host.KnowledgeBase()
+const knowledgeSnapshot = await knowledge.read()
+assert.equal(knowledgeSnapshot.entries.length, 56)
+assert.equal(knowledge.search(knowledgeSnapshot, 'Web 信息收集')[0].id, 'kb001')
 
 // Exercise the packaged writer with independent Node processes, not just shared queues.
 const cwd = await mkdtemp(path.join(os.tmpdir(), 'sapper processes 中文 '))

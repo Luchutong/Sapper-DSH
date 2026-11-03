@@ -51,9 +51,19 @@ elif action == "append":
     store.update_flag_fact("f003", "rejected", "Python lifecycle update")
     store.add_fact("Python wrote after TS", "python", kind="note")
     store.add_hint("Python round trip complete", "python")
+elif action == "frontier":
+    store.add_intent(["f001"], "ordinary open task", "python")
+    store.add_intent(["f001"], "pending confirmation", "python", requires_confirmation=True)
+    claimed = store.add_intent(["f002"], "claimed task", "python")
+    store.claim_intent(claimed["id"], "python-worker")
+    confirmed = store.add_intent(["f002"], "confirmed task", "python", requires_confirmation=True)
+    store.confirm_intent(confirmed["id"])
 elif action != "inspect":
     raise ValueError("unknown action")
 
 errors = reference.validate_graph(store)
 assert errors == [], errors
-print(json.dumps(reference.build_graph_view(store), ensure_ascii=True))
+view = reference.build_graph_view(store)
+view["reference_frontier"] = reference.frontier(store)
+view["reference_history"] = reference.render_history_block(store)
+print(json.dumps(view, ensure_ascii=True))

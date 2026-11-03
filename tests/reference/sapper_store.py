@@ -933,3 +933,251 @@ def validate_graph(store: Store) -> list[str]:
     if project.get("status") == "active" and goal_intents:
         errors.append("project is active although an intent already targets the goal")
     return errors
+
+
+def frontier(store: Store) -> list[dict]:
+    intents = store.list_intents()
+    fact_ids = {f["id"] for f in store.list_facts()}
+    ready = [i for i in intents if is_ready(i, fact_ids)]
+    # claimed intents first (someone's already on them but they're still in-flight),
+    # then by creation order.
+    ready.sort(key=lambda i: (i["status"] != "claimed", i["created_at"]))
+    return ready
+
+
+# --------------------------------------------------------------------------- #
+# renderers
+# --------------------------------------------------------------------------- #
+def render_status(store: Store) -> str:
+    g = build_graph_view(store)
+    p = g["project"]
+    lines = []
+    lines.append(
+        f"project: {_scrub_inline(p.get('id') or '')}  "
+        f"status: {_scrub_inline(p['status'])}"
+    )
+    lines.append(f"origin: {_scrub_inline(p['origin'])}")
+    lines.append(f"goal:   {_scrub_inline(p['goal'])}")
+    lines.append(
+        f"counts: {len(g['facts'])} facts, {len(g['open_intents'])} open / "
+        f"{len(g['done_intents'])} done intents, {len(g['hints'])} hints"
+    )
+    typed: dict[str, int] = {}
+    for f in g["facts"]:
+        k = f.get("kind")
+        if k:
+            typed[k] = typed.get(k, 0) + 1
+    if typed:
+        summary = ", ".join(f"{n} {k}s" if k != "flag" else f"{n} flag(s)" for k, n in typed.items())
+        lines.append(f"kinds:  {summary}")
+    flags = [f for f in g["facts"] if f.get("kind") == "flag"]
+    for f in flags:
+        d = f.get("data") or {}
+        ch = f" challenge={d['challenge']}" if d.get("challenge") else ""
+        lines.append(
+            f"flag:   {f['id']} status={d.get('status', 'recorded')}{ch} value={_scrub_inline(str(d.get('value', '')))[:48]}"
+        )
+    fr = frontier(store)
+    pool = []
+    if fr:
+        lines.append("")
+        lines.append("frontier (ready to work):")
+        for i in fr:
+            flag = ""
+            if i["requires_confirmation"] and not i["confirmed_at"]:
+                flag = "  [needs confirmation]"
+            elif i["status"] == "claimed":
+                flag = f"  [claimed by {i['worker']}]"
+            lines.append(f"  {i['id']}  from {i['from']}  {_scrub_inline(i['description'])[:80]}{flag}")
+    elif g["open_intents"]:
+        lines.append("")
+        lines.append("(open intents exist but none ready — check confirmations)")
+    else:
+        lines.append("")
+        lines.append("(no open intents — dispatch a reason step or complete)")
+    if g["hints"]:
+        lines.append("")
+        lines.append(f"hints: {len(g['hints'])} (use `sapper hint list`)")
+    return "\n".join(lines)
+
+
+# --------------------------------------------------------------------------- #
+# recall — "have we done something like this before?"
+#
+# The model receives a task; before acting, it should consult the graph for
+# prior facts/intents whose title or description overlaps. This is the
+# "experience reuse" entry point: cheap substring + difflib similarity, no
+# embedding, no deps. Recall is by design TITLE+DESCRIPTION only — the heavy
+# `doc` field is opt-in via `sapper doc <id>` once a candidate looks promising.
+# --------------------------------------------------------------------------- #
+_RECALL_TOKEN_RE = re.compile(r"[\w一-鿿]+", re.UNICODE)
+
+
+def _recall_tokenize(text: str) -> list[str]:
+    """Lowercase + Unicode-word/CJK tokenization. CJK each char is a token so
+    '空指针定位' splits into 4 tokens that match individually."""
+    if not text:
+        return []
+    out: list[str] = []
+    for tok in _RECALL_TOKEN_RE.findall(text.lower()):
+        # CJK runs: split into individual chars (each is content-bearing)
+        if any("一" <= ch <= "鿿" for ch in tok):
+            out.extend(list(tok))
+        else:
+            out.append(tok)
+    return [t for t in out if t]
+
+
+def _recall_score(query: str, node: dict) -> float:
+    """Score a node against a free-text query. Combines:
+      - token overlap on title (weighted x2) and description
+      - difflib ratio against the joined haystack
+    Returns 0.0 if nothing useful matches."""
+    title = (node.get("title") or "").lower()
+    desc = (node.get("description") or "").lower()
+    haystack = f"{title} {title} {desc}".strip()  # title weighted x2
+    if not haystack:
+        return 0.0
+    q_tokens = set(_recall_tokenize(query))
+    if not q_tokens:
+        return 0.0
+    h_tokens = set(_recall_tokenize(haystack))
+    if not h_tokens:
+        return 0.0
+    overlap = len(q_tokens & h_tokens)
+    if overlap == 0:
+        # cheap difflib fallback for fuzzy matches (typo, partial English word)
+        ratio = difflib.SequenceMatcher(None, query.lower(), haystack).ratio()
+        return ratio if ratio >= 0.45 else 0.0
+    overlap_score = overlap / max(1, len(q_tokens))
+    # add a small ratio bonus so longer aligned chunks edge out shorter ones
+    ratio_bonus = 0.2 * difflib.SequenceMatcher(None, query.lower(), haystack).ratio()
+    return overlap_score + ratio_bonus
+
+
+def recall(store: Store, query: str, limit: int = 5,
+           kinds: tuple[str, ...] = ("fact", "intent")) -> list[dict]:
+    """Return top-N nodes by similarity to `query`. Each returned dict has:
+        id, kind, title, description, has_doc, score
+    Ordered by score desc, then by id (stable).
+    """
+    if not query or not query.strip():
+        return []
+    candidates: list[dict] = []
+    if "fact" in kinds:
+        for f in store.list_facts():
+            if f.get("id") == GOAL_ID:
+                continue  # skip the terminal goal node
+            s = _recall_score(query, f)
+            if s > 0:
+                candidates.append({
+                    "id": f["id"],
+                    "kind": "fact",
+                    "title": f.get("title"),
+                    "description": f.get("description", ""),
+                    "has_doc": bool(f.get("doc")),
+                    "score": s,
+                })
+    if "intent" in kinds:
+        for i in store.list_intents():
+            s = _recall_score(query, i)
+            if s > 0:
+                candidates.append({
+                    "id": i["id"],
+                    "kind": "intent",
+                    "title": i.get("title"),
+                    "description": i.get("description", ""),
+                    "has_doc": bool(i.get("doc")),
+                    "score": s,
+                })
+    candidates.sort(key=lambda c: (-c["score"], c["id"]))
+    return candidates[:limit]
+
+
+def render_recall(matches: list[dict], query: str) -> str:
+    """Human-readable recall output. First line is a usage hint so the
+    caller (model or human) knows the next step is `sapper doc <id>`."""
+    if not matches:
+        return f"(no similar prior work for {query!r})"
+    lines = [
+        f"# recall for: {query}",
+        "# use `sapper doc <id>` to read the detailed document",
+        "",
+    ]
+    for m in matches:
+        title = f"[{_scrub_inline(m['title'])}]  " if m["title"] else ""
+        doc = "  📄" if m["has_doc"] else ""
+        desc = _scrub_inline(m["description"])[:90]
+        lines.append(
+            f"  {m['id']} ({m['kind']}, score={m['score']:.2f})  "
+            f"{title}{desc}{doc}"
+        )
+    return "\n".join(lines)
+
+
+def render_history_block(store: Store, *, max_facts: int = 8,
+                         max_intents: int = 4) -> str:
+    """Compact history snapshot for hook injection: recent confirmed facts
+    + recently-done intents, title + one-line description only. The model
+    eyeballs this to decide whether it has seen the current request before."""
+    facts = [f for f in store.list_facts() if f.get("id") != GOAL_ID]
+    # facts are immutable; show most recent first
+    facts.sort(key=lambda f: f.get("created_at", ""), reverse=True)
+    done = [i for i in store.list_intents() if not is_open(i)]
+    done.sort(key=lambda i: i.get("concluded_at") or "", reverse=True)
+
+    lines: list[str] = []
+    if facts:
+        lines.append("history facts (most recent first):")
+        for f in facts[:max_facts]:
+            title = f"[{_scrub_inline(f['title'])}] " if f.get("title") else ""
+            doc = " 📄" if f.get("doc") else ""
+            desc = _scrub_inline(f.get("description") or "")[:90]
+            lines.append(f"  {f['id']}: {title}{desc}{doc}")
+    if done:
+        if lines:
+            lines.append("")
+        lines.append("recently-done intents:")
+        for i in done[:max_intents]:
+            title = f"[{_scrub_inline(i['title'])}] " if i.get("title") else ""
+            doc = " 📄" if i.get("doc") else ""
+            desc = _scrub_inline(i.get("description") or "")[:90]
+            lines.append(f"  {i['id']}: {title}{desc}{doc}")
+    if not lines:
+        return ""
+    return "\n".join(lines)
+
+
+def render_graph_text(store: Store) -> str:
+    g = build_graph_view(store)
+    lines = [f"# graph  ({_scrub_inline(g['project']['status'])})"]
+    lines.append("")
+    lines.append("## facts")
+    for f in g["facts"]:
+        src = f"  <- {_scrub_inline(f['source_intent'])}" if f.get("source_intent") else ""
+        t = f"[{_scrub_inline(f['title'])}]  " if f.get("title") else ""
+        k = f"<{f['kind']}>" if f.get("kind") else ""
+        data = ""
+        if f.get("data"):
+            pairs = " ".join(f"{key}={_scrub_inline(str(val))}" for key, val in f["data"].items())
+            data = f"  ({pairs})"
+        doc = "  📄" if f.get("doc") else ""
+        lines.append(f"  {f['id']}: {k}{t}{_scrub_inline(f['description'])}{data}{src}{doc}")
+    lines.append("")
+    lines.append("## intents")
+    for i in g["intents"]:
+        to = i["to"] or "·"
+        flag = ""
+        if i["requires_confirmation"] and not i["confirmed_at"]:
+            flag = "  !confirm"
+        elif i["status"] == "claimed":
+            flag = f"  ~{i['worker']}"
+        t = f"[{_scrub_inline(i['title'])}]  " if i.get("title") else ""
+        doc = "  📄" if i.get("doc") else ""
+        lines.append(f"  {i['id']}: {i['from']} -> {to}  {t}{_scrub_inline(i['description'])[:70]}{flag}{doc}")
+    if g["hints"]:
+        lines.append("")
+        lines.append("## hints")
+        for h in g["hints"]:
+            lines.append(f"  {h['id']} ({_scrub_inline(h['creator'])}): {_scrub_inline(h['content'])}")
+    return "\n".join(lines)

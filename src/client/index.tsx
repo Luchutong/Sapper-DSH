@@ -50,10 +50,10 @@ export function SapperSettings({ scope }: { scope: BrowserSettingsScope }) {
         disabled={state.status !== 'ready' || !state.writable || pending}
         onChange={event => { void save(['store', 'approval'], event.target.value) }}>
         <option value="session">跟随会话权限（自动）</option>
-        <option value="always">每次写入确认</option>
+        <option value="always">受限模式下每次确认</option>
       </select>
     </label>
-    <p>自动写入仅限当前工作区的事实图，仍遵守会话权限。标记为需确认的任务仍会请求批准。</p>
+    <p>完全权限会自动通过 Sapper 的确认门；工作区写入模式保留显式确认点。只读会话不写入，数据始终限于当前工作区。</p>
     <p role="status">{state.status === 'ready'
       ? (enabled ? '已启用：提供事实图存储工具与目标摘要。' : '已关闭：工具和上下文注入均不生效。')
       : '正在等待 DSH 的 sapper 配置表单；不会自动写入默认值。'}</p>

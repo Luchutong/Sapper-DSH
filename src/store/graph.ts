@@ -6,7 +6,7 @@ import type { Fact, FactKind, GraphSnapshot, Hint, Intent, Project } from './typ
 
 type Entry = { file: string; value: unknown }
 type Changes = Map<string, unknown>
-export interface WriteOptions { signal?: AbortSignal; guard?: () => void }
+export interface WriteOptions { signal?: AbortSignal; guard?: () => void; autoConfirm?: () => boolean }
 export interface FactInput {
   description: string
   title?: string | null | undefined
@@ -98,7 +98,7 @@ export class GraphStore {
   }
   private async idle(): Promise<void> {
     if (await exists(await this.checked(lockName))) throw new StoreError('事实图正被其他写者使用（LOCK）；请稍后重试')
-    if (await exists(await this.checked(journalName))) throw new StoreError('发现未完成事务；请在审批后调用 sapper_init(action=recover)，再重试读取')
+    if (await exists(await this.checked(journalName))) throw new StoreError('发现未完成事务；请按会话写权限调用 sapper_init(action=recover)，再重试读取')
   }
   async checkReadable(): Promise<void> { await this.idle() }
   async read(): Promise<GraphSnapshot> {
@@ -228,14 +228,18 @@ export class GraphStore {
     }
     if (kind === 'flag') {
       const entry = this.flagEntries([fact])[0]!
-      if (entry.status !== 'recorded') throw new StoreError('新 flag 必须为 recorded；提交状态请通过 sapper_flag update 显式审批后更新')
+      if (entry.status !== 'recorded') throw new StoreError('新 flag 必须为 recorded；提交状态请通过 sapper_flag update 按会话写权限记录')
       fact.data = { ...fact.data, value: entry.value, status: entry.status }
     }
     return fact
   }
-  private permission(intent: Intent, worker: string): void {
+  private permission(intent: Intent, worker: string, autoConfirm = false): void {
     if (intent.to !== null) throw new StoreError(`${intent.id} 已结案`)
-    if (intent.requires_confirmation && !intent.confirmed_at) throw new StoreError(`${intent.id} 需要先通过 confirm 审批`)
+    if (intent.requires_confirmation && !intent.confirmed_at) {
+      if (!autoConfirm) throw new StoreError(`${intent.id} 需要先通过 confirm 审批`)
+      intent.confirmed_at = now()
+      intent.confirmation_source = 'dsh-full-access'
+    }
     if (intent.worker && intent.worker !== worker) throw new StoreError(`${intent.id} 已被 ${intent.worker} 领取`)
   }
   async addFact(input: FactInput, creator: string, options?: WriteOptions): Promise<Fact> {
@@ -251,7 +255,7 @@ export class GraphStore {
       if (input.source_intent != null) {
         id(input.source_intent, 'intent')
         source = await this.getNode('intent', input.source_intent) as Intent
-        this.permission(source, creator)
+        this.permission(source, creator, options?.autoConfirm?.())
       }
       const fact = this.makeFact(await this.nextId(graph.project, 'fact', changes), input, creator)
       changes.set(`facts/${fact.id}.json`, fact)
@@ -294,13 +298,18 @@ export class GraphStore {
       const intent = await this.getNode('intent', nodeId) as Intent
       if (intent.to !== null) throw new StoreError(`${nodeId} 已结案`)
       if (action === 'confirm') {
-        if (!intent.requires_confirmation || intent.confirmed_at) throw new StoreError('该意图无需确认或已确认')
+        if (!intent.requires_confirmation) throw new StoreError('该意图无需确认')
+        if (intent.confirmed_at) {
+          if (options?.autoConfirm?.()) return intent
+          throw new StoreError('该意图已确认')
+        }
         intent.confirmed_at = now()
+        if (options?.autoConfirm?.()) intent.confirmation_source = 'dsh-full-access'
       } else if (action === 'release') {
         if (intent.worker && intent.worker !== worker) throw new StoreError(`意图已被 ${intent.worker} 领取`)
         intent.worker = null; intent.status = 'open'
       } else {
-        this.permission(intent, worker)
+        this.permission(intent, worker, options?.autoConfirm?.())
         if (action === 'claim') { intent.worker = worker; intent.status = 'claimed' }
         else {
           id(target, 'fact')

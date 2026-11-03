@@ -9,6 +9,9 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { GraphStore } from '../src/store/graph.js'
 import type { Fact, GraphSnapshot } from '../src/store/types.js'
 import provenance from './reference/provenance.json'
+import { frontier } from '../src/render/frontier.js'
+import { renderGraphContext } from '../src/render/snapshot.js'
+import { resolveConfig } from '../src/settings.js'
 
 const exec = promisify(execFile)
 const referenceRoot = fileURLToPath(new URL('./reference/', import.meta.url))
@@ -71,5 +74,20 @@ describe('unchanged upstream Python Store golden round trips', () => {
     await store.intentAction('conclude', completion.id, 'ts', 'goal')
     expect((await python('inspect', root)).project.status).toBe('completed')
     expect((await store.read()).integrity).toEqual([])
+  })
+  it('matches upstream frontier semantics and retains the same history evidence pointers', async () => {
+    const { root, store } = await fixture()
+    await python('seed', root)
+    const expected = await python('frontier', root) as GraphSnapshot & { reference_frontier: Array<{ id: string }>; reference_history: string }
+    const graph = await store.read()
+    expect(frontier(graph).ready.map(i => i.id)).toEqual(expected.reference_frontier.map(i => i.id))
+    expect(frontier(graph).pending_confirmation.map(i => i.id)).toEqual(['i003'])
+    const text = renderGraphContext(graph, resolveConfig({ context: { scope: 'frontier-history' } })).text
+    for (const node of graph.facts.filter(f => f.id !== 'goal')) {
+      expect(expected.reference_history).toContain(node.id)
+      expect(text).toContain(node.id)
+    }
+    expect(text).not.toContain('原始响应')
+    expect(text.length).toBeLessThanOrEqual(6000)
   })
 })

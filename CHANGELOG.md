@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.0-alpha.5 — 2026-11-03
+
+- 用户确认 alpha.4 功能正常；完全权限成为 Sapper 自身确认门的持续授权，覆盖 always 和 requires_confirmation，自动确认记录 dsh-full-access 来源。
+- 保留 DSH 其他策略的 deny/ask、只读拒绝、工作区边界、归属、比较更新、坏图和运行中权限撤销保护。
+- M2：就绪/阻塞 frontier、近期事实、结案历史与 hint、单一字符预算与整节点省略；关闭注入后不读图或 KB。
+- 新增 sapper_recall 与 sapper_kb，中英文归一化子串、词边界、bigram Dice 召回，56 条离线 KB 与安全的工作区自定义覆盖。
+- 新增只读 /sapper status、graph、frontier、recall、flag、kb；接入同版本真实 CommandRuntime，命令不调用模型。
+- 96 项测试覆盖 500 节点预算、真实权限/命令管线和固定上游 Python 的 frontier/history 对照；新增 M2 验收与上下文契约文档。
+
 ## 0.1.0-alpha.4 — 2026-11-03
 
 - M1 已获用户验收；修复普通图写入反复审批与 never 策略冲突的问题。

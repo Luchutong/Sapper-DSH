@@ -76,7 +76,7 @@ SDK 为 `0.2.1-rc.2`，Cordis 为 `4.0.5`，Schemastery 为 `3.18.5`。
 ## 2026-11-03：alpha.3 的 M1 首轮审批拒绝与会话权限预设
 
 以下为 alpha.3 历史行为。alpha.4 正常图写入不再额外 ask，无需切换成可交互审批环境；
-下述 ask 入口仅用于用户主动选择逐次审批或显式人工确认点。
+下述 ask 入口在 alpha.5 仅用于工作区写入模式的逐次审批或显式人工确认点；完全权限自动通过。
 
 用户首次 sapper_init 返回 `the user rejected tool "sapper_init"`，报告无建图且
 仍为 uninitialized，符合拒绝分支的预期。会话说明还提到审批提示已禁用。
@@ -106,3 +106,23 @@ alpha.4 让正常图维护跟随真实会话文件权限自动执行，保留只
 新增配置页时再次核对真实客户端协议：ConfigForm.set 产生 path=[field]，不会解析
 点号字符串。嵌套 store.approval 使用 mutate 和 ['store','approval']，并通过真实
 SettingsForms 的路径 mutation 测试，避免仅用手写 UI mock 证明一个错误契约。
+
+## 2026-11-03：完全权限必须覆盖插件自己的确认门
+
+alpha.4 桌面反馈确认图维护功能正常，但受限意图仍需先人工 confirm。用户明确要求
+完全权限下默认通过审批，因此 alpha.5 将真实 danger-full-access 视为 Sapper 自身
+的持续授权，包括旧 always 配置和 requires_confirmation=true 的意图。
+
+只消除 tools/pre-execute 的 ask 不够：存储层仍会拦住未确认意图。修复必须贯通
+平台权限解析、工具策略、存储状态机和 frontier 展示。claim/结案的同一事务记录
+confirmed_at 与 confirmation_source=dsh-full-access，保留确认标记便于追溯；只读
+frontier 仅表明可执行，不补写记录。不能增加模型可控的 force/skipApproval 参数。
+
+这不会改变 DSH never 的含义；不向平台发出多余 ask，即可避免其自动拒绝。
+其他策略的 deny/ask 原样保留。必须用真实 SDK 在 session/always 两种设置下配合
+拒绝所有 ask 的答复器测试确认链路，并证明只读、权限撤销、归属和路径保护仍有效。
+
+M2 同时验证预算必须覆盖声明、frontier、历史、recall 和 KB 的总和，而不是每个
+分区分别截断；关闭注入要在任何图/KB 读取之前返回。500 节点实盘与读取调用计数
+可以验证这两个约束。上游 Python difflib 与 TS bigram 的差异明确写入契约，避免
+把 Store/frontier 的兼容测试误解为召回分数完全相同。

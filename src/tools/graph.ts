@@ -4,6 +4,7 @@ import { FACT_KINDS, FLAG_STATUSES, StoreError } from '../store/validation.js'
 import { createStatusTool } from './status.js'
 import { executionStore, json, output } from './shared.js'
 import type { AuthorizeWrite } from './shared.js'
+import type { ToolExecution } from '@deepseek-ai/dsh-tools'
 
 const fields = {
   description: { type: 'string', description: 'Observed evidence or a concrete task; cannot be empty for create.' },
@@ -16,10 +17,10 @@ function required<T>(value: T | undefined, field: string): T {
   return value
 }
 
-export function createGraphTools(getConfig: () => Config, alive: () => boolean = () => true, authorize?: AuthorizeWrite) {
+export function createGraphTools(getConfig: () => Config, alive: () => boolean = () => true, authorize?: AuthorizeWrite, fullAccess?: (exec: ToolExecution) => boolean) {
   const storeFor = (exec: Parameters<typeof executionStore>[1]) => executionStore(getConfig, exec, alive, authorize)
   return [
-    createStatusTool(getConfig, alive),
+    createStatusTool(getConfig, alive, fullAccess),
     defineTool({
       name: 'sapper_init',
       description: 'Initialize a Python-compatible workspace graph without overwriting files. Continue authorized Sapper work without extra chat confirmations; ordinary writes follow DSH session permissions. action=recover replays a pending transaction.',
@@ -41,7 +42,7 @@ export function createGraphTools(getConfig: () => Config, alive: () => boolean =
         id: nodeId, ...fields,
         kind: { type: 'string', enum: FACT_KINDS },
         data: { type: 'object', additionalProperties: true, description: 'Flat key/value scalars; stored as strings.' },
-        source_intent: { type: 'string', description: 'Optional intent to conclude; current session must own any claim and confirmation must exist.' },
+        source_intent: { type: 'string', description: 'Optional intent to conclude; current session must own any claim. Required confirmation must exist, or is recorded automatically under the standing DSH full-access grant.' },
       }, output, isConcurrencySafe: args => args.action !== 'create',
       async execute(args, exec) {
         const { store, creator, options } = storeFor(exec)
@@ -56,13 +57,13 @@ export function createGraphTools(getConfig: () => Config, alive: () => boolean =
     }),
     defineTool({
       name: 'sapper_intent',
-      description: 'Create/list/get, claim/release, confirm or conclude an intent. Ordinary actions follow DSH session write permissions. Only confirm of an explicitly confirmation-required intent requests approval. Worker identity comes from this session.',
+      description: 'Create/list/get, claim/release, confirm or conclude an intent. Follow DSH session permissions: full access automatically satisfies Sapper confirmation gates without asking; workspace-write retains explicit confirm approval. Worker identity comes from this session.',
       parameters: {
         action: { type: 'string', enum: ['create', 'get', 'list', 'claim', 'release', 'confirm', 'conclude'], required: true },
         id: nodeId, ...fields,
         from: { type: 'array', items: { type: 'string' }, description: 'Nonempty dependency facts; goal cannot be a dependency.' },
         to: { type: 'string', description: 'Existing fact ID, or goal to complete the project.' },
-        requires_confirmation: { type: 'boolean', description: 'Default false for autonomous work. Set true only when the task/user explicitly requires a human decision; claim/conclusion then wait for an approved confirm.' },
+        requires_confirmation: { type: 'boolean', description: 'Default false for autonomous work. True adds a decision gate: workspace-write needs approved confirm; full access is a standing grant and records confirmation automatically on confirm/claim/conclusion. Do not ask again for this gate in full access.' },
       }, output, isConcurrencySafe: args => args.action === 'get' || args.action === 'list',
       async execute(args, exec) {
         const { store, creator, options } = storeFor(exec)

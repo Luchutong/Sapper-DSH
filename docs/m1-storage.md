@@ -1,6 +1,6 @@
 # M1 存储与工具契约
 
-版本：0.1.0-alpha.4；SDK：DSH 0.2.1-rc.2。M0/M1 已由用户确认验收完成。
+版本：0.1.0-alpha.5；SDK：DSH 0.2.1-rc.2。M0/M1 已由用户确认验收完成。
 
 ## 权威数据与兼容
 
@@ -22,7 +22,7 @@
 扩展字段在文档、反向引用与 flag 状态更新时保留。长文在 doc 中，list 操作不展开 doc。
 
 Python 兼容基准为 sapper-v2 revision ba3d3d49a3211b7d26e96cee9df9788506c3e16c。
-`tests/reference/` 保留未经改动的 Store/校验代码前缀及 SHA256。golden 测试覆盖
+`tests/reference/` 保留未经改动的 Store/frontier/history 代码前缀及 SHA256。golden 测试覆盖
 Python 建图 → TS 读取与写入 → Python 校验并修改 → TS 再读，包含类型化 data、
 确认/领取/结案、doc、hint、flag 状态和未知字段。Windows 测试 runner 为上游的
 fcntl 导入提供一字节锁适配；这不声明与活跃 POSIX 写者并发兼容。
@@ -61,7 +61,8 @@ LOCK 不与 Python 的 `.lock` / flock 互通：**TS 与 Python 必须顺序交�
 - 普通事实字段保持不可变；doc 可以通过带 expected_doc 的比较更新修改。
   结案时会更新结果事实的 source_intent 反向引用，flag 可显式更新 data 中的状态/备注。
 - 意图依赖必须存在，goal 不能作为依赖。领取身份来自 DSH 会话 ID，不接受模型指定
-  worker/creator。未确认的受限意图无法领取/结案，其他会话不能替领取者结案。
+  worker/creator。workspace-write 下未确认的受限意图无法领取/结案；完全权限在同一
+  事务自动确认并记录 dsh-full-access 来源。其他会话不能替领取者结案。
 - 创建结果事实和结案意图属于同一可恢复事务；重复结案不会产生孤立事实。
   conclude 到 goal 同时更新项目 completed，不能重复完成。
 - M1 是记录证据与任务的工具层，不提供 M3 的 candidate → verify → confirmed 流程。
@@ -83,12 +84,12 @@ flag 仍是 Python 可读的 `kind=flag` 事实；ledger 是索引。读取时�
 sandboxPolicy 的当前 mode 与 workspaceRoot，拒绝只读、越界和缺失权限服务的写入。
 在调用前、排队后和提交前检查权限与配置，保留其他 DSH 策略的 deny/ask。
 
-只有显式 requires_confirmation 意图的 confirm，或用户主动设置 store.approval=always，
-才由插件发起 ask。普通结案到 goal 和 flag 状态记录不再附加审批。旧
+完全权限是 Sapper 自身确认门的持续授权；只有 workspace-write 下的显式 confirm
+或 store.approval=always 才发起 ask。普通结案到 goal 和 flag 状态记录不附加审批。旧
 orchestration.requireApproval 不控制图数据，已有配置无需手工删除。
 更多迁移、客户端字段协议和自动化边界见 [permissions.md](permissions.md)。
 
 当前只有 workspace 模式。global 和 autoInit 仍保留 schema，尚未执行；初始化
-统一显式调用 sapper_init。上下文探针保持只读、目标摘要范围，frontier 与 recall
-属于 M2。M0 两字段 project.json 可以继续被摘要探针读取，但不满足完整图校验，
+统一显式调用 sapper_init。M2 上下文/召回保持只读，详见 m2-context.md。
+M0 两字段 project.json 可以继续被目标摘要回退读取，但不满足完整图校验，
 不能直接写入；请保存旧 fixture 并换新测试目录初始化，不进行静默升级。

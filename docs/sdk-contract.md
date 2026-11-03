@@ -1,6 +1,6 @@
 # DSH SDK 核对记录
 
-日期：2026-11-03。当前目标：DSH **0.2.1-rc.2**，插件 **0.1.0-alpha.4**。
+日期：2026-11-03。当前目标：DSH **0.2.1-rc.2**，插件 **0.1.0-alpha.5**。
 
 版本依据是当前 Windows 安装版 app.asar 内实际加载的包元数据，并与 npm 同版本
 包的实现和类型声明对照。旧 ~/.cache/pkg 中的 0.1.5-rc.1 不能代表当前桌面。
@@ -13,7 +13,8 @@ Cordis 为 4.0.5，Schemastery 为 3.18.5。原计划 HTML 保留为历史快照
 | Cordis | 4.0.5 的 apply / inject / effect | 宿主 ESM；工具和 Agent 服务为必需，Settings 为可选 |
 | 工具 | dsh-tools 的真实 defineTool 声明 | 参数 schema、输出 schema/render、execute |
 | 文件写权限 | dsh-sandbox-policy 的 SandboxPolicyService.resolve | 每次读取会话 mode / workspaceRoot，提交前再次核对；只读或服务缺失时拒绝 |
-| 额外审批 | tools/pre-execute / PreToolDecision.ask | 普通图写入不额外 ask；只有显式确认点和 always 模式请求审批，其他策略决定保留 |
+| 额外审批 | tools/pre-execute / PreToolDecision.ask | 完全权限自动通过自身确认门；workspace-write 的 confirm/always 才 ask，其他策略决定保留 |
+| 只读命令 | dsh-commands 的 CommandRuntime.register / CommandDefinitionId | 可选 commands 注入；CommandResult 直接返回，不启动模型；禁用/卸载释放注册 |
 | 单调守卫 | ctx.tools.guard | 绑定配置/工作区/会话权限快照；提交前重查，阻止权限撤销或插件关闭后的未提交写入 |
 | pre-step | dsh-agent 的 runtime-types | payload 含 agent/messages/turn/step/signal，next 返回 enter/reject |
 | 消息来源 | dsh-llm 的 MessageSourceMap | 扩展 producer kind=sapper-dsh，form=snapshot，带 sections |
@@ -39,8 +40,10 @@ Cordis 为 4.0.5，Schemastery 为 3.18.5。原计划 HTML 保留为历史快照
   更新不重启 fiber、关闭/开启、修订号冲突、图读取与自定义消息来源。
 - 官方检查器拒绝旧包声明、接受新声明；未测旧 SDK 或未知下一版本不会被宣称兼容。
 - 打包检查验证 host import、lazy-CJS、当前客户端插槽与 KB 资源。
+- M2 使用真实 CommandRuntime 测试注册、执行事件、取消、禁用/重开/卸载。
+  dsh-commands 为同版本 peer；attachment/session/typert-protocol 为真实命令测试的开发依赖。
 - Windows DSH NEXT 自带 desktop-cli 已在独立 DSH_HOME / 临时 profile 中安装
-  alpha.2 成功（退出码 0，dependencies 与 bundles 已登记，无版本豁免）。
-- M0/M1 桌面验收均获用户确认。alpha.4 改为会话授权范围内自动维护图数据，
-  新策略通过真实 ToolRuntime / SandboxPolicyService 的自动测试；新包桌面回归按 M1 指南验证。
+  alpha.2，并完成 alpha.3 → alpha.4 → alpha.5 升级（退出码 0，dependencies 与 bundles 已登记，无版本豁免）。
+- M0/M1 与 alpha.4 功能获用户确认。alpha.5 完全权限覆盖自身确认门并交付 M2，
+  新策略通过真实 ToolRuntime / SandboxPolicyService 自动测试；桌面回归按 M2 指南验证。
 - subagent/workflow、外部执行策略和全局数据目录仍属于后续阶段。

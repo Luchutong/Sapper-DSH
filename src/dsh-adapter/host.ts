@@ -11,9 +11,14 @@ import { resolveStorePath } from '../store/paths.js'
 import { readProjectSummary } from '../store/project.js'
 import { renderProjectContext } from '../render/context.js'
 import { createGraphTools, isMutation, requiresExplicitApproval } from '../tools/graph.js'
-import { writePermission } from './permissions.js'
+import { hasFullAccess, writePermission } from './permissions.js'
 import { id, StoreError } from '../store/validation.js'
 import { GraphStore } from '../store/graph.js'
+import { createRecallTools } from '../tools/recall.js'
+import { KnowledgeBase } from '../kb/index.js'
+import { recallGraph } from '../recall/index.js'
+import { renderGraphContext } from '../render/snapshot.js'
+import { registerSapperCommand } from './commands.js'
 
 function isOwnSnapshot(message: unknown): boolean {
   const source = (message as UserMessage).source
@@ -34,9 +39,14 @@ export function registerRuntime(ctx: Context, getConfig: () => Config): void {
   }
   const authorize = (exec: ToolExecution, root: string) => {
     const binding = ensureBinding(exec)
-    if (binding.permission !== writePermission(ctx, exec, root)) throw new StoreError('DSH 会话文件权限已变化，原写入已取消')
+    const permission = writePermission(ctx, exec, root)
+    if (binding.permission !== permission.fingerprint) throw new StoreError('DSH 会话文件权限已变化，原写入已取消')
+    return permission.fullAccess
   }
-  const tools = createGraphTools(getConfig, () => alive, authorize)
+  const fullAccess = (exec: Pick<ToolExecution, 'agent'>) => hasFullAccess(ctx, exec)
+  const tools = [...createGraphTools(getConfig, () => alive, authorize, fullAccess), ...createRecallTools(getConfig, () => alive)]
+  const syncCommand = registerSapperCommand(ctx, getConfig, () => alive)
+  const kb = new KnowledgeBase()
   let unregister: (() => void) | undefined
   const syncTool = () => {
     if (getConfig().enabled && !unregister) {
@@ -47,6 +57,7 @@ export function registerRuntime(ctx: Context, getConfig: () => Config): void {
       unregister()
       unregister = undefined
     }
+    syncCommand()
   }
   syncTool()
   ctx.on('loader/volatile-update', syncTool)
@@ -73,7 +84,7 @@ export function registerRuntime(ctx: Context, getConfig: () => Config): void {
       try {
         const root = resolveStorePath(binding.cwd, getConfig())
         if (!root) throw new StoreError('图写入需要绝对工作区路径')
-        binding.permission = writePermission(ctx, exec, root)
+        binding.permission = writePermission(ctx, exec, root).fingerprint
       } catch (error) { return { kind: 'deny', reason: (error as Error).message } }
     }
     const decision = await next()
@@ -81,16 +92,16 @@ export function registerRuntime(ctx: Context, getConfig: () => Config): void {
     try {
       const root = resolveStorePath(binding.cwd, getConfig())
       if (!root || !binding.cwd) throw new StoreError('图写入需要绝对工作区路径')
-      authorize(exec, root)
+      const fullAccess = authorize(exec, root)
       if (requiresExplicitApproval(exec.name, exec.arguments)) {
         const args = exec.arguments as Record<string, unknown>
         const intent = await new GraphStore(root, binding.cwd).readNode('intent', id(args.id, 'intent'))
-        if (intent.to !== null || !intent.requires_confirmation || intent.confirmed_at) {
+        if (intent.to !== null || !intent.requires_confirmation || (intent.confirmed_at && !fullAccess)) {
           return { kind: 'deny', reason: '该意图无需人工确认、已经确认或已结案' }
         }
       }
     } catch (error) { return { kind: 'deny', reason: (error as Error).message } }
-    if (getConfig().store.approval !== 'always' && !requiresExplicitApproval(exec.name, exec.arguments)) return decision
+    if (hasFullAccess(ctx, exec) || (getConfig().store.approval !== 'always' && !requiresExplicitApproval(exec.name, exec.arguments))) return decision
     return { kind: 'ask', reason: `Sapper workspace write: ${exec.name}`,
       displayReason: { en: 'Allow Sapper to modify the current workspace graph?', zh: '允许 Sapper 修改当前工作区的事实图？' } }
   })
@@ -105,9 +116,31 @@ export function registerRuntime(ctx: Context, getConfig: () => Config): void {
     try {
       const root = resolveStorePath(payload.agent.session.header.cwd, config)
       if (!root) return { ...decision, messages }
-      const project = await readProjectSummary(root, payload.agent.session.header.cwd)
-      if (!project || payload.signal.aborted || !getConfig().enabled || !getConfig().context.inject) return { ...decision, messages }
-      const text = renderProjectContext(project, config.context.maxChars)
+      const cwd = payload.agent.session.header.cwd
+      const store = new GraphStore(root, cwd)
+      if (!await store.initialized()) return { ...decision, messages }
+      let text: string
+      try {
+        const graph = await store.read()
+        const query = [...messages].reverse().find(message => message.source.kind === 'user')?.content
+          .filter(block => block.type === 'text').map(block => block.text).join(' ').slice(0, 2000) ?? graph.project.goal
+        const extras = {
+          fullAccess: fullAccess({ agent: payload.agent }), actor: String(payload.agent.id),
+          recall: config.context.recallAuto && config.context.scope !== 'goal-only' ? recallGraph(graph, query, config.context.recallTopK) : [],
+        }
+        let knowledge: ReturnType<KnowledgeBase['search']> = []
+        if (config.context.scope !== 'goal-only' && config.kb.enabled && config.kb.injectTopK > 0 && query.trim()) {
+          try { knowledge = kb.search(await kb.read(cwd, config.kb.customDir), query, config.kb.injectTopK) }
+          catch { ctx.logger.warn('Sapper 自定义 KB 无法读取；本轮仅注入图数据。') }
+        }
+        text = renderGraphContext(graph, config, { ...extras, kb: knowledge }).text
+      } catch (error) {
+        // Keep the historical two-field M0 fixture readable, without inventing nodes.
+        if (!(error as Error).message.includes('M0 最小 fixture')) throw error
+        const project = await readProjectSummary(root, cwd)
+        text = project ? renderProjectContext(project, config.context.maxChars) : ''
+      }
+      if (payload.signal.aborted || !alive || !getConfig().enabled || !getConfig().context.inject) return { ...decision, messages }
       if (!text) return { ...decision, messages }
       return {
         ...decision,

@@ -7,7 +7,7 @@ is included at `resources/licenses/sapper-v2-MIT.txt`.
 
 The TypeScript implementation and draft prompts in this repository are new.
 `tests/reference/sapper_store.py` is an unchanged prefix of the upstream
-`lib/sapper.py` at the same revision, through `validate_graph`. It is the
+`lib/sapper.py` at the same revision, through `render_graph_text`. It is the
 behavioral reference for Python/TypeScript golden round-trip tests. Provenance
 and SHA256 are recorded in `tests/reference/provenance.json`, with the MIT
 license also copied beside the snapshot. The test runner supplies a Windows

@@ -5,7 +5,7 @@ import { GraphStore } from '../store/graph.js'
 import { resolveStorePath } from '../store/paths.js'
 import { StoreError } from '../store/validation.js'
 
-export type AuthorizeWrite = (exec: ToolRunContext, root: string) => void
+export type AuthorizeWrite = (exec: ToolRunContext, root: string) => boolean
 
 export const output = {
   schema: { type: 'json' } as const,
@@ -27,6 +27,7 @@ export function executionStore(getConfig: () => Config, exec: ToolRunContext, al
     creator: String(exec.agent?.id ?? 'dsh-user'),
     options: {
       signal: exec.signal,
+      autoConfirm: () => authorize?.(exec, root) === true,
       guard: () => {
         if (!alive() || !getConfig().enabled || JSON.stringify(getConfig()) !== fingerprint || exec.agent?.session.header.cwd !== cwd) throw new StoreError('插件已关闭或配置/工作区已变化；写入已取消')
         if (!authorize) throw new StoreError('缺少 DSH 图写入权限检查')

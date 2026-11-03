@@ -6,6 +6,7 @@ import { registerRuntime } from './dsh-adapter/host.js'
 
 export { Config }
 export { GraphStore } from './store/graph.js'
+export { KnowledgeBase } from './kb/index.js'
 export const name = 'sapper-dsh'
 export const inject = ['tools', 'agents']
 

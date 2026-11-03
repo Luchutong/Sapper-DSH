@@ -1,6 +1,6 @@
 # 自动化与权限策略
 
-适用版本：sapper-dsh 0.1.0-alpha.4，DSH 0.2.1-rc.2。
+适用版本：sapper-dsh 0.1.0-alpha.5，DSH 0.2.1-rc.2。
 
 设计目标：用户已授权的任务可以连续推进；正常记忆、任务状态与证据维护不逐次打断。
 约束落在会话文件权限、工作区边界、数据完整性和用户明确要求的决策点。
@@ -13,8 +13,8 @@
 | init / recover、事实与文档写入、普通意图领取/释放/结案 | DSH 会话允许写入当前工作区时自动执行 |
 | 本地 flag 捕获、去重、状态记录 | 自动维护本地图数据；不调用网络提交 |
 | conclude 到 goal | 自动记录本地图的完成状态；不代表已验证外部任务成功 |
-| 显式 requires_confirmation=true 的意图 | 领取/结案前必须经用户批准 confirm；正常自动化意图默认 false |
-| 用户选择“每次写入确认” | 每次写入请求 DSH 审批，是可选覆盖 |
+| 显式 requires_confirmation=true 的意图 | 完全权限下 confirm 或首次领取/结案时自动确认；workspace-write 须实际批准 confirm |
+| 用户选择 store.approval=always | 完全权限下自动执行；workspace-write 每次写入请求审批 |
 | 只读会话、权限服务缺失、工作区越界、图损坏 | 拒绝写入并给出原因，不自动升级权限 |
 
 默认 `store.approval=session`。插件在执行前、排队后、提交前调用真实
@@ -26,32 +26,44 @@
 阻止未提交写入。事务日志已经提交后，存储层完成该事务以保持可恢复一致性，具体
 提交点与跨进程限制见 [存储说明](m1-storage.md)。
 
-其他 DSH 插件返回的 deny / ask 原样保留。代码不修改 DSH 审批策略，不伪造批准，
-不设置 sandbox escalation。普通图写入不产生额外 ask，因此在允许文件写入的
-never 会话中也能连续执行。显式确认点和用户选择的 always 模式仍可能被 never 拒绝，
-这是用户选定约束的结果。
+其他 DSH 插件返回的 deny / ask 原样保留。代码不修改 DSH 审批服务，不伪造用户审批
+事件，不设置 sandbox escalation。DSH never 会拒绝实际提交的 ask；本插件根据用户
+要求，将真实 danger-full-access 视为自身确认门的持续授权，不制造额外 ask。
+不能仅凭 never、审批提示关闭或模型口头描述判定为完全权限。workspace-write 下的
+显式确认点/always 仍可能被 never 拒绝，按该会话实际策略处理。
+
+自动确认保留 requires_confirmation=true，在同一存储事务中记录 confirmed_at 与
+confirmation_source="dsh-full-access"，不接受模型指定的权限覆盖参数。只读查询和
+frontier 展示不会补写确认。其他 DSH 策略的 ask/deny 即使在完全权限下也保持原样。
 
 ## 配置与升级
 
 在“设置 → Sapper → 图写入确认”选择：
 
 - **跟随会话权限（自动）**：默认选项，store.approval=session。
-- **每次写入确认**：显式覆盖，store.approval=always，需要可交互的审批环境。
+- **受限模式下每次确认**：store.approval=always，workspace-write 逐次审批，完全权限自动通过。
 
 旧 alpha.3 的 orchestration.requireApproval=true 不再控制图数据写入。该字段保留
 给后续外部编排策略；升级无需删除旧配置或手工改 profile。没有 store.approval 的
-旧条目按 schema 得到 session。磁盘上的项目与节点格式保持不变，已有图无需迁移。
+旧条目按 schema 得到 session。alpha.4 → alpha.5 无需改图或删除旧配置，旧 always
+在完全权限下同样自动执行。已有未确认意图在下次获授权领取/结案时自动确认，
+不批量扫描或改写历史。图格式保持不变。
 
 嵌套设置通过 ConfigForm.mutate 的路径数组 ['store', 'approval'] 写入。SDK 的
 set(field, value) 只写顶层字段，不解析点号路径，不能使用 set('store.approval', ...)。
 
 ## 自动化范围
 
-M1 已提供可连续调用的图存储工具，权限修复消除了正常数据维护的人工审批循环。
-完整 frontier、recall 和 reason/explore/verify 调度仍分别属于 M2 / M3；本版本不宣称
-已经实现完整自主解题器。后续执行命令、网络操作、真实提交等外部能力继续由 DSH
+M2 已提供 frontier、recall、离线 KB 与只读 slash commands；reason/explore/verify
+调度仍属于 M3，本版本不宣称已经实现完整自主解题器。后续执行命令、网络操作、真实提交等外部能力继续由 DSH
 管理权限与必要审批；内部图写入的自动权限不会授予这些外部能力额外权限。
 
 requires_confirmation 默认为 false。普通意图不应为了例行记录而设置为 true；只有
-任务或用户明确要求人工决策时才设置。已有明确确认点不会在升级中被静默清除。
+任务或用户明确要求决策约束时才设置。已有确认标记不会在升级中被删除，完全权限
+会按用户的持续授权记录确认来源。
 M3 的证据复核与预算约束仍按路线图实现，不能用跳过人工提示来代替结果验证。
+
+真实 ToolRuntime + SandboxPolicyService 回归覆盖 session/always 两种设置：答复器
+拒绝任何 ask 时，完全权限下受限意图可 confirm、claim、原子结案并完成项目，
+审批调用为 0。另测其他策略 ask/deny 保留、只读/服务缺失/权限撤销阻止写入。
+桌面步骤见 [M2 验收](m2-validation.md)。

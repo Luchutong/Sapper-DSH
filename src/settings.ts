@@ -14,7 +14,7 @@ const PlainConfig = group({
   store: group({
     mode: Schema.union(['workspace', 'global']).default('workspace'),
     dir: Schema.string().default('.sapper'),
-    approval: Schema.union(['session', 'always']).default('session').description('图写入默认跟随 DSH 会话权限；always 为每次写入确认'),
+    approval: Schema.union(['session', 'always']).default('session').description('图写入跟随会话权限；always 在工作区写入模式逐次确认，完全权限自动通过'),
   }),
   autoInit: Schema.boolean().default(true).description('预留：当前请显式调用 sapper_init，状态查询与上下文注入不自动写入'),
   goal: Schema.string().default('拿到 flag'),

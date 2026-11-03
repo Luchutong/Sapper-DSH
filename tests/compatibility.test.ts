@@ -19,7 +19,7 @@ describe('official DSH installation compatibility gate', () => {
     expect(evaluatePluginCompatibility(manifest, {}, SDK_VERSION)).toBeUndefined()
     expect(manifest.version).toBe(VERSION)
     expect(manifest.devDependencies['@deepseek-ai/dsh-app-boot']).toBe(SDK_VERSION)
-    for (const name of [...sdkPeers, '@deepseek-ai/dsh-sandbox-policy'] as const) {
+    for (const name of [...sdkPeers, '@deepseek-ai/dsh-sandbox-policy', '@deepseek-ai/dsh-commands'] as const) {
       expect(manifest.peerDependencies[name]).toBe(SDK_VERSION)
       expect(manifest.devDependencies[name]).toBe(SDK_VERSION)
     }
