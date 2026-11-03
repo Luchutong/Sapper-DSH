@@ -1,0 +1,11 @@
+- insert:
+    - id: sapper
+      name: sapper-dsh
+      config:
+        enabled: true
+        store:
+          mode: workspace
+          dir: .sapper
+        orchestration:
+          auto: false
+          requireApproval: true
