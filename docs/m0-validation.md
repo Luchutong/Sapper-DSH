@@ -17,7 +17,8 @@
 
 这些项目尚未完成，M0 仍为进行中；按计划书，在全部通过前不宣布进入 M1。
 
-- [ ] 在测试 profile 安装 `dist/sapper-dsh-0.1.0-alpha.1.tgz`，保存安装日志。
+- [ ] 从 DSH NEXT 的“打开 DSH 终端”进入桌面专用 CLI，核对欢迎信息中的 profile 和环境。
+- [ ] 在该终端执行 `dsh plugin add <tgz 的 Windows 路径>`，保存安装日志；系统通用 CLI 不支持 desktop。
 - [ ] 重启后确认 host entry 激活，client module 被发现，无 factory/module 错误。
 - [ ] 设置 → 插件出现 Sapper 卡片和 Sapper tab。
 - [ ] 只打开页面不创建或改写 settings.yaml。
@@ -30,3 +31,5 @@
 
 请在 `docs/progress.md` 记录 DSH/Windows 版本、日期与证据路径；不要在提交中包含
 真实模型凭据、会话内容或个人 profile 设置。
+
+具体命令、测试 project.json 与预期输出见 [验证指南](validation-guide.md)。

@@ -39,10 +39,14 @@ pnpm pack --pack-destination dist
 
 ## 开发包安装
 
-下面是 **M0 手工验收步骤，尚未在 Windows DSH NEXT 中完成验证**：
+下面是 **M0 手工验收步骤，尚未在 Windows DSH NEXT 中完成验证**。
+先在 DSH NEXT 应用菜单选择“打开 DSH 终端 / Open DSH Terminal”，确认欢迎信息
+显示正常环境、`Profile: desktop`。这个终端提供桌面应用专用的 dsh 命令；通用
+CLI 会拒绝管理保留的 desktop profile，WSL 终端也不是 Windows 桌面终端。
 
-```sh
-dsh plugin --profile desktop add ./dist/sapper-dsh-0.1.0-alpha.1.tgz
+```powershell
+# 在 DSH NEXT 打开的终端内执行，换成安装包的 Windows 路径
+dsh plugin add "C:\path\to\sapper-dsh-0.1.0-alpha.1.tgz"
 ```
 
 重启 DSH NEXT 后，在“设置 → 插件”检查 Sapper 卡片与 Sapper tab，切换启用字段。
@@ -50,7 +54,8 @@ dsh plugin --profile desktop add ./dist/sapper-dsh-0.1.0-alpha.1.tgz
 自动建图。`autoInit` 等字段目前只声明 schema，实际功能按路线图交付。
 禁用后不再注册 `sapper_status`，并清除本轮消息中本插件的旧 snapshot。
 
-完整安装检查表见 [docs/m0-validation.md](docs/m0-validation.md)。
+逐步操作见 [docs/validation-guide.md](docs/validation-guide.md)，
+完整检查表见 [docs/m0-validation.md](docs/m0-validation.md)。
 
 ## 目录
 

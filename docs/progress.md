@@ -38,5 +38,9 @@ GitHub 阶段跟踪：[issue #1](https://github.com/Luchutong/Sapper-DSH/issues/
 
 ## 下一步
 
+验证操作指南：[validation-guide.md](validation-guide.md)。已纠正安装入口：普通
+DSH CLI 会拒绝 desktop，需从 DSH NEXT 菜单“打开 DSH 终端”，再执行
+`dsh plugin add <Windows 安装包路径>`。专用入口已核对安装版代码，尚未执行安装。
+
 先按 [M0 检查表](m0-validation.md) 在 Windows DSH NEXT 中验证安装、卡片、字段
 读写与停用行为。通过后再开始 M1；不要把当前只读项目摘要当成完整 frontier。

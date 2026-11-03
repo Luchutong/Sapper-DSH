@@ -19,6 +19,12 @@ Python/uv 路径。
 | 插件卡片 | `dsh-client-ui-settings-plugins/lib/client.js` | keyed slot `settings.plugin.item`，key 为 `sapper` |
 | 独立设置 tab | 同上 + plugin-inventory 的客户端实现 | `settings.plugins.tab`，id 为 `sapper` |
 | 客户端设置 | `dsh-client-ui-settings/lib/client.js` | settingsScope.bind({namespace:'sapper'})，getSnapshot/subscribe/set |
+| 通用 CLI 的 desktop 限制 | `@deepseek-ai/dsh` 的 README 和 `lib/bin.js` | 通用 CLI 拒绝管理 Electron 保留的 desktop profile |
+| 桌面专用 CLI | 已安装 DSH NEXT 2.0.19-next 的 `lib/main.js`、`lib/desktop-cli.js` | 应用菜单“打开 DSH 终端”，专用 shim 设置默认 profile 并调用 runCli({manageDesktopProfile:true}) |
+
+安装说明修正：此前遗漏了“必须从桌面应用打开专用终端”的前提。桌面终端欢迎
+信息明确提供 `dsh plugin add <package>` / `dsh plugin remove <package>`，修改
+后重启桌面应用。该入口已从安装程序代码核对，实际安装验收仍待完成。
 
 目前宿主可对照 npm 发布的真实 `.d.ts` 编译。浏览器只涉及少量服务方法，采用
 `src/dsh-adapter/client.ts` 的窄结构契约隔离客户端与宿主 Context 的类型扩展；
