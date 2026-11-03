@@ -1,0 +1,8 @@
+{
+  "repository": "https://github.com/N1nEmAn/sapper-v2",
+  "revision": "ba3d3d49a3211b7d26e96cee9df9788506c3e16c",
+  "path": "lib/sapper.py",
+  "full_source_sha256": "24663ab6810e21926fb6f99e153a8e02ce2866c9bd36f0fa78c9407619872895",
+  "snapshot_sha256": "e2a53a0d8af51dd464c104eea755287a3ddcab39114fdf595cd000e08a853850",
+  "extraction": "Unmodified prefix through validate_graph, ending at its final newline before def frontier. Tests only; excluded from npm package."
+}

@@ -1,102 +1,77 @@
 # Sapper DSH
 
 将 [sapper-v2](https://github.com/N1nEmAn/sapper-v2) 的事实图与
-`reason → explore → verify` 解题循环移植为 DSH NEXT 桌面插件。
+`reason → explore → verify` 循环移植为 DSH NEXT 桌面插件。
 
-**当前版本：`0.1.0-alpha.2`，项目骨架 / M0 技术验证中。**
-目前提供一个真实注册的只读工具 `sapper_status`、读取已有项目目标的
-`agent/pre-step` 探针、以及插件自己的客户端插件卡片与 Sapper 设置页。
-尚未提供建图、事实写入、flag 记账或子代理编排，不适合当作完整解题插件使用。
-已通过 Windows DSH NEXT 安装器的隔离 profile 安装验证；桌面界面验收仍待完成。
+**当前版本 `0.1.0-alpha.3`：M0 已获用户验收，M1 存储与工具已实现。**
+目标运行时为 **DSH 0.2.1-rc.2**，Cordis 4.0.5 / Schemastery 3.18.5。
 
-`alpha.2` 的目标运行时是 **DSH 0.2.1-rc.2**。`alpha.1` 使用旧 SDK，已确认被
-该运行时拒绝安装。修复过程与发布检查要求见
-[版本兼容经验](docs/lessons-learned.md)。
+当前可初始化工作区事实图，读写事实/意图/长文档，记录和去重 flag，显式更新
+flag 状态，并通过 `sapper_status` 查看数量与完整性诊断。上下文仍只注入项目目标；
+完整 frontier、recall、KB 召回、子代理编排和图预览按 M2–M4 交付。
+M1 新包的桌面交互请按 [M1 验收指南](docs/m1-validation.md) 验证。
 
-## 范围
+## 工具
 
-- TypeScript 引擎；桌面用户无需 Python。
-- 工作区 `.sapper/` 是目标持久化格式，M1 用 Python golden store 核对兼容性。
-- DSH 管理模型、工具审批、会话与子代理。自动循环默认关闭。
-- 保留三层证据文档、frontier、recall、flag 台账与离线 KB。
-- 不移植 arena/bench、比赛平台提交、Docker 舰队、tmux 或模型密钥管理。
+| 工具 | 当前操作 |
+| --- | --- |
+| sapper_init | create / recover；初始化不覆盖已有文件，recover 重放待完成事务 |
+| sapper_status | 只读项目状态、节点数量、warnings 和 integrity |
+| sapper_fact | create / get / list；可在创建结果事实时原子结案 source_intent |
+| sapper_intent | create / get / list / claim / release / confirm / conclude |
+| sapper_doc | get / set；写入需提供最近读取的 expected_doc |
+| sapper_flag | record / list / update；本地记录与去重，不联网提交 |
 
-原始计划在 [docs/plan.html](docs/plan.html)；阶段和验收状态见
-[docs/progress.md](docs/progress.md)。
-GitHub 阶段跟踪：[issue #1](https://github.com/Luchutong/Sapper-DSH/issues/1)。
+普通写操作默认经 DSH 审批；意图确认、结案到 goal、flag 状态更新始终要求审批。
+关闭插件会注销全部六个工具并停止目标摘要注入。写入提交前还会检查启用状态、
+存储配置和取消信号。工具不会执行图中描述的命令。
 
-## 开发
+## 存储
 
-需要 Node.js 22 或更新版本，以及 pnpm 8.15.4。DSH peers 锁定为 NEXT
-`0.2.1-rc.2`；Cordis 为 `4.0.5`，Schemastery 为 `3.18.5`。
+工作区 `.sapper/` 使用与 Python 版兼容的 project / facts / intents / hints JSON。
+串行队列、TS 写者 LOCK、临时文件原子替换和可恢复事务保护多文件更新。
+flag 事实是权威记录，`flags/ledger.json` 是可重建索引。详细边界与格式见
+[存储说明](docs/m1-storage.md)。
 
-```sh
-corepack enable
-pnpm install --frozen-lockfile
-pnpm check
-pnpm check:compatibility
-pnpm pack --pack-destination dist
-```
+当前只开放 workspace 模式；global 和 autoInit 仍为预留配置。请显式调用
+`sapper_init` 建图；状态查询、页面打开和上下文探针不会自动创建项目。
+旧 M0 最小 project.json fixture 只能供目标摘要探针读取，写入前请在新测试目录
+初始化完整图。插件不会静默覆盖或补写旧测试文件。
 
-`check` 执行类型检查、测试、双端构建和产物契约检查。测试使用真实 Cordis
-与 DSH SDK、Loader、SettingsForms 和测试配置编辑器，不调用模型、不连接目标，
-不修改现有 DSH profile。CI 覆盖 Ubuntu / Windows、Node 22 / 24。
-`check:compatibility` 使用 DSH 官方安装检查器，打包时也会自动执行；准确的
-SDK peers 与测试依赖必须一致，仅声明已经适配的运行时版本。
+## 安装与开发
 
-## 开发包安装
-
-下面是 **M0 手工验收步骤，尚未在 Windows DSH NEXT 中完成验证**。
-先在 DSH NEXT 应用菜单选择“打开 DSH 终端 / Open DSH Terminal”，确认欢迎信息
-显示正常环境、`Profile: desktop`。这个终端提供桌面应用专用的 dsh 命令；通用
-CLI 会拒绝管理保留的 desktop profile，WSL 终端也不是 Windows 桌面终端。
+在 DSH NEXT 菜单“打开 DSH 终端”，执行后重启应用：
 
 ```powershell
-# 在 DSH NEXT 打开的终端内执行，换成安装包的 Windows 路径
-dsh plugin add "C:\path\to\sapper-dsh-0.1.0-alpha.2.tgz"
+dsh plugin add "D:\BaiduSyncdisk\sapper移植\sapper-dsh-0.1.0-alpha.3.tgz"
 ```
 
-重启 DSH NEXT 后，在插件页面检查 Sapper 卡片，或进入“设置 → Sapper”切换启用字段。
-已有 `.sapper/project.json` 的工作区会注入带不可信声明的目标摘要；没有图时不会
-自动建图。`autoInit` 等字段目前只声明 schema，实际功能按路线图交付。
-禁用后不再注册 `sapper_status`，并清除本轮消息中本插件的旧 snapshot。
+开发需要 Node.js 22+、pnpm 8.15.4 和 Python 3（仅 golden 测试使用）：
 
-逐步操作见 [docs/validation-guide.md](docs/validation-guide.md)，
-完整检查表见 [docs/m0-validation.md](docs/m0-validation.md)。
-
-## 目录
-
-```text
-src/
-  index.ts                 Cordis 宿主入口
-  settings.ts              volatile Config schema 与默认值
-  dsh-adapter/             宿主/浏览器 API 边界
-  store/                   数据契约、路径边界、只读项目摘要探针
-  render/                  M0 目标摘要与字符预算
-  tools/                   sapper_status 与后续工具清单
-  orchestration/           M3 候选结果/复核接口预留
-  client/                  插件卡片、设置页与图预览占位
-resources/
-  kb/                      56 条原始 KB 条目
-  prompts/                 M3 三角色 prompt 草案，尚未注册
-  licenses/                上游许可
-scripts/                   lazy-CJS 包装与产物检查
-tests/                     SDK 集成、配置、预算与客户端测试
-docs/                      计划、架构、进度与验收
-cordis.patch.yml           profile loader 插入点
-lib/                       构建产物，未提交到 Git
+```sh
+corepack pnpm install --frozen-lockfile
+corepack pnpm check
+corepack pnpm check:compatibility
+corepack pnpm pack --pack-destination dist
 ```
 
-宿主输出 ESM；浏览器输出以 `window.__ModuleLoader__.load()` 注册的 lazy-CJS
-factory。客户端只引用宿主提供的 React 模块，通过 `configForms.get('sapper')`
-读写插件 Config；变更由 DSH 写入当前 profile 的 Cordis patch，
-没有 Node 文件系统或 shell 依赖。真实 SDK 核对记录在
-[docs/sdk-contract.md](docs/sdk-contract.md)。
+`check` 包含类型检查、56 项测试、双端构建、两个独立 Node 进程写入检查和产物
+检查。CI 覆盖 Ubuntu / Windows × Node 22 / 24。Python 参考代码仅用于测试，
+不进入安装包，桌面用户无需 Python。官方 DSH 兼容门禁在 CI 和打包时运行。
 
-## 后续工作
+## 工程与进度
 
-M0 Windows 加载验收 → M1 存储与写入工具 → M2 frontier 与召回 → M3 子代理验证循环
-→ M4 完整设置页 → M5 打包、迁移与干净环境验收。
+- `src/store/`：校验、路径、队列、原子 IO、事务与图操作。
+- `src/tools/`：六个工具、参数/返回值、写入分类。
+- `src/dsh-adapter/`：DSH 生命周期、审批和消息来源边界。
+- `src/client/`：插件卡片、Sapper 启用字段，完整表单与图预览待 M4。
+- `src/render/`：有预算和不可信数据声明的目标摘要，frontier 待 M2。
+- `src/orchestration/`：M3 接口预留。
+- `resources/`：56 条原始 KB、三个角色 prompt 草案、上游许可；尚未注册召回与调度。
+- `tests/reference/`：固定 revision/哈希的上游 Python Store 快照，仅用于兼容测试。
 
-项目采用 MIT 许可。知识库来源与上游许可见
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+[项目进度](docs/progress.md) · [架构](docs/architecture.md) ·
+[SDK 契约](docs/sdk-contract.md) · [兼容事故经验](docs/lessons-learned.md) ·
+[原计划快照](docs/plan.html) · [GitHub 阶段跟踪](https://github.com/Luchutong/Sapper-DSH/issues/1)
+
+项目采用 MIT 许可，上游来源见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

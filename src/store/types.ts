@@ -1,9 +1,9 @@
-/** Persistence contracts for M1; no graph writer is shipped in this scaffold. */
+/** JSON contracts shared with sapper-v2's Python Store. Unknown fields survive edits. */
 export type FactKind = 'host' | 'service' | 'cred' | 'vuln' | 'loot' | 'flag' | 'note'
 
 export interface Fact {
   id: string
-  title?: string
+  title?: string | null
   description: string
   doc?: string | null
   kind?: FactKind | null
@@ -17,7 +17,7 @@ export interface Intent {
   id: string
   from: string[]
   to: string | null
-  title?: string
+  title?: string | null
   description: string
   doc?: string | null
   status: 'open' | 'claimed' | 'done' | 'complete'
@@ -27,6 +27,7 @@ export interface Intent {
   concluded_at: string | null
   created_at: string
   creator: string
+  [key: string]: unknown
 }
 
 export interface Project {
@@ -36,6 +37,8 @@ export interface Project {
   status: 'active' | 'completed'
   created_at: string
   counters: Record<'fact' | 'intent' | 'hint' | 'run', number>
+  completed_at?: string
+  [key: string]: unknown
 }
 
 export interface Hint {
@@ -50,6 +53,8 @@ export interface GraphSnapshot {
   facts: Fact[]
   intents: Intent[]
   hints: Hint[]
+  warnings: string[]
+  integrity: string[]
 }
 
 export interface StoreReader {

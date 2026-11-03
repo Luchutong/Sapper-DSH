@@ -1,5 +1,10 @@
 import assert from 'node:assert/strict'
-import { readFile, readdir } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
+import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
 import vm from 'node:vm'
 
@@ -17,6 +22,25 @@ for (const file of ['lib/index.js', 'lib/index.d.ts', 'lib/client.js', 'LICENSE'
 const host = await import(new URL('lib/index.js', root))
 assert.equal(typeof host.apply, 'function')
 assert.ok(host.inject.includes('tools'))
+assert.equal(typeof host.GraphStore, 'function')
+
+// Exercise the packaged writer with independent Node processes, not just shared queues.
+const cwd = await mkdtemp(path.join(os.tmpdir(), 'sapper processes 中文 '))
+try {
+  const storeRoot = path.join(cwd, '.sapper')
+  const store = new host.GraphStore(storeRoot, cwd)
+  await store.init('package check', 'cross-process writes')
+  const run = promisify(execFile)
+  await Promise.all(['writer-a', 'writer-b'].map(worker => run(process.execPath, [
+    fileURLToPath(new URL('store-process-worker.mjs', import.meta.url)),
+    new URL('lib/index.js', root).href, cwd, storeRoot, worker,
+  ], { timeout: 30000 })))
+  const graph = await store.read()
+  assert.equal(graph.project.counters.fact, 8)
+  assert.equal(graph.facts.length, 9)
+  assert.deepEqual(graph.integrity, [])
+  assert.deepEqual(graph.warnings, [])
+} finally { await rm(cwd, { recursive: true, force: true }) }
 
 const require = createRequire(import.meta.url)
 const allowed = new Set(['react', 'react/jsx-runtime'])
@@ -51,4 +75,4 @@ assert.equal(writes, 0, 'opening the client must not write settings')
 assert.deepEqual(registrations.map(row => row.name), ['plugins.item', 'settings.section'])
 const kb = (await readdir(new URL('resources/kb/', root))).filter(file => file.endsWith('.json'))
 assert.equal(kb.length, 56)
-console.log('Package checks passed: host import, lazy-CJS client, settings slots, no eager writes, 56 KB resources.')
+console.log('Package checks passed: host import, two-process store writes, lazy-CJS client, settings slots, no eager writes, 56 KB resources.')

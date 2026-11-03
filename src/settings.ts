@@ -8,14 +8,14 @@ function group<T extends Record<string, Schema>>(fields: T) {
   return schema.default(schema({}))
 }
 
-/** This schema is also the single source of defaults for the settings namespace. */
+/** Single source of defaults for the plugin Config form. */
 const PlainConfig = group({
   enabled: Schema.boolean().default(true).description('启用 Sapper'),
   store: group({
     mode: Schema.union(['workspace', 'global']).default('workspace'),
     dir: Schema.string().default('.sapper'),
   }),
-  autoInit: Schema.boolean().default(true).description('预留：M1 实现自动建图'),
+  autoInit: Schema.boolean().default(true).description('预留：当前请显式调用 sapper_init，状态查询与上下文注入不自动写入'),
   goal: Schema.string().default('拿到 flag'),
   context: group({
     inject: Schema.boolean().default(true),

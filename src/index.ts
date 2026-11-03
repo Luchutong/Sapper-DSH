@@ -5,6 +5,7 @@ import type { RuntimeConfig } from './settings.js'
 import { registerRuntime } from './dsh-adapter/host.js'
 
 export { Config }
+export { GraphStore } from './store/graph.js'
 export const name = 'sapper-dsh'
 export const inject = ['tools', 'agents']
 

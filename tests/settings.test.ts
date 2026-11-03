@@ -29,6 +29,6 @@ describe('settings and workspace boundary', () => {
       expect(() => resolveStorePath(cwd, resolveConfig({ store: { dir } }))).toThrow()
     }
     expect(resolveStorePath(undefined, resolveConfig())).toBeUndefined()
-    expect(() => resolveStorePath(cwd, resolveConfig({ store: { mode: 'global' } }))).toThrow(/M1/)
+    expect(() => resolveStorePath(cwd, resolveConfig({ store: { mode: 'global' } }))).toThrow(/尚未开放/)
   })
 })

@@ -1,6 +1,6 @@
 # DSH SDK 核对记录
 
-日期：2026-11-03。当前目标：DSH **0.2.1-rc.2**，插件 **0.1.0-alpha.2**。
+日期：2026-11-03。当前目标：DSH **0.2.1-rc.2**，插件 **0.1.0-alpha.3**。
 
 版本依据是当前 Windows 安装版 app.asar 内实际加载的包元数据，并与 npm 同版本
 包的实现和类型声明对照。旧 ~/.cache/pkg 中的 0.1.5-rc.1 不能代表当前桌面。
@@ -12,6 +12,8 @@ Cordis 为 4.0.5，Schemastery 为 3.18.5。原计划 HTML 保留为历史快照
 | 安装兼容性 | dsh-app-boot 的 evaluatePluginCompatibility | 空豁免表检查；CI 和 prepack 必须通过 |
 | Cordis | 4.0.5 的 apply / inject / effect | 宿主 ESM；工具和 Agent 服务为必需，Settings 为可选 |
 | 工具 | dsh-tools 的真实 defineTool 声明 | 参数 schema、输出 schema/render、execute |
+| 写入审批 | tools/pre-execute / PreToolDecision.ask | 保留其他策略决定，缺失审批服务时由运行时拒绝 |
+| 单调守卫 | ctx.tools.guard | 防止等待审批期间关闭插件后继续写入；提交前另有 live config 检查 |
 | pre-step | dsh-agent 的 runtime-types | payload 含 agent/messages/turn/step/signal，next 返回 enter/reject |
 | 消息来源 | dsh-llm 的 MessageSourceMap | 扩展 producer kind=sapper-dsh，form=snapshot，带 sections |
 | 配置 | Schemastery volatile + Cordis Loader | Config.volatile()；每次从 config.get() 读取当前值 |
@@ -38,6 +40,6 @@ Cordis 为 4.0.5，Schemastery 为 3.18.5。原计划 HTML 保留为历史快照
 - 打包检查验证 host import、lazy-CJS、当前客户端插槽与 KB 资源。
 - Windows DSH NEXT 自带 desktop-cli 已在独立 DSH_HOME / 临时 profile 中安装
   alpha.2 成功（退出码 0，dependencies 与 bundles 已登记，无版本豁免）。
-- 当前仍需 desktop profile 的激活、WebView 加载、字段持久化及停用验收。
-  兼容门禁通过、Node CI 通过和桌面交互通过是不同的证据。
+- M0 desktop 验收已获用户确认。alpha.3 新增六工具、写审批、存储与恢复，
+  已通过真实 ToolRuntime 的自动测试，新版本桌面交互按 M1 指南另行验收。
 - subagent/workflow、写工具审批和全局数据目录仍属于后续阶段。

@@ -1,7 +1,7 @@
 {
   "name": "sapper-dsh",
-  "version": "0.1.0-alpha.2",
-  "description": "Workspace memory and verified task planning for DSH NEXT. Initial plugin scaffold.",
+  "version": "0.1.0-alpha.3",
+  "description": "Workspace fact graph storage, evidence documents and local flag tracking for DSH NEXT.",
   "license": "MIT",
   "type": "module",
   "repository": {

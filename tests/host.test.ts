@@ -42,6 +42,7 @@ class ToolsProbe extends Service {
       return () => { this.definitions.delete(tool.name) }
     })
   }
+  guard() { return this.ctx.effect(() => () => {}) }
 }
 
 const cleanup: Array<() => Promise<unknown>> = []
@@ -85,13 +86,13 @@ async function preStep(ctx: Context, cwd: string, messages = [createUserMessage(
   return decision
 }
 
-describe('host M0 integration', () => {
+describe('host lifecycle integration', () => {
   it('loads using real Cordis, reads an absent graph without creating files or settings', async () => {
     const { tools, editor, cwd } = await setup()
-    expect([...tools.definitions.keys()]).toEqual(['sapper_status'])
+    expect([...tools.definitions.keys()]).toEqual(['sapper_status', 'sapper_init', 'sapper_fact', 'sapper_intent', 'sapper_doc', 'sapper_flag'])
     const tool = tools.definitions.get('sapper_status')!
     const value = await tool.execute({}, { agent: { session: { header: { cwd } } }, signal: new AbortController().signal } as never)
-    expect(value).toMatchObject({ state: 'uninitialized', milestone: 'M0-scaffold' })
+    expect(value).toMatchObject({ state: 'uninitialized', milestone: 'M1-storage' })
     expect(await readdir(cwd)).toEqual([])
     expect(editor.writes).toBe(0)
   })
@@ -111,7 +112,7 @@ describe('host M0 integration', () => {
     expect(JSON.parse(await readFile(editor.documentPath, 'utf8'))).toMatchObject({ enabled: false })
     expect((await preStep(ctx, cwd, first.messages)).messages).toHaveLength(1)
     await settings.update('sapper', { enabled: true })
-    expect(tools.definitions.size).toBe(1)
+    expect(tools.definitions.size).toBe(6)
     expect(await readFile(path.join(cwd, '.sapper/project.json'), 'utf8')).toBe(content)
     await fiber.dispose()
     expect(tools.definitions.size).toBe(0)

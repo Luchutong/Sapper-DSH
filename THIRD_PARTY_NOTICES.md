@@ -6,8 +6,15 @@
 is included at `resources/licenses/sapper-v2-MIT.txt`.
 
 The TypeScript implementation and draft prompts in this repository are new.
-The upstream Python implementation is a behavioral reference for future M1
-golden tests; it is not a runtime dependency or a bundled Python bridge.
+`tests/reference/sapper_store.py` is an unchanged prefix of the upstream
+`lib/sapper.py` at the same revision, through `validate_graph`. It is the
+behavioral reference for Python/TypeScript golden round-trip tests. Provenance
+and SHA256 are recorded in `tests/reference/provenance.json`, with the MIT
+license also copied beside the snapshot. The test runner supplies a Windows
+locking adapter because upstream imports POSIX `fcntl`.
+
+The reference and runner are excluded from the npm package. Python is needed
+only to run development compatibility tests; desktop users do not need it.
 
 DSH SDK packages, React and build dependencies retain their respective licenses.
 They are either host-provided peers or development dependencies and are not

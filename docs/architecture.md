@@ -1,64 +1,70 @@
 # 架构与边界
 
-该仓库按 `docs/plan.html` 的五项决定搭建，并按 DSH 0.2.1-rc.2 调整 API。
-原计划保留为历史快照；当前交付是 M0 骨架，接口预留不表示
-对应功能已实现。
+当前交付为 0.1.0-alpha.3 / M1，目标 DSH 0.2.1-rc.2。M0 已获用户验收。
+原计划保留在 docs/plan.html，SDK 和实现细节以当前代码与 sdk-contract.md 为准。
 
 ```text
-DSH agent loop                   WebView
-  │ agent/pre-step                  │ plugins.item / settings.section
-  │ tools                           │ configForms.get('sapper')
-  ▼                                 ▼
-src/dsh-adapter/host.ts           src/client/
-  │                                 │
-  ├── src/tools/status.ts            └── DSH settings transport
-  ├── src/render/context.ts                    │
-  └── src/store/project.ts                     ▼
-             │                        Loader entry Config (volatile)
-             ▼
-  workspace/.sapper/project.json
+DSH agent loop                          WebView
+  agent/pre-step                          plugins.item / settings.section
+  tools/pre-execute → approval            configForms.get('sapper')
+  tools.guard                             Config.set / subscribe
+         │                                      │
+  src/dsh-adapter/host.ts                src/client/
+         │                                      │
+  src/tools/ 六个工具                      DSH Config transport
+         │                                      │
+  GraphStore → per-root queue              Loader volatile Config
+         │
+  LOCK → 校验 → journal → atomic rename
+         │
+  workspace/.sapper/
 ```
 
-## 目前实现
+## 宿主与工具
 
-- Cordis `apply()` 声明 `tools / agents` 依赖，直接读取 Loader 提供的 volatile Config。
-  `settings` 是可选服务；可用时声明自带页面的策略，表单按 id=sapper 的条目派生。
-- `sapper_status` 用真实 `defineTool()` 提供有 schema 的只读输出；已启用时注册，
-  设置关闭时注销。状态读取不创建图、不初始化 settings 文件。
-- `agent/pre-step` 先调用下游 `next()`，保留拒绝和取消结果。只在有工作区、有
-  `project.json`、有正常入场消息时增加目标摘要；清除同插件旧 snapshot。
-- 上下文固定包含不可信声明；超预算时整段省略目标，不截断单条数据。
-- 客户端只读宿主设置镜像，用户主动切换后才调用 `scope.set('enabled', value)`。
-  DSH 0.2 返回 boolean；false 会显示保存失败，模型凭据仍由宿主管理。
-- 设置持久化由 DSH 配置编辑器写入 profile 的 Cordis patch。通过
-  `loader/volatile-update` 更新工具注册，不再创建独立 settings.yaml section。
-- 消息来源为 producer-owned `kind: sapper-dsh`，保留 snapshot/sections 元数据。
+Cordis apply 声明 tools / agents 依赖，读取 Loader 提供的 volatile Config。
+Settings 为可选服务；有服务时声明自带客户端页面、auto=false，由 id=sapper
+条目派生表单。设置变更由 DSH 配置编辑器写入 profile Cordis patch。
 
-## 后续模块
+启用时注册 status / init / fact / intent / doc / flag 六个工具。写操作默认走
+DSH ask 审批；关掉普通写入询问后，confirm、结案到 goal、flag update 仍需审批。
+策略链中的已有拒绝保留。guard 和写入前检查阻止审批等待/队列期间关闭插件后的写入。
+工具分类只把只读操作标记为可并发；内部存储仍有共享队列。
 
-| 目录 | 当前内容 | 后续职责 |
+Store 保留 Python 的事实、意图、文档与 hint 布局。flag 事实为权威记录，ledger
+按需重建。多文件提交通过可重放日志恢复；ID 分配、反向引用和项目终态属于同一
+事务。完整格式、崩溃与跨进程边界见 [m1-storage.md](m1-storage.md)。
+
+## 上下文与客户端
+
+agent/pre-step 先执行 next，保留拒绝/取消。只在已选择工作区、存在项目目标、
+有正常入场消息时附加带预算和不可信声明的目标摘要。每轮移除旧的 Sapper snapshot；
+producer-owned source.kind=sapper-dsh，form=snapshot。M1 仍只注入目标，M2 才提供
+完整 frontier 和历史/召回。探针检查锁和事务状态，不进行自动初始化或恢复写入。
+
+客户端通过 configForms 读取宿主镜像，只有用户切换后才调用 set。false 显示拒绝
+保存；仅打开页面不写默认值。完整表单和图预览为 M4，当前 GraphPreview 是进度提示。
+
+## 模块状态
+
+| 模块 | 当前职责 | 后续 |
 | --- | --- | --- |
-| `store/` | 类型、workspace 路径解析、只读项目摘要 | M1 节点校验、单写者队列、原子替换、兼容与迁移 |
-| `render/` | 有预算的目标摘要 | M2 frontier、历史和中英文召回 |
-| `tools/` | status + 未注册的工具清单 | M1/M2 写入、文档、flag、KB 与 slash commands |
-| `orchestration/` | candidate / verification 接口 | M3 DSH subagent、审批、上限与失败回退 |
-| `client/` | 插件卡片、设置页、一个启用字段 | M4 五组配置、诊断 RPC、只读图预览与冲突 UI |
+| store | 校验、workspace 路径、队列、锁、原子 IO、恢复、图与 flag 操作 | global 数据目录策略、显式迁移 |
+| tools | 六个 M1 工具与读写分类，按需展开 doc | M2 recall / KB，M3 dispatch |
+| render | 有来源/预算的只读目标摘要 | M2 frontier、历史与中英文召回 |
+| orchestration | 接口预留 | M3 DSH 子代理、审批、预算、candidate/verify 流程 |
+| client | 插件卡片、启用字段、失败提示 | M4 完整配置、诊断与只读图预览 |
 
-M0 只支持工作区内的存储子目录。`global` 模式、自动建图、完整 frontier、自动
-flag 捕获等配置已声明但未执行。存储读取目前只校验 project 的 goal/status，
-不声称完成整个 sapper-v2 数据模型验证。
+workspace 是当前唯一支持的存储模式。global / autoInit 仍为预留配置。
+M1 不提供自动探测、网络提交、子代理执行或证据自动验证。
 
-M3 的必要约束：explore 只产出带证据的 candidate，verify 通过后才升级为
-confirmed；失败保留开放 intent 并记录 hint。此状态扩展与 Python 兼容性的
-处理方案必须在 M1/M3 中明确，不能直接把 candidate 写成普通 fact。
+## 构建与验证
 
-## 构建边界
+宿主为 ESM，SDK 保持 external，避免复制 Cordis 实例。浏览器为
+window.__ModuleLoader__.load 注册的 lazy-CJS factory，只引用宿主共享 React。
+dsh.client.inject 声明客户端依赖，exports['./client'] 指向客户端产物。
 
-宿主的 `@deepseek-ai/*` 包保持 external，避免复制 Cordis 服务实例。
-浏览器只 external React 与 JSX runtime，它们由 DSH 静态模块表提供。
-`dsh.client.inject` 声明客户端运行前需要加载的插件，顶层 `exports['./client']`
-指向浏览器 artifact。构建后的 VM 检查验证注册是惰性的，并限制浏览器 require
-列表，防止 Node-only 模块意外进入客户端。
-
-安装兼容性使用 `dsh-app-boot` 官方检查器。源代码测试与打包检查都拒绝旧 SDK
-声明，SDK peer 要求与开发依赖保持一致。只通过 Node CI 不能替代桌面安装验收。
+验证包括真实 Loader/SettingsForms、真实 ToolRuntime 审批管线、存储故障与并发、
+固定哈希 Python Store 的往返、产物 VM 检查，以及两个独立 Node 写者。Python
+仅存在于测试代码，桌面插件不依赖 Python。安装兼容性使用官方检查器、空豁免表，
+CI 和打包阶段均执行；各版本的桌面验收分别记录。

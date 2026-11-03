@@ -1,11 +1,11 @@
 import path from 'node:path'
 import type { Config } from '../settings.js'
 
-/** M0 resolves workspace paths only. Global mode needs DSH's data-directory API. */
+/** Workspace-local graphs; global storage remains reserved. */
 export function resolveStorePath(cwd: string | undefined, config: Config): string | undefined {
   if (!cwd || !path.isAbsolute(cwd)) return undefined
   if (config.store.mode !== 'workspace') {
-    throw new Error('全局存储将在 M1 接入 DSH 数据目录；当前只支持 workspace 模式')
+    throw new Error('global 存储尚未开放；当前只支持 workspace 模式')
   }
   const workspace = path.resolve(cwd)
   const resolved = path.resolve(workspace, config.store.dir)

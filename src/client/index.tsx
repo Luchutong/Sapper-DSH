@@ -33,7 +33,7 @@ export function SapperSettings({ scope }: { scope: BrowserSettingsScope }) {
 
   return <section aria-label="Sapper 设置" style={{ padding: 16, maxWidth: 720, overflowWrap: 'anywhere', color: 'inherit' }}>
     <h3>Sapper <small>{VERSION}</small></h3>
-    <p>工作区记忆与任务规划插件 · M0 骨架</p>
+    <p>工作区事实图与任务规划</p>
     <label>
       <input type="checkbox" checked={enabled}
         disabled={state.status !== 'ready' || !state.writable || pending}
@@ -41,7 +41,7 @@ export function SapperSettings({ scope }: { scope: BrowserSettingsScope }) {
       启用 Sapper
     </label>
     <p role="status">{state.status === 'ready'
-      ? (enabled ? '已启用：提供只读状态探针与目标摘要注入。' : '已关闭：工具和上下文注入均不生效。')
+      ? (enabled ? '已启用：提供事实图存储工具与目标摘要。' : '已关闭：工具和上下文注入均不生效。')
       : '正在等待 DSH 的 sapper 配置表单；不会自动写入默认值。'}</p>
     {error && <p role="alert">{error}</p>}
     <details>
@@ -55,7 +55,7 @@ export function SapperSettings({ scope }: { scope: BrowserSettingsScope }) {
 export function apply(ctx: BrowserContext): void {
   const scope = ctx.configForms.get('sapper')
   const Panel = ({ view }: { view?: string }) => view === 'summary'
-    ? <p>工作区记忆与任务规划插件 · M0 骨架</p>
+    ? <p>工作区事实图与任务规划</p>
     : <SapperSettings scope={scope} />
   ctx.effect(() => ctx.configForms.whileServed(['sapper'], () => {
     const offCard = ctx.slots.inject('plugins.item', () => ctx.slots.register({
