@@ -3,15 +3,15 @@
 将 [sapper-v2](https://github.com/N1nEmAn/sapper-v2) 的事实图与
 `reason → explore → verify` 循环移植为 DSH NEXT 桌面插件。
 
-**当前版本 `0.1.0-alpha.10`：M0/M1 已验收，M2 获用户反馈通过；本版修复 M3 证据转义问题，加入任务面板和普通工作区自动建图，并修复首次命令启动锁住输入框的问题。**
+**当前版本 `0.1.0-alpha.11`：修复工作区会话列表与任务入口，加入进度时间线、事实图、主会话结果卡片和按证据进展自动延长的预算。**
 目标运行时为 **DSH 0.2.1-rc.2**，Cordis 4.0.5 / Schemastery 3.18.5。
 
 当前可维护工作区事实图、意图、长文档和本地 flag；每轮注入有预算的 frontier、
 历史与相关证据指针，支持中英文召回、56 条离线 KB 及 `/sapper` 只读命令。
 完全权限下 Sapper 自身的确认门自动通过，仍保留工作区、归属和数据完整性约束。
-直接在 DSH 打开任意已有目录的对话，展开输入框附近的 **Sapper 任务**，输入目标后点击
+直接在 DSH 打开任意已有目录的对话，点击输入框左下角、权限选择附近的 **Sapper 任务** 按钮打开独立窗口，输入目标后点击
 **发起任务**；也可进入插件设置页的 Sapper 面板。无需新建专用工作区、手工 init 或构造事实。
-面板提供进度、任务历史、继续、取消和失败原因。见 [任务面板](docs/task-panel.md)。
+面板提供进度时间线、事实图、结果与候选、任务历史、继续与取消。每轮结束会自动将结果卡片写回发起任务的主会话；`/sapper result` 可补发历史结果。见 [任务面板](docs/task-panel.md)。
 
 ## 工具
 
@@ -56,8 +56,10 @@ requires_confirmation 或设置为 always，也不额外 ask；确认来源记�
 和工具权限均通过当前 DSH 接口。候选与失败记录保存在 `.sapper/runs/`，失败意图
 重新开放并留下 hint。模型文字声明不能代替本次真实工具输出。
 
-预算默认最多推进 8 条意图、6 次探索，同一候选最多复核 2 次；并发 2，每子会话
-15 分钟、12 步，每次请求最多输出 8192 token。自动执行由显式启动触发；
+预算默认最多推进 24 条意图、20 次探索，同一候选最多复核 2 次，并发 2。子代理初始
+24 步，explore/verify 在持续取得新外部工具证据时自动延长至最多 128 步，reason 使用初始步数；
+保留最后两步提交结构化结论。每子会话 45 分钟、整轮 90 分钟，每次请求最多输出
+16384 token。设置页可调整预算或选择固定步数；旧显式配置保留。自动执行由显式启动触发；
 `orchestration.auto` 的普通聊天自动触发仍预留。详见 [M3 契约](docs/m3-orchestration.md)。
 
 ## 存储
@@ -78,7 +80,7 @@ flag 事实是权威记录，`flags/ledger.json` 是可重建索引。详细边�
 在 DSH NEXT 菜单“打开 DSH 终端”，执行后重启应用：
 
 ```powershell
-dsh plugin add "D:\BaiduSyncdisk\sapper移植\sapper-dsh-0.1.0-alpha.10.tgz"
+dsh plugin add "D:\BaiduSyncdisk\sapper移植\sapper-dsh-0.1.0-alpha.11.tgz"
 ```
 
 开发需要 Node.js 22+、pnpm 8.15.4 和 Python 3（仅 golden 测试使用）：
@@ -90,7 +92,7 @@ corepack pnpm check:compatibility
 corepack pnpm pack --pack-destination dist
 ```
 
-`check` 包含类型检查、124 项测试、双端构建、两个独立 Node 进程写入检查和产物
+`check` 包含类型检查、自动化测试、双端构建、两个独立 Node 进程写入检查和产物
 检查。CI 覆盖 Ubuntu / Windows × Node 22 / 24。Python 参考代码仅用于测试，
 不进入安装包，桌面用户无需 Python。官方 DSH 兼容门禁在 CI 和打包时运行。
 
@@ -99,7 +101,7 @@ corepack pnpm pack --pack-destination dist
 - `src/store/`：校验、路径、队列、原子 IO、事务与图操作。
 - `src/tools/`：九个工具、参数/返回值、写入分类。
 - `src/dsh-adapter/`：DSH 生命周期、审批、slash commands 和消息来源边界。
-- `src/client/`：插件卡片、Sapper 启用与图写入策略字段，完整表单与图预览待 M4。
+- `src/client/`：输入框任务入口、独立窗口、进度时间线、事实图、主会话结果卡片与预算设置。
 - `src/render/`：frontier、历史、状态和共用预算的上下文；不自动展开 doc。
 - `src/recall/`、`src/kb/`：中英文子串/词边界/bigram 排序，离线 KB 和工作区自定义覆盖。
 - `src/orchestration/`：reason/explore/verify、证据门、预算、取消与子代理回收。

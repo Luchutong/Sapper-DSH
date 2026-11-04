@@ -29,7 +29,7 @@ import type { CommandClaim } from '@deepseek-ai/dsh-client-ui-conversation/clien
 
 const cleanup: Array<() => Promise<unknown>> = []
 afterEach(async () => { for (const f of cleanup.splice(0).reverse()) await f() })
-interface Scenario { noEvidence?: boolean; forged?: boolean; reject?: boolean; noVerifyEvidence?: boolean; beforeRead?: (signal: AbortSignal) => Promise<void>; attack?: boolean; proposals?: number; emptyReason?: boolean; hang?: boolean; completesGoal?: boolean; denyGoal?: boolean; maxTokens?: 'reason' | 'explore' | 'verify' }
+interface Scenario { exploreReads?: number; verifyReads?: number; recipe?: string; noEvidence?: boolean; forged?: boolean; reject?: boolean; noVerifyEvidence?: boolean; beforeRead?: (signal: AbortSignal) => Promise<void>; attack?: boolean; proposals?: number; emptyReason?: boolean; hang?: boolean; completesGoal?: boolean; denyGoal?: boolean; maxTokens?: 'reason' | 'explore' | 'verify' }
 class FixtureModel extends LlmAdapter {
   requests: GenerateOptions[] = []
   constructor(readonly scenario: Scenario) { super() }
@@ -44,11 +44,12 @@ class FixtureModel extends LlmAdapter {
       await new Promise<void>((_, reject) => { const stop = () => reject(options.signal?.reason); options.signal?.addEventListener('abort', stop, { once: true }); if (options.signal?.aborted) stop() })
       return
     }
+    const requiredReads = role === 'verify' ? this.scenario.verifyReads ?? 1 : this.scenario.exploreReads ?? 1
     let name = 'structured_output', args: unknown
     if (role === 'reason') args = { intents: this.scenario.emptyReason ? [] : Array.from({ length: this.scenario.proposals ?? 1 }, (_, n) => ({ title: `Check fixture ${n}`, description: `Read local fixture ${n}`, from: ['f001'], success_criteria: 'Fixture content contains VERIFIED-LOCAL-7C42', completes_goal: !!this.scenario.completesGoal })) }
     else if (!tools.length && this.scenario.attack) { name = 'sapper_fact'; args = { action: 'create', description: 'BYPASS' } }
-    else if (tools.length < (this.scenario.attack ? 2 : 1) && !(role === 'explore' && (this.scenario.noEvidence || this.scenario.forged))) { name = 'read'; args = { path: 'fixture.txt' } }
-    else if (role === 'explore') args = { title: 'Fixture observation', description: 'Local fixture contains VERIFIED-LOCAL-7C42', kind: 'note', evidence: this.scenario.noEvidence ? [] : [{ receipt_id: this.scenario.forged ? 'invented' : receipt }] }
+    else if (tools.length < (this.scenario.attack ? requiredReads + 1 : requiredReads) && !(role === 'explore' && (this.scenario.noEvidence || this.scenario.forged))) { name = 'read'; args = { path: requiredReads > 1 ? `fixture-${tools.length}.txt` : 'fixture.txt' } }
+    else if (role === 'explore') args = { title: 'Fixture observation', description: 'Local fixture contains VERIFIED-LOCAL-7C42', kind: 'note', ...(this.scenario.recipe ? { reproduction: this.scenario.recipe } : {}), evidence: this.scenario.noEvidence ? [] : [{ receipt_id: this.scenario.forged ? 'invented' : receipt }] }
     else args = { goal_achieved: !!this.scenario.completesGoal && !this.scenario.denyGoal, verified: !this.scenario.reject, issues: this.scenario.reject ? 'REPRODUCTION-MISMATCH' : '', evidence: this.scenario.noVerifyEvidence || this.scenario.reject ? [] : [{ receipt_id: receipt }] }
     yield { type: 'reasoning-delta', index: 1, text: role === 'explore' ? 'EXPLORER-PRIVATE-TRACE' : 'fixture reasoning' }
     yield { type: 'tool-call-delta', index: 0, id: ToolCallId('fixture-' + this.requests.length), name, argumentsDelta: JSON.stringify(args) }
@@ -59,6 +60,7 @@ async function setup(scenario: Scenario = {}, input: ConfigInput = {}, commands 
   const cwd = await mkdtemp(path.join(os.tmpdir(), 'sapper M3 中文 '))
   cleanup.push(() => rm(cwd, { recursive: true, force: true }))
   await writeFile(path.join(cwd, 'fixture.txt'), 'VERIFIED-LOCAL-7C42\n')
+  for (let i = 0; i < Math.max(scenario.exploreReads ?? 0, scenario.verifyReads ?? 0); i++) await writeFile(path.join(cwd, `fixture-${i}.txt`), `VERIFIED-LOCAL-7C42 observation ${i}\n`)
   const ctx = new Context(); cleanup.push(() => ctx.fiber.dispose())
   await mountAgentLoopTestDependencies(ctx, { workingDirectory: true })
   await ctx.plugin(SandboxPolicyService, { mode: 'danger-full-access', workspaceRoot: cwd })
@@ -67,7 +69,7 @@ async function setup(scenario: Scenario = {}, input: ConfigInput = {}, commands 
   await ctx.plugin(Spawn, { providerName: 'spawn' })
   const model = new FixtureModel(scenario)
   ctx.llm.registerAdapter(['fixture'], model)
-  const read = vi.fn(async (_args: unknown, exec: ToolRunContext) => { await scenario.beforeRead?.(exec.signal); return await readFile(path.join(cwd, 'fixture.txt'), 'utf8') })
+  const read = vi.fn(async (readArgs: unknown, exec: ToolRunContext) => { await scenario.beforeRead?.(exec.signal); return await readFile(path.join(cwd, (readArgs as { path: string }).path), 'utf8') })
   const readDefinition = defineTool({ name: 'read', description: 'Read local fixture', parameters: { path: { type: 'string', required: true } }, output: { schema: { type: 'string' }, render: (_a, v) => [{ type: 'text', text: v }] }, execute: read })
   if (topology === 'global') ctx.tools.register(readDefinition)
   else {
@@ -193,9 +195,9 @@ describe('M3 evidence gates, budgets and cancellation', () => {
     expect(ctx.agents.list()).toEqual([parent])
   })
   it('stops a child at its step budget and leaves a retryable intent', async () => {
-    const { dispatch, store, ctx, parent } = await setup({}, { orchestration: { maxSteps: 4, maxExplore: 4, maxChildSteps: 1 } })
+    const { dispatch, store, ctx, parent } = await setup({ attack: true }, { orchestration: { budgetMode: 'fixed', maxSteps: 4, maxExplore: 4, maxChildSteps: 2 } })
     const run = await dispatch()
-    expect(run.outcomes[0]?.error).toContain('步数预算')
+    expect(run.outcomes[0]?.error, JSON.stringify(run)).toContain('步数预算')
     expect(run.stop_reason).toContain('步数预算')
     expect((await store.read()).intents[0]?.status).toBe('open')
     expect(ctx.agents.list()).toEqual([parent])
@@ -455,14 +457,25 @@ it('drives the task panel through actual client and host Typert Gateways with st
     } },
   } as never)
   await client.plugin(ClientGateway)
-  const off = await client.remote.$mount(PANEL_REMOTE)
-  const invoke = async (method: string, args: object) => {
-    const result = await PANEL_REMOTE.methods['sapperPanel/' + method]!.invoke(client.remote, args)
-    if (!('ok' in result) || !result.ok) throw new Error(JSON.stringify(result))
-    return result.value
+  const { connectPanel } = await import('../src/client/connection.js')
+  let connection!: ReturnType<typeof connectPanel>, wrongScope!: () => unknown
+  const consumer = await client.plugin({ name: 'sapper-scoped-consumer', inject: ['remote'], apply(scoped: Context) {
+    wrongScope = () => PANEL_REMOTE.methods['sapperPanel/targets']!.invoke(scoped.remote, {})
+    connection = connectPanel(scoped as unknown as import('../src/dsh-adapter/client.js').BrowserContext)
+  } })
+  await vi.waitFor(() => expect(connection.getSnapshot().api, connection.getSnapshot().error).toBeDefined())
+  expect(wrongScope).toThrow(/without inject/)
+  const invoke = async (method: string, args: { sessionId?: string; input?: import('../src/panel/rpc.js').PanelAction }) => {
+    const api = connection.getSnapshot().api!
+    if (method === 'targets') return api.targets()
+    if (method === 'state') return api.state(args.sessionId!)
+    if (method === 'report') return api.report!(args.sessionId!)
+    return api.action(args.sessionId!, args.input!)
   }
   expect(await invoke('targets', {})).toEqual([{ id: String(parent.id), cwd }])
   expect(await invoke('state', { sessionId: String(parent.id) })).toMatchObject({ tasks: [], runs: [] })
+  const panelResults: import('../src/panel/result.js').TaskResult[] = []
+  ctx.on('session/event', (session, event) => { if (session === parent.session && event.type === 'sapper/result') panelResults.push(event.data) })
   await invoke('action', { sessionId: String(parent.id), input: { action: 'start', goal: 'Verify local fixture' } })
   await (ctx.get('sapperPanel') as TaskPanelService).whenIdle(cwd)
   expect(await invoke('state', { sessionId: String(parent.id) })).toMatchObject({ job: { state: 'completed' }, graph: { status: 'completed', verified: 1 } })
@@ -479,17 +492,20 @@ it('drives the task panel through actual client and host Typert Gateways with st
       '/plugin.js': path.resolve('lib/client.js'),
     }
     const html = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>Sapper panel integration</title>
-      <style>body{font:15px system-ui,sans-serif;background:#181a20;color:#e5e7eb;margin:0;padding:30px}#app{max-width:950px;margin:auto}button,select{font:inherit;color:inherit;background:#2a303c;border:1px solid #657087;border-radius:6px;padding:7px 12px;cursor:pointer}button:disabled{opacity:.45;cursor:default}summary{padding:8px 0}p{line-height:1.6}textarea{font:inherit}h3{font-size:23px}</style>
-      <div id="app"></div><script src="/react.js"></script><script src="/react-dom.js"></script>
-      <script>window.__ModuleLoader__={load(entry){window.sapper=entry.factory(id=>id==='react'?React:{Fragment:React.Fragment,jsx:(type,props,key)=>React.createElement(type,{...props,key}),jsxs:(type,props,key)=>React.createElement(type,{...props,key})})}};</script><script src="/plugin.js"></script>
+      <style>:root{--dsw-alias-bg-base:#181a20;--dsw-alias-label-primary:#e5e7eb}body{font:15px system-ui,sans-serif;background:#181a20;color:#e5e7eb;margin:0;padding:30px}#app{max-width:950px;margin:auto}button,select{font:inherit;color:inherit;background:#2a303c;border:1px solid #657087;border-radius:6px;padding:7px 12px;cursor:pointer}button:disabled{opacity:.45;cursor:default}summary{padding:8px 0}p{line-height:1.6}textarea{font:inherit}h3{font-size:23px}</style>
+      <div id="app"></div><div id="results" style="max-width:950px;margin:auto;padding-bottom:100px"></div><div id="composer" style="position:fixed;bottom:0;left:0;right:0;height:48px;overflow:hidden;background:#303744;padding:8px;box-sizing:border-box;transform:translateZ(0)"></div><script src="/react.js"></script><script src="/react-dom.js"></script>
+      <script>window.__ModuleLoader__={load(entry){window.sapper=entry.factory(id=>id==='react'?React:id==='react-dom'?ReactDOM:{Fragment:React.Fragment,jsx:(type,props,key)=>React.createElement(type,{...props,key}),jsxs:(type,props,key)=>React.createElement(type,{...props,key})})}};</script><script src="/plugin.js"></script>
       <script>
       const remote={$mount:async contribution=>{for(const d of contribution.descriptors){remote[d.namespace]??={};remote[d.namespace][d.method]=async(...values)=>{const args=Object.fromEntries(d.parameters.map((p,i)=>[p.wire,values[i]]));return fetch('/rpc/'+d.namespace+'/'+d.method,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(args)}).then(r=>r.json())}}return()=>{}}};
       const snapshot={status:'ready',writable:true,value:{enabled:true},base:{},user:{},revision:0};
       const scope={getSnapshot:()=>snapshot,subscribe:()=>()=>{},set:async()=>true,mutate:async()=>true};
-      sapper.apply({remote,configForms:{get:()=>scope,whileServed:(ids,setup)=>setup(new Set(ids))},effect:setup=>setup(),slots:{inject:(_name,setup)=>setup(),register:(options,Component)=>{if(options.name==='settings.section')ReactDOM.createRoot(document.getElementById('app')).render(React.createElement(Component));return()=>{}}}});
+      let ResultNode, definition;const resultRoot=ReactDOM.createRoot(document.getElementById('results'));
+      sapper.apply({remote,inject:(_services,setup)=>setup({remote,effect:setup=>setup()}),uiConversation:{events:{register:d=>{definition=d;return()=>{}}}},configForms:{get:()=>scope,whileServed:(ids,setup)=>setup(new Set(ids))},effect:setup=>setup(),slots:{inject:(_name,setup)=>setup(),register:(options,Component)=>{if(options.name==='settings.section')ReactDOM.createRoot(document.getElementById('app')).render(React.createElement(Component));if(options.name==='conversation.input.left')ReactDOM.createRoot(document.getElementById('composer')).render(React.createElement(Component,{sessionId:"${String(parent.id)}"}));if(options.name==='conversation.chat.node'&&options.key==='sapper-result')ResultNode=Component;return()=>{}}}});
+      async function results(){const data=await fetch('/results').then(r=>r.json());if(ResultNode&&definition)resultRoot.render(data.map((value,i)=>{const event={type:'sapper/result',data:value,seq:i+1};const match=definition.match['sapper/result'](event);const context={key:'sapper-result:'+match.id,id:match.id,state:definition.start({}, {event}),matches:[{event}]};return React.createElement(ResultNode,{key:context.key,node:definition.buildViewNode(context)})}));}setInterval(results,300);results();
       </script></html>`
     const server = createServer(async (req, res) => {
       try {
+        if (req.url === '/results') { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(panelResults)); return }
         if (files[req.url!]) { res.setHeader('Content-Type', 'text/javascript; charset=utf-8'); res.end(await readFile(files[req.url!]!)); return }
         if (req.method === 'POST' && req.url?.startsWith('/rpc/')) {
           let body = ''; for await (const chunk of req) body += chunk
@@ -521,12 +537,34 @@ it('drives the task panel through actual client and host Typert Gateways with st
       expect(errors).toEqual([])
       await mkdir('dist/validation', { recursive: true })
       await page.screenshot({ path: 'dist/validation/panel-desktop.png', fullPage: true })
+      expect(await page.getByRole('option').filter({ hasText: cwd }).count()).toBe(1)
+      await page.getByRole('button', { name: '打开 Sapper 任务', exact: true }).click()
+      const dialog = page.getByRole('dialog', { name: 'Sapper 任务窗口' })
+      await dialog.waitFor({ state: 'visible' })
+      await dialog.getByRole('button', { name: '事实图', exact: true }).click()
+      await dialog.locator('svg').waitFor({ state: 'visible' })
+      const bounds = await dialog.boundingBox()
+      expect(bounds && bounds.y >= 0 && bounds.y + bounds.height <= 1000).toBe(true)
+      await page.screenshot({ path: 'dist/validation/panel-dialog.png' })
+      await dialog.getByRole('button', { name: '结果与候选', exact: true }).click()
+      await dialog.getByRole('article', { name: 'Sapper 任务结果' }).waitFor()
+      await dialog.getByRole('button', { name: '发送结果到主会话' }).click()
+      await expect.poll(async () => panelResults.length).toBe(3)
+      await expect.poll(async () => page.locator('#results article').count()).toBe(3)
+      expect(await page.locator('#results').textContent()).toContain('已独立复核')
+      await page.keyboard.press('Escape')
+      await dialog.waitFor({ state: 'hidden' })
+      expect(await page.getByRole('button', { name: '打开 Sapper 任务' }).evaluate(el => el === document.activeElement)).toBe(true)
+      await page.locator('#results').scrollIntoViewIfNeeded()
+      await page.screenshot({ path: 'dist/validation/panel-results.png', fullPage: true })
+      expect(errors).toEqual([])
+
       await writeFile('dist/validation/panel-browser.json', JSON.stringify({ errors, state: await serviceState() }, null, 2))
       async function serviceState() { return (ctx.get('sapperPanel') as TaskPanelService).state(String(parent.id)) }
     } finally { await browser.close(); await new Promise<void>(resolve => server.close(() => resolve())) }
   }
-  await off()
-}, process.env.SAPPER_BROWSER_PROBE === '1' ? 30000 : 5000)
+  await consumer.dispose()
+}, process.env.SAPPER_BROWSER_PROBE === '1' ? 45000 : 5000)
 
 it('resumes a failed legacy workspace graph through the panel without recreating facts or rerunning reason', async () => {
   const scenario = { forged: true, completesGoal: true }
@@ -621,4 +659,77 @@ it('reports failed background command admission and permits a later retry withou
   await ctx.commands.execute(parent, '/sapper start Verify local fixture', [], new AbortController().signal)
   await service.whenIdle(cwd)
   expect(await service.state(String(parent.id))).toMatchObject({ job: { state: 'completed' }, tasks: [expect.any(Object)], graph: { verified: 1 } })
+})
+
+it('extends a productive verifier past the old 12-step limit and carries a minimal reproduction recipe', async () => {
+  const { dispatch, store, model } = await setup({ verifyReads: 12, recipe: 'Read fixture-0.txt through fixture-11.txt independently; each must contain VERIFIED-LOCAL-7C42.' }, { orchestration: { maxChildSteps: 12, budgetMode: 'adaptive', maxChildStepsCeiling: 36 } })
+  const run = await dispatch()
+  expect(run.state, JSON.stringify(run)).toBe('completed')
+  expect(run.outcomes[0]?.state).toBe('confirmed')
+  const child = run.children?.find(c => c.role === 'verify')!
+  expect(child.steps).toBe(13)
+  expect(child.extensions).toBeGreaterThan(0)
+  expect(child.step_limit).toBeGreaterThan(12)
+  expect(child.state).toBe('completed')
+  expect((await store.read()).facts.some(f => f.verification_status === 'confirmed')).toBe(true)
+  expect(model.requests.filter(r => JSON.stringify(r.messages).includes('# Sapper verify')).every(r => JSON.stringify(r.messages).includes('Read fixture-0.txt'))).toBe(true)
+})
+it('reserves a structured-output round under a fixed budget and keeps external tools out of finalization', async () => {
+  const { dispatch, model, read } = await setup({}, { orchestration: { budgetMode: 'fixed', maxChildSteps: 2 } })
+  const run = await dispatch()
+  expect(run.state, JSON.stringify(run)).toBe('completed')
+  const finals = model.requests.filter(r => JSON.stringify(r.messages).includes('Sapper finalization'))
+  expect(finals).toHaveLength(2)
+  for (const r of finals) {
+    expect(r.tools?.map(t => t.name)).toContain('structured_output')
+  }
+  expect(read).toHaveBeenCalledTimes(2)
+})
+it('resumes a saved candidate with a fresh verifier instead of repeating exploration', async () => {
+  const scenario: Scenario = { maxTokens: 'verify' }
+  const { dispatch, store } = await setup(scenario)
+  const first = await dispatch()
+  const candidate = first.outcomes[0]?.candidate
+  expect(candidate).toBeDefined()
+  expect(first.state).toBe('failed')
+  const originalRun = await store.readRun(first.id)
+  delete scenario.maxTokens
+  const second = await dispatch()
+  expect(second).toMatchObject({ state: 'completed', explored: 0, outcomes: [{ state: 'confirmed', verify_attempts: 2 }] })
+  expect(second.children?.map(c => c.role)).toEqual(['verify'])
+  expect(second.outcomes[0]?.candidate?.explorer_session).toBe(candidate?.explorer_session)
+  expect(await store.readRun(first.id)).toEqual(originalRun)
+})
+it('publishes confirmed results and incomplete candidates back to the originating main session without starting a parent turn', async () => {
+  const scenario: Scenario = { maxTokens: 'verify' }
+  const { ctx, cwd, parent } = await setup(scenario, {}, true, 1, 'preset', false)
+  const results: import('../src/panel/result.js').TaskResult[] = []
+  const parentTurns: string[] = []
+  ctx.on('session/event', (session, event) => {
+    if (session !== parent.session) return
+    if (event.type === 'sapper/result') results.push(event.data)
+    if (event.type === 'turn/start') parentTurns.push(event.type)
+  })
+  const service = ctx.get('sapperPanel') as TaskPanelService
+  await ctx.commands.execute(parent, '/sapper start Verify local fixture', [], new AbortController().signal)
+  await service.whenIdle(cwd)
+  expect(results).toHaveLength(1)
+  expect(results[0]).toMatchObject({ state: 'failed', confirmed: [], candidates: [{ status: 'unverified', description: expect.stringContaining('VERIFIED-LOCAL-7C42') }] })
+  delete scenario.maxTokens
+  await ctx.commands.execute(parent, '/sapper run', [], new AbortController().signal)
+  await service.whenIdle(cwd)
+  expect(results).toHaveLength(2)
+  expect(results[1]).toMatchObject({ state: 'completed', confirmed: [{ id: 'f002' }], candidates: [] })
+  expect(parentTurns).toEqual([])
+  const report = await ctx.commands.execute(parent, '/sapper result', [], new AbortController().signal)
+  expect(report?.result.kind).toBe('success')
+  expect(results).toHaveLength(3)
+})
+
+it('denies extra evidence calls after entering finalization even when a model ignores the finish notice', async () => {
+  const { dispatch, read } = await setup({ exploreReads: 4 }, { orchestration: { budgetMode: 'fixed', maxChildSteps: 3 } })
+  const run = await dispatch()
+  expect(run.state).toBe('failed')
+  expect(run.outcomes[0]?.error).toContain('步数预算')
+  expect(read).toHaveBeenCalledTimes(1)
 })

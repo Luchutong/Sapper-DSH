@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
+import { GraphPreview } from './graph.js'
+import { ResultBody } from './result.js'
 import type { PanelApi, PanelState, PanelTarget } from '../panel/rpc.js'
 
 const box = { border: '1px solid var(--border-color, #7775)', borderRadius: 8, padding: 12, marginTop: 12 }
 const states: Record<string, string> = { running: '运行中', cancelling: '取消中', completed: '已结束', failed: '失败', cancelled: '已取消', active: '进行中', confirmed: '已验证', 'pending-verification': '等待复核' }
 export function TaskPanel({ api, sessionId, onJob }: { api: PanelApi; sessionId?: string; onJob?: () => void }) {
+  const [tab, setTab] = useState('progress'), [reportMessage, setReportMessage] = useState('')
   const [targets, setTargets] = useState<PanelTarget[]>([]), [selected, setSelected] = useState(sessionId ?? '')
   const [state, setState] = useState<PanelState>(), [goal, setGoal] = useState(''), [pending, setPending] = useState(false), [error, setError] = useState('')
   useEffect(() => { if (sessionId) setSelected(sessionId) }, [sessionId])
@@ -58,9 +61,19 @@ export function TaskPanel({ api, sessionId, onJob }: { api: PanelApi; sessionId?
       {!!state.graph.integrity.length && <p role="alert">{state.graph.integrity.join('；')}</p>}
       {!running && state.graph.status !== 'completed' && <button disabled={pending} onClick={() => { void action({ action: 'resume', task_id: state.active }) }}>继续当前任务</button>}
     </div>}
-    {!!state?.runs.length && <div style={box}><strong>运行记录</strong>{state.runs.map(run => <details key={run.id} open={run.state === 'running'}>
+    {state?.graph && <nav aria-label="任务视图" style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+      {[['progress','运行进度'],['graph','事实图'],['results','结果与候选']].map(([id, label]) => <button type="button" key={id} aria-pressed={tab === id} onClick={() => setTab(id!)}>{label}</button>)}
+      {api.report && !!state.runs.length && <button type="button" disabled={pending} onClick={() => { setPending(true); void api.report!(selected).then(() => setReportMessage('已将完整结果发送到主会话')).catch(e => setError(e.message)).finally(() => setPending(false)) }}>发送结果到主会话</button>}
+    </nav>}
+    {reportMessage && <p role="status">{reportMessage}</p>}
+    {tab === 'graph' && <GraphPreview nodes={state?.graph?.nodes ?? []} />}
+    {tab === 'results' && (state?.job?.result ? <ResultBody result={state.job.result} /> : <div>{state?.runs[0]?.outcomes.map((o, i) => <article key={i} style={box}><strong>{o.state === 'confirmed' ? '已复核' : '尚未确认'} · {o.candidate?.title ?? o.intent_id}</strong><pre style={{ whiteSpace: 'pre-wrap' }}>{o.candidate?.description}</pre>{o.error && <p>{o.error}</p>}</article>)}</div>)}
+    {tab === 'progress' && !!state?.runs.length && <div style={box}><strong>运行记录</strong>{state.runs.map(run => <details key={run.id} open={run.state === 'running'}>
       <summary>{run.id} · {states[run.state] ?? run.state} · 执行 {run.explored} · {run.children?.at(-1)?.role ?? '准备'}</summary>
       {run.stop_reason && <p>{run.stop_reason}</p>}
+      <ol aria-label="子代理执行时间线" style={{ paddingLeft: 24 }}>{run.children?.map(c => <li key={c.session_id} style={{ padding: '8px 0' }}><strong>{{ reason: '规划', explore: '探索', verify: '独立复核' }[c.role]}</strong> · {states[c.state ?? ''] ?? (run.state === 'running' ? '执行中' : '已记录')}
+        {c.steps !== undefined && <span> · {c.steps}/{c.step_limit} 步（上限 {c.step_ceiling}）{c.extensions ? ` · 自动延长 ${c.extensions} 次` : ''}{c.finalizing ? ' · 提交结论' : ''}</span>}
+      </li>)}</ol>
       {run.outcomes.map((o, i) => <p key={i}>{o.intent_id} · {states[o.state] ?? o.state} {o.candidate?.title}{o.error && `：${o.error}`}{o.verification?.issues && `：${o.verification.issues}`}</p>)}
     </details>)}</div>}
     {!!state?.tasks.length && <details style={box}><summary>工作区任务（{state.tasks.length}）</summary>{[...state.tasks].reverse().map(t => <div key={t.id} style={{ margin: '10px 0' }}>

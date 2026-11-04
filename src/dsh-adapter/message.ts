@@ -5,7 +5,7 @@ declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
     'sapper-dsh': {
       kind: 'sapper-dsh'
-      form: 'snapshot' | 'evidence'
+      form: 'snapshot' | 'evidence' | 'budget' | 'result'
       sections: readonly ContextSnapshotSection[]
     }
   }

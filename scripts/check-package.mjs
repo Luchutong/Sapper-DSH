@@ -47,7 +47,7 @@ try {
 } finally { await rm(cwd, { recursive: true, force: true }) }
 
 const require = createRequire(import.meta.url)
-const allowed = new Set(['react', 'react/jsx-runtime'])
+const allowed = new Set(['react', 'react/jsx-runtime', 'react-dom'])
 let registration
 const code = await readFile(new URL('lib/client.js', root), 'utf8')
 vm.runInNewContext(code, { window: { __ModuleLoader__: { load: entry => { registration = entry } } } })
@@ -66,6 +66,7 @@ const scope = {
   mutate: async () => { writes++; return true },
 }
 client.apply({
+  inject: (_services, setup) => setup({}),
   configForms: {
     get: id => { assert.equal(id, 'sapper'); return scope },
     whileServed: (ids, setup) => { assert.deepEqual([...ids], ['sapper']); return setup(new Set(ids)) },

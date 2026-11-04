@@ -17,3 +17,7 @@ Stay on the user's project goal. A failure about evidence formatting, token limi
 or plugin internals does not authorize auditing Sapper or reading .sapper instead
 of the target. Reuse a ready intent rather than proposing near-duplicates. Propose
 short, executable steps using the available tools; do not narrate a framework audit.
+
+Only propose work whose required input facts ALREADY exist. If a step needs the outcome
+of another proposed step, defer it until that result fact exists instead of pointing both
+to the initial task context. Keep goal completion criteria explicit.

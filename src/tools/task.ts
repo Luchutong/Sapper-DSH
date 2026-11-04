@@ -1,3 +1,4 @@
+import path from 'node:path'
 import { defineTool, type ToolExecution } from '@deepseek-ai/dsh-tools'
 import type { Config } from '../settings.js'
 import type { Orchestrator } from '../orchestration/engine.js'
@@ -25,8 +26,8 @@ export function createTaskTool(getConfig: () => Config, alive: () => boolean, au
         const store = args.action === 'start'
           ? await createTask(base, cwd, args.goal ?? '', creator, options)
           : await selectTask(base, cwd, args.task_id ?? 'legacy', options)
-        if ((await store.read()).project.status === 'completed') return json({ state: 'completed', stop_reason: 'goal-already-completed' })
-        return json(await engine.dispatch('run', store, creator, exec.agent, options))
+        if ((await store.read()).project.status === 'completed') return json({ state: 'completed', stop_reason: 'goal-already-completed', task_id: store.root === base ? 'legacy' : path.basename(store.root) })
+        return json({ ...await engine.dispatch('run', store, creator, exec.agent, options), task_id: store.root === base ? 'legacy' : path.basename(store.root) })
       } finally { if (base && claimed) busy.delete(base); lifecycle.finish(exec) }
     },
   })

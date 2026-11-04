@@ -16,6 +16,7 @@ describe('DSH 0.2 client entry', () => {
     let cleanup = () => {}
     const disposed: string[] = []
     const ctx: BrowserContext = {
+      inject: (_services, setup) => setup(ctx),
       configForms: {
         get: id => { expect(id).toBe('sapper'); return scope },
         whileServed: (ids, setup) => { expect(ids).toEqual(['sapper']); return setup(new Set(ids)) },
@@ -38,18 +39,18 @@ describe('DSH 0.2 client entry', () => {
   it('reports a Host-refused write instead of treating false as a saved setting', async () => {
     const scope = makeScope(false)
     const renderer = create(<SapperSettings scope={scope} />)
-    await act(async () => { renderer.root.findByType('input').props.onChange({ target: { checked: false } }) })
+    await act(async () => { renderer.root.findByProps({ type: 'checkbox' }).props.onChange({ target: { checked: false } }) })
     expect(scope.set).toHaveBeenCalledWith('enabled', false)
     expect(renderer.root.findByProps({ role: 'alert' }).children.join('')).toContain('未接受此次保存')
-    expect(renderer.root.findByType('input').props.checked).toBe(true)
+    expect(renderer.root.findByProps({ type: 'checkbox' }).props.checked).toBe(true)
     renderer.unmount()
   })
   it('exposes automatic storage by default and writes only its nested setting on explicit selection', async () => {
     const scope = makeScope()
     const renderer = create(<SapperSettings scope={scope} />)
-    expect(renderer.root.findByType('select').props.value).toBe('session')
+    expect(renderer.root.findByProps({ 'aria-label': '图写入确认' }).props.value).toBe('session')
     expect(scope.set).not.toHaveBeenCalled()
-    await act(async () => { renderer.root.findByType('select').props.onChange({ target: { value: 'always' } }) })
+    await act(async () => { renderer.root.findByProps({ 'aria-label': '图写入确认' }).props.onChange({ target: { value: 'always' } }) })
     expect(scope.mutate).toHaveBeenCalledExactlyOnceWith([{ op: 'set', path: ['store', 'approval'], value: 'always' }])
     expect(scope.set).not.toHaveBeenCalled()
     renderer.unmount()
@@ -98,4 +99,41 @@ it('reveals a command-launched job in the dock and keeps a user-closed dock clos
     await act(async () => { await vi.advanceTimersByTimeAsync(1200) })
     expect(renderer.root.findByType('details').props.open).toBe(true)
   } finally { await act(async () => { renderer?.unmount() }); vi.useRealTimers() }
+})
+
+it('saves edited budgets on blur and restores the draft after a refused save', async () => {
+  const scope = makeScope(false), renderer = create(<SapperSettings scope={scope} />)
+  await act(async () => {})
+  const input = () => renderer.root.findAllByType('input').find(i => i.props['aria-label'] === '初始步数')!
+  await act(async () => { input().props.onChange({ target: { value: '48' } }) })
+  expect(scope.mutate).not.toHaveBeenCalled()
+  await act(async () => { input().props.onBlur() })
+  expect(scope.mutate).toHaveBeenCalledWith([{ op: 'set', path: ['orchestration', 'maxChildSteps'], value: 48 }])
+  expect(input().props.value).toBe('24')
+  await act(async () => { renderer.unmount() })
+})
+
+it('projects live and reloaded Sapper result events into visible rows using the actual DSH history assembler and Chat builder', async () => {
+  const { Context } = await import('@deepseek-ai/cordis')
+  const { dshConversation } = await import('./fixtures/dsh-conversation.js')
+  const { resultDefinition, ResultNode } = await import('../src/client/result.js')
+  const { ConversationEventRegistry, ConversationNodeAssembler, chatViewDefinition } = await dshConversation()
+  const ctx = new Context(), events = new ConversationEventRegistry(ctx)
+  try {
+    events.register(resultDefinition)
+    const assembler = new ConversationNodeAssembler(events, { entries: () => [chatViewDefinition] })
+    const result: import('../src/panel/result.js').TaskResult = { job_id: 'job1', task_id: 'task1', run_id: 'r001', state: 'failed', goal: 'Check evidence', summary: '本轮结束，目标仍待完成。', confirmed: [], candidates: [{ title: 'Candidate', description: 'RESULT-7C42', kind: 'note', status: 'unverified' }], errors: ['Budget reached'] }
+    const record = { event: { type: 'sapper/result', seq: 1, timestamp: Date.now(), data: result } } as never
+    assembler.replaceWindow([], false)
+    assembler.activateTarget('chat')
+    assembler.append(record); assembler.flush()
+    const snapshot = assembler.get('chat')!
+    expect(snapshot.order).toHaveLength(1)
+    const node = snapshot.nodes.get(snapshot.order[0]!)!
+    expect(node).toMatchObject({ kind: 'sapper-result', anchorSeq: 1, location: { kind: 'session' }, visibility: 'visible', data: result })
+    expect(renderToStaticMarkup(<ResultNode node={node as never} />)).toContain('候选 · 尚未确认')
+    assembler.replaceWindow([record], false); assembler.flush()
+    expect(assembler.get('chat')!.order).toEqual(snapshot.order)
+    expect(assembler.get('chat')!.nodes.get(snapshot.order[0]!)?.data).toEqual(result)
+  } finally { await ctx.fiber.dispose() }
 })

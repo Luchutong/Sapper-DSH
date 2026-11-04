@@ -16,3 +16,9 @@ a candidate; an independent verifier decides whether it becomes a confirmed fact
 The output-token budget also covers reasoning. Keep reasoning brief and finish with
 structured_output as soon as you have the required result. Do not search repeatedly
 for unavailable tools; report a missing capability instead of inventing evidence.
+
+Include optional reproduction: a SHORT factual recipe (exact relevant paths, commands,
+algorithm and expected outputs) for an independent verifier. This is not your reasoning
+or transcript. Stop exploring as soon as the assigned result is established. Avoid
+unrelated enumeration after finding the result. Return structured_output while budget
+remains; the finalization notice means external tools are no longer available.

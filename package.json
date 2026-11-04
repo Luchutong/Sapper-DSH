@@ -1,6 +1,6 @@
 {
   "name": "sapper-dsh",
-  "version": "0.1.0-alpha.10",
+  "version": "0.1.0-alpha.11",
   "description": "Workspace fact graph, bounded context, bilingual recall and evidence-verified subagent orchestration for DSH NEXT.",
   "license": "MIT",
   "type": "module",
@@ -37,7 +37,8 @@
         "@deepseek-ai/dsh-client-ui-settings",
         "@deepseek-ai/dsh-client-ui-settings-general",
         "@deepseek-ai/dsh-api-remotes",
-        "@deepseek-ai/dsh-client-ui-chat"
+        "@deepseek-ai/dsh-client-ui-chat",
+        "@deepseek-ai/dsh-client-ui-conversation"
       ]
     }
   },

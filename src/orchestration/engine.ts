@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { randomUUID, createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
@@ -22,10 +22,11 @@ import { isMutation } from '../tools/graph.js'
 import { normalize } from '../recall/index.js'
 import { SCHEMAS, parseProposals, parseCandidate, parseVerification } from './types.js'
 import type { DispatchMode, CapturedCall } from './types.js'
+import { ChildBudget } from './budget.js'
 
 interface Child {
   role: 'reason' | 'explore' | 'verify'; controller: AbortController; calls: Map<string, CapturedCall>
-  steps: number; config: Config; guard: () => void
+  budget: ChildBudget; progress: Set<string>; capabilities?: ChildCapabilities; config: Config; guard: () => void
   onReady: (capabilities: ChildCapabilities) => Promise<void>
   parent: Agent
 }
@@ -55,7 +56,8 @@ export class Orchestrator {
       agent.ctx.tools.guard(exec => this.denial(exec))
       const tools = ctx.tools.schemas(agent).map(t => t.name)
       const external = tools.filter(name => this.external(child, name))
-      await child.onReady({ role: child.role, session_id: String(agent.id), tools, external_tools: external, max_output_tokens: child.config.orchestration.maxOutputTokens })
+      child.capabilities = { role: child.role, session_id: String(agent.id), tools, external_tools: external, max_output_tokens: child.config.orchestration.maxOutputTokens, state: 'running', steps: 0, step_limit: child.budget.limit, step_ceiling: child.config.orchestration.budgetMode === 'adaptive' && child.role !== 'reason' ? Math.max(child.budget.limit, child.config.orchestration.maxChildStepsCeiling) : child.budget.limit, started_at: new Date().toISOString() }
+      await child.onReady(child.capabilities)
       if (child.role !== 'reason' && !external.length) throw new StopRunError(`SAPPER_M3_TOOL_UNAVAILABLE: ${child.role} 未获得白名单中的外部取证工具；可见工具: ${tools.join(', ')}。请检查 DSH preset 与 orchestration.${child.role === 'explore' ? 'exploreTools' : 'verifyTools'}，增加 token 预算无法补齐工具。`)
       return undefined
     })
@@ -65,6 +67,7 @@ export class Orchestrator {
       if (!child || result.isError || !this.external(child, exec.name)) return
       const text = result.content.filter(b => b.type === 'text').map(b => b.text).join('\n')
       if (text.trim()) {
+        child.progress.add(createHash('sha256').update(exec.name + JSON.stringify(exec.arguments) + text).digest('hex'))
         const receipt_id = 'ev-' + randomUUID()
         child.calls.set(String(exec.callId), { tool: exec.name, text, receipt_id })
         const notice = `Sapper evidence receipt: ${JSON.stringify({ receipt_id, tool: exec.name })}. This receipt certifies this session's successful tool output. To cite it, use evidence: [{"receipt_id":"${receipt_id}"}]. Do not copy or escape the output.`
@@ -74,9 +77,23 @@ export class Orchestrator {
     ctx.on('agent/pre-step', async (payload, next) => {
       const child = this.children.get(String(payload.agent.id))
       if (!child) return next()
-      try { child.guard(); if (++child.steps > child.config.orchestration.maxChildSteps) throw new StopRunError('子代理步数预算耗尽') }
-      catch (error) { child.controller.abort(error); return { kind: 'reject' } }
-      return next()
+      try {
+        child.guard()
+        const budget = child.budget.next(child.progress.size)
+        if (budget.exhausted) throw new StopRunError('子代理步数预算耗尽（结构化收尾仍未完成）')
+        if (child.capabilities) {
+          Object.assign(child.capabilities, { steps: child.budget.steps, step_limit: child.budget.limit, extensions: child.budget.extensions, finalizing: budget.finalizing })
+          await child.onReady(child.capabilities)
+        }
+        if (budget.finalizing) payload.agent.ctx.tools.restrict({ allow: [] })
+        const decision = await next()
+        if (decision.kind === 'reject') return decision
+        if (budget.finalizing) {
+          const text = `Sapper finalization: ${child.budget.limit - child.budget.steps + 1} steps remain. Only structured_output is available. Submit your current conclusion NOW using this session's evidence receipts. If verification is incomplete, submit verified=false and explain the missing evidence. Do not claim unobserved success.`
+          return { ...decision, messages: [...decision.messages, createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'sapper-dsh', form: 'budget', sections: [{ name: 'Sapper finalization', text }] } })] }
+        }
+        return decision
+      } catch (error) { child.controller.abort(error); return { kind: 'reject' } }
     })
     ctx.on('loader/volatile-update', () => {
       for (const child of this.children.values()) if (!this.alive() || JSON.stringify(this.getConfig()) !== JSON.stringify(child.config)) {
@@ -96,6 +113,7 @@ export class Orchestrator {
   }
   private allowed(child: Child, name: string, args: unknown): boolean {
     if (name === 'structured_output') return true
+    if (child.budget.finalizing) return false
     if (!this.ctx.tools.get(name, child.parent)) return false
     if (child.role === 'verify') return this.external(child, name)
     return (readTools.has(name) && !isMutation(name, args)) || this.external(child, name)
@@ -119,7 +137,7 @@ export class Orchestrator {
     const controller = new AbortController(), onAbort = () => controller.abort(signal.reason)
     signal.addEventListener('abort', onAbort, { once: true })
     if (signal.aborted) onAbort()
-    const child: Child = { role, controller, config, guard, calls: new Map(), steps: 0, onReady, parent }
+    const child: Child = { role, controller, config, guard, calls: new Map(), budget: new ChildBudget(config.orchestration, config.orchestration.budgetMode === 'adaptive' && role !== 'reason'), progress: new Set(), onReady, parent }
     this.children.set(session, child)
     const timer = setTimeout(() => controller.abort(new StopRunError('子代理超时')), config.orchestration.timeoutMin * 60000)
     const poll = setInterval(() => { try { guard() } catch (error) { controller.abort(error) } }, 500)
@@ -143,8 +161,10 @@ export class Orchestrator {
       const result = await activation.result
       controller.signal.throwIfAborted(); guard()
       if (result.stopReason !== 'completed' || result.structured === undefined) throw new StopRunError(`子代理 ${role} 未完成结构化结果：${result.stopReason}（maxOutputTokens=${config.orchestration.maxOutputTokens}）；本次运行停止，不重复 reason 消耗预算`)
+      if (child.capabilities) child.capabilities.state = 'completed'
       return { value: result.structured, session, calls: child.calls }
     } finally {
+      if (child.capabilities) { child.capabilities.state ??= 'failed'; if (child.capabilities.state === 'running') child.capabilities.state = 'failed'; child.capabilities.ended_at = new Date().toISOString(); try { await child.onReady(child.capabilities) } catch {} }
       try { await activation?.dispose() } finally { controller.signal.removeEventListener('abort', stop); clearTimeout(timer); clearInterval(poll); signal.removeEventListener('abort', onAbort); this.children.delete(session) }
     }
   }
@@ -156,6 +176,7 @@ export class Orchestrator {
     const controller = new AbortController(), signal = AbortSignal.any([controller.signal, ...(options.signal ? [options.signal] : [])])
     this.active.set(store.root, controller)
     const config = structuredClone(this.getConfig()), runOptions = { ...options, signal }
+    const deadline = setTimeout(() => controller.abort(new StopRunError('运行时长上限已到，已保留可恢复的结果')), config.orchestration.runTimeoutMin * 60000)
     let record: RunRecord | undefined
     const guard = () => { options.guard?.(); signal.throwIfAborted(); if (!this.alive() || !this.getConfig().enabled || JSON.stringify(config) !== JSON.stringify(this.getConfig())) throw new StoreError('Sapper 已关闭或配置已改变') }
     try {
@@ -164,7 +185,9 @@ export class Orchestrator {
       const run = record, managed = { ...runOptions, managedRun: run.id }
       const onReady = async (capabilities: ChildCapabilities) => {
         run.children ??= []
-        run.children.push(capabilities)
+        const index = run.children.findIndex(c => c.session_id === capabilities.session_id)
+        if (index < 0) run.children.push({ ...capabilities })
+        else run.children[index] = { ...capabilities }
         await store.saveRun(run, runOptions)
       }
       const reason = async () => {
@@ -242,7 +265,12 @@ export class Orchestrator {
           }
           const batch = ready.slice(0, Math.min(config.orchestration.concurrency, config.orchestration.maxSteps - run.steps, config.orchestration.maxExplore - run.explored))
           batch.forEach(i => attempted.add(i.id))
-          const results = await Promise.allSettled(batch.map(i => attempt(i.id)))
+          const previous = (await store.listRuns()).filter(r => r.id !== run.id).reverse()
+          const results = await Promise.allSettled(batch.map(i => {
+            const budget = i.verification_budget as { candidate_session?: string; attempts?: number } | undefined
+            const saved = previous.flatMap(r => r.outcomes).find(o => o.intent_id === i.id && o.candidate && !o.verification && o.state !== 'confirmed' && (budget?.attempts ?? 0) < config.orchestration.maxVerify && (!budget?.candidate_session || budget.candidate_session === o.candidate.explorer_session))
+            return attempt(i.id, saved)
+          }))
           const rejected = results.find(r => r.status === 'rejected')
           if (rejected?.status === 'rejected') throw rejected.reason
         }
@@ -257,6 +285,6 @@ export class Orchestrator {
       const { signal: _cancelled, ...cleanup } = options
       try { await store.saveRun(record, cleanup) } catch { /* Never override revoked write authority for bookkeeping. */ }
       return record
-    } finally { this.active.delete(store.root) }
+    } finally { clearTimeout(deadline); this.active.delete(store.root) }
   }
 }

@@ -27,7 +27,7 @@ export default defineConfig([
     dts: false,
     clean: false,
     fixedExtension: false,
-    external: ['react', 'react/jsx-runtime'],
+    external: ['react', 'react/jsx-runtime', 'react-dom'],
     noExternal: ['@deepseek-ai/dsh-typert-protocol/remote-info'],
   },
 ])

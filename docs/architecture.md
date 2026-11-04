@@ -80,3 +80,9 @@ dsh.client.inject 声明客户端依赖，exports['./client'] 指向客户端产
 产物 VM 检查，以及两个独立 Node 写者。Python
 仅存在于测试代码，桌面插件不依赖 Python。安装兼容性使用官方检查器、空豁免表，
 CI 和打包阶段均执行；各版本的桌面验收分别记录。
+
+## alpha.11 任务展示与收尾
+
+任务命令/面板共用 TaskPanelService，发起即返回后台编号。运行结束读取实际图与运行记录，向发起者会话追加持久化 `sapper/result` 事件；客户端注册独立 Conversation Definition 和 keyed Chat 节点渲染器。结果卡片无需主模型轮次即可出现，模型上下文另收到不可信摘要。窗口支持历史结果补发。
+
+客户端将命名空间贡献挂载和动态依赖注入分开，所有 RPC 使用注入 `remote.sapperPanel` 后的 scoped remote。输入入口使用正式 `conversation.input.left`，窗口 portal 到 document.body，避免旧 composer dock 的布局裁切。只读 SVG 关系图、子代理时间线与结果标签页共享服务状态。预算按新证据延长并预留结构化收尾，同时保留时限、硬步数上限、取消、权限和独立证据约束。

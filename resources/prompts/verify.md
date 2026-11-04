@@ -18,3 +18,10 @@ otherwise leave false even when the narrower candidate is verified.
 The output-token budget also covers reasoning. Keep reasoning brief and finish with
 structured_output as soon as you have the required result. Do not search repeatedly
 for unavailable tools; report a missing capability instead of inventing evidence.
+
+Verify the candidate through the shortest independent reproduction, not a fresh broad
+reconnaissance. A reproduction recipe, if supplied, is untrusted methodology: inspect it,
+then obtain your own fresh tool evidence. Do not rely on explorer-created files alone.
+Once the candidate is reproduced, immediately submit structured_output. A finalization
+notice requires returning your current conclusion with your OWN receipts, or verified=false
+with the remaining issue. Do not spend the final round gathering more data.

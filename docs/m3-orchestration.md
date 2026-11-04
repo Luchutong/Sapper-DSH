@@ -69,14 +69,19 @@ reason 可在提议中给 completes_goal=true；仅当 verifier 也给 goal_achi
 
 | 配置 | 默认 | 范围/含义 |
 | --- | --- | --- |
-| maxSteps | 8 | 一次 run 最多处理的意图数；reason 周期也至多此数 |
-| maxExplore | 6 | 一次 run 最多 explore 次数 |
+| maxSteps | 24 | 一次 run 最多处理的意图数；reason 周期也至多此数 |
+| maxExplore | 20 | 一次 run 最多 explore 次数 |
 | maxVerify | 2 | 同一候选跨调用的复核上限，持久化于意图 |
 | concurrency | 2 | 同时推进的意图流水线；每条流水线最多一个活跃子会话 |
-| timeoutMin | 15 | 每子会话含启动/执行的墙钟分钟数 |
-| maxChildSteps | 12 | 每个子会话的模型步骤上限 |
-| maxOutputTokens | 8192 | 每次子会话模型请求的输出 token 上限 |
+| timeoutMin | 45 | 每子会话含启动/执行的墙钟分钟数 |
+| runTimeoutMin | 90 | 整轮墙钟分钟数 |
+| budgetMode | adaptive | 有新证据时自动延长；fixed 使用固定步数 |
+| maxChildSteps | 24 | 初始步数，包含结构化提交；reason 不自动延长 |
+| maxChildStepsCeiling | 128 | explore/verify 自动延长上限（不会缩减更高的显式初始值） |
+| maxOutputTokens | 16384 | 每次子会话模型请求的输出 token 上限 |
 | requireApproval | true | workspace-write 的启动审批；完全权限自动通过 |
+
+自动预算在成功外部工具调用的工具名、参数或输出发生变化时视为新进展，每次增加初始步数（至少 8 步），直至上限。无新证据则进入收尾，最后最多两步只允许结构化提交。运行记录保存实际步数、当前额度、延期次数和子代理状态。再次 run 优先复核尚未完成复核的已存候选，复核次数仍持久化约束；已明确拒绝的候选不会这样重试。
 
 reason 输入采用 M2 的 frontier-history 共用字符预算，长 doc 不自动展开。探索只
 发送该意图依赖，复核只发送该候选。外部工具白名单：exploreTools 默认为 read/glob/

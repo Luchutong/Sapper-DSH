@@ -1,3 +1,4 @@
+import path from 'node:path'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
 import type { Config } from '../settings.js'
@@ -33,7 +34,7 @@ export function createDispatchTool(getConfig: () => Config, alive: () => boolean
         if (!exec.agent) throw new StoreError('编排需要当前 DSH Agent')
         if ((args.mode === 'explore' || args.mode === 'verify') && !args.intent_id) throw new StoreError('explore/verify 需要 intent_id')
         if (args.mode === 'verify' && !args.run_id) throw new StoreError('verify 需要候选 run_id')
-        return json(summary(await engine.dispatch(args.mode, store, creator, exec.agent, options, args.intent_id, args.run_id)))
+        return json({ ...summary(await engine.dispatch(args.mode, store, creator, exec.agent, options, args.intent_id, args.run_id)), task_id: path.basename(store.root).startsWith('t-') ? path.basename(store.root) : 'legacy' })
       } finally { lifecycle.finish(exec) }
     },
   })

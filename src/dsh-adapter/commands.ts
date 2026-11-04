@@ -14,8 +14,8 @@ import { UNTRUSTED_NOTICE } from '../render/context.js'
 import type { TaskPanelService } from './panel.js'
 import { randomUUID } from 'node:crypto'
 
-const USAGE = '/sapper [status | graph | frontier | recall <query> | flag | kb <query|kb001> | start <goal> | run | runs | job | cancel]'
-export function registerSapperCommand(ctx: Context, getConfig: () => Config, alive: () => boolean, jobs: Pick<TaskPanelService, 'submit' | 'state'>): () => void {
+const USAGE = '/sapper [status | graph | frontier | recall <query> | flag | kb <query|kb001> | start <goal> | run | runs | job | result | cancel]'
+export function registerSapperCommand(ctx: Context, getConfig: () => Config, alive: () => boolean, jobs: Pick<TaskPanelService, 'submit' | 'state' | 'report'>): () => void {
   let sync = () => {}
   const kb = new KnowledgeBase()
   const handler = async (invocation: CommandInvocation): Promise<CommandResult> => {
@@ -32,6 +32,11 @@ export function registerSapperCommand(ctx: Context, getConfig: () => Config, ali
         const accepted = jobs.submit(invocation.agent, command === 'start' ? { action: 'start', goal: query } : { action: command })
         if (command === 'cancel') return { kind: 'success', text: accepted.accepted ? '已请求取消，正在停止子会话和保存状态。用 /sapper job 查看清理结果。' : '当前工作区没有正在运行的任务。' }
         return { kind: 'success', text: `Sapper 后台任务已受理（${accepted.job_id}）。输入框可继续使用。用 /sapper job 查看进度，/sapper cancel 取消；也可打开 Sapper 任务面板。` }
+      }
+      if (command === 'result') {
+        if (tail.length) return { kind: 'error', text: USAGE }
+        const result = await jobs.report(String(invocation.agent.id))
+        return { kind: 'success', text: result.summary }
       }
       if (command === 'job') {
         if (tail.length) return { kind: 'error', text: USAGE }
