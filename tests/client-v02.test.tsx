@@ -163,7 +163,7 @@ it('projects live and reloaded Sapper result events into visible rows using the 
     const node = snapshot.nodes.get(snapshot.order[0]!)!
     expect(node).toMatchObject({ kind: 'sapper-result', anchorSeq: 1, location: { kind: 'session' }, visibility: 'visible', data: result })
     expect(renderToStaticMarkup(<ResultNode node={node as never} />)).toContain(
-      '候选 · 尚未确认',
+      '候选结果 · 尚未复核',
     )
     assembler.replaceWindow([accepted, record], false)
     assembler.flush()

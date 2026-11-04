@@ -164,6 +164,17 @@ export async function workbenchBrowser(
     const graph=await selected.read();graph.project.counters.intent=330
     await writeFile(path.join(selected.root,'project.json'),JSON.stringify(graph.project))
     await Promise.all(Array.from({length:329},(_,i)=>{const id='i'+String(i+2).padStart(3,'0');return writeFile(path.join(selected.root,'intents',id+'.json'),JSON.stringify({...seed,id,title:seed.title+' '+id}))}))
+    // UI-only synthetic observations reproduce repeater's note/vuln candidates;
+    // neither contains or records a flag, and viewing them must remain read-only.
+    const historyRun = await selected.readRun('r001')
+    historyRun.outcomes = ['note', 'vuln'].map((kind, i) => ({
+      intent_id: i ? 'i002' : seed.id, state: 'pending-verification' as const, verify_attempts: 0,
+      candidate: { title: kind === 'note' ? 'repeater 附件清点' : 'repeater 漏洞分析', description: 'ELF64; Canary found; NX enabled; Partial RELRO', kind: kind as 'note' | 'vuln', evidence: [], explorer_session: 'browser-fixture' },
+    }))
+    await selected.saveRun(historyRun)
+    await page.getByText('候选结果 · 尚未复核', { exact: true }).waitFor()
+    await page.getByText('漏洞候选 · 尚未复核', { exact: true }).waitFor()
+    expect(await page.getByText('候选 flag，尚未复核', { exact: true }).count()).toBe(0)
     await expect.poll(async()=>await page.locator('.sp-task').count(),{timeout:12000}).toBeGreaterThan(30)
     await page.getByLabel('搜索题目').fill('不存在的题目');await page.getByText('没有匹配的题目。选择比赛目录即可新建。').waitFor();await page.getByLabel('搜索题目').fill('')
     const before = Object.keys(panel.workbench.snapshot().jobs).length
@@ -210,6 +221,8 @@ export async function workbenchBrowser(
     expect(await readFile(path.join(challenge.cwd, 'WP.md'), 'utf8')).toContain(
       'Reproduction:',
     )
+    const wpTask = (await panel.state(challenge.sessionId)).active
+    await expect.poll(() => page.getByLabel('查看阶段').inputValue()).toBe(wpTask)
     await page.getByRole('tab', { name: '文件', exact: true }).click()
     await page.getByRole('button', { name: 'WP.md ↗', exact: true }).click()
     await page.locator('.sp-file').waitFor()

@@ -3,6 +3,13 @@ import type { ChatNodeViewProps } from '@deepseek-ai/dsh-client-ui-chat/client'
 import { RESULT_RECORD, type TaskResult } from '../panel/result.js'
 
 import { readResult } from '../panel/result-schema.js'
+export function candidateLabel(candidate: TaskResult['candidates'][number]): string {
+  if (candidate.status === 'rejected')
+    return candidate.kind === 'flag' ? 'flag 复核未通过' : '复核未通过'
+  if (candidate.kind === 'flag') return '未验证 flag · 可先提交测试'
+  if (candidate.kind === 'vuln') return '漏洞候选 · 尚未复核'
+  return '候选结果 · 尚未复核'
+}
 const matchResult = (event: { data: unknown }) => {
   const result = readResult(event.data)
   return result ? { id: result.job_id, role: 'start' as const } : null
@@ -92,7 +99,7 @@ export function ResultBody({
           }}
         >
           <strong>
-            {c.status === 'rejected' ? '复核未通过' : c.kind === 'flag' ? '未验证 flag · 可先提交测试' : '候选 · 尚未确认'} ·{' '}
+            {candidateLabel(c)} ·{' '}
             {c.title}
           </strong>
           <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace' }}>

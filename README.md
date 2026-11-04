@@ -3,9 +3,10 @@
 将 [sapper-v2](https://github.com/N1nEmAn/sapper-v2) 的事实图与
 `reason → explore → verify` 循环移植为 DSH NEXT 桌面插件。
 
-**当前版本 `0.1.0-alpha.15`：左侧比赛工作台，一键创建题目目录、DSH 工作区与主会话；持久化队列默认并行两题，结束生成一次主助手简报。**
+**当前版本 `0.1.0-alpha.16`：左侧比赛工作台，一键创建题目目录、DSH 工作区与主会话；持久化队列默认并行两题，结束生成一次主助手简报。**
 本版修复 browse 目录选择、插件作用域下命令受理，以及重启后未完成题目的恢复。已有 alpha.13 创建记录可直接继续，见 [修复与验收](docs/alpha14-validation.md)。
 alpha.15 在成功工具输出出现 flag 时立即向主会话显示未验证候选，无需等待探索收尾或独立复核；后续进度仍保留该值，见 [flag 即时回显](docs/alpha15-validation.md)。
+alpha.16 修复工作台把普通分析和漏洞候选误标为“候选 flag”的显示问题，按 `kind` 分别标注；真正 flag 的即时回显保留。见 [repeater 日志复盘](docs/alpha16-validation.md)。
 目标运行时为 **DSH 0.2.1-rc.2**，Cordis 4.0.5 / Schemastery 3.18.5。
 
 当前可维护工作区事实图、意图、长文档和本地 flag；每轮注入有预算的 frontier、
@@ -89,7 +90,7 @@ flag 事实是权威记录，`flags/ledger.json` 是可重建索引。详细边�
 在 DSH NEXT 菜单“打开 DSH 终端”，执行后重启应用：
 
 ```powershell
-dsh plugin add "D:\BaiduSyncdisk\sapper移植\sapper-dsh-0.1.0-alpha.15.tgz"
+dsh plugin add "D:\BaiduSyncdisk\sapper移植\sapper-dsh-0.1.0-alpha.16.tgz"
 ```
 
 开发需要 Node.js 22+、pnpm 8.15.4 和 Python 3（仅 golden 测试使用）：

@@ -13,6 +13,7 @@ import type { WorkbenchController } from './workbench-store.js'
 import { workbenchStyle } from './workbench-style.js'
 import { GraphPreview } from './graph.js'
 import { DirectoryPicker } from './directory-picker.js'
+import { candidateLabel } from './result.js'
 
 const labels: Record<string, string> = {
   queued: '排队中',
@@ -27,9 +28,9 @@ const labels: Record<string, string> = {
   idle: '本轮结束，待继续',
   rejected: '复核未通过',
 }
-const Badge = ({ state }: { state: string }) => (
+const Badge = ({ state, label }: { state: string; label?: string }) => (
   <span className="sp-badge" data-state={state}>
-    {labels[state] ?? state}
+    {label ?? labels[state] ?? state}
   </span>
 )
 const active = (c: Challenge) =>
@@ -712,6 +713,7 @@ function Details({
                   <div key={i}>
                     <Badge
                       state={f.status === 'rejected' ? 'rejected' : 'candidate'}
+                      label={candidateLabel(f)}
                     />
                     <pre>{f.description}</pre>
                   </div>
