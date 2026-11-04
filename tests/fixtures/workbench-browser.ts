@@ -66,7 +66,7 @@ export async function workbenchBrowser(
   const slots=new SlotCore();slots.register({name:'root',children:{'sidebar.panellist':{kind:'list',scope:'root'},main:{kind:'keyed',scope:'root'},'conversation.input.left':{kind:'list',scope:'root'},'conversation.chat.node':{kind:'keyed',scope:'session'},'settings.section':{kind:'list',scope:'root'},'plugins.item':{kind:'list',scope:'root'}}},()=>null);
   const app=ReactDOM.createRoot(document.getElementById('app')),sidebar=ReactDOM.createRoot(document.getElementById('sidebar'));let selected=null;window.retained=new Set();
   const render=()=>{sidebar.render(React.createElement(React.Fragment,null,...slots.entriesOfSlot('sidebar.panellist').map(e=>React.createElement('button',{key:e.options.id,onClick:()=>layout.selectPanel(e.options.id)},e.options.label))));const main=slots.entriesOfSlot('main').find(e=>e.options.key===selected);app.render(main?React.createElement(main.component):React.createElement('section',{id:'chat'},React.createElement('h2',null,'主会话'),React.createElement('textarea',{'aria-label':'主会话输入'}),React.createElement('div',{id:'composer'},...slots.entriesOfSlot('conversation.input.left').map(e=>React.createElement(e.component,{key:e.options.id})))))};
-  const layout=new LayoutController({selectPanel(id){selected=id;render()}},id=>slots.entriesOfSlot('main').some(e=>e.options.key===id),{getSnapshot:()=>({}),subscribe:()=>()=>{}});window.layout=layout;
+  const layout=new LayoutController({selectPanel(id){selected=id;render()}},id=>slots.entriesOfSlot('main').some(e=>e.options.key===id),{getSnapshot:()=>({}),subscribe:()=>()=>{}});window.layout=layout;window.openSapperSettings=()=>{const e=slots.entriesOfSlot('settings.section').find(e=>e.options.id==='sapper');app.render(React.createElement('div',{style:{height:'100%',overflow:'auto'}},React.createElement(e.component)))};
   const remote={$mount:async contribution=>{for(const d of contribution.descriptors){remote[d.namespace]??={};remote[d.namespace][d.method]=async(...values)=>{const args=Object.fromEntries(d.parameters.map((p,i)=>[p.wire,values[i]]));return fetch('/rpc/'+d.namespace+'/'+d.method,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(args)}).then(r=>r.json())}}return()=>{}}};
   const value={status:'ready',writable:true,value:{enabled:true},base:{},user:{},revision:0};const scope={getSnapshot:()=>value,subscribe:()=>()=>{},set:async()=>true,mutate:async()=>true};
   const directoryRpc=async(method,args)=>fetch('/rpc/directoryPicker/'+method,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(args)}).then(r=>r.json());
@@ -143,6 +143,24 @@ export async function workbenchBrowser(
       'http://127.0.0.1:' +
         (server.address() as import('node:net').AddressInfo).port,
     )
+    await page.waitForFunction(() => Boolean((window as unknown as { ready?: boolean }).ready))
+    await page.evaluate(() => (window as unknown as { openSapperSettings(): void }).openSapperSettings())
+    await page.getByLabel('默认推理强度', { exact: true }).locator('option[value="fixture-max"]').waitFor({ state: 'attached' })
+    await page.getByLabel('检查主会话', { exact: true }).selectOption('m3-parent')
+    await page.getByLabel('explore mcp__ida__decompile', { exact: true }).waitFor()
+    expect(await page.getByLabel('explore 全部 MCP', { exact: true }).isChecked()).toBe(true)
+    await page.getByLabel('explore 全部 MCP', { exact: true }).uncheck()
+    await page.getByText('按 MCP 命名前缀选择', { exact: true }).first().click()
+    await page.getByLabel('explore mcp__ida__*', { exact: true }).check()
+    expect(await page.getByLabel('explore mcp__ida__decompile', { exact: true }).isChecked()).toBe(true)
+    expect(await page.getByLabel('explore mcp__browser__navigate', { exact: true }).isChecked()).toBe(false)
+    for (const theme of ['light', 'dark']) for (const width of [1024, 1280, 1440]) {
+      await page.setViewportSize({ width, height: 920 })
+      await page.evaluate((dark) => document.body.classList.toggle('dark', dark), theme === 'dark')
+      await page.screenshot({ path: path.join(root, `capabilities-${theme}-${width}.png`) })
+    }
+    await page.evaluate(() => document.body.classList.remove('dark'))
+    await page.setViewportSize({ width: 1280, height: 920 })
     await page
       .getByRole('button', { name: 'Sapper 比赛工作台', exact: true })
       .click()
@@ -156,6 +174,8 @@ export async function workbenchBrowser(
     await page
       .getByLabel('任务目标', { exact: true })
       .fill('检查当前文件夹；记录真实证据。'.repeat(16))
+    await page.locator('summary').filter({ hasText: '模型：' }).click()
+    await page.getByLabel('任务推理强度', { exact: true }).selectOption('fixture-max')
     await page.getByLabel('添加题目附件', { exact: true }).setInputFiles([
       { name: '中文题目.zip', mimeType: 'application/zip', buffer: Buffer.from([80, 75, 0, 255, 0, 1]) },
       { name: 'sample.bin', mimeType: 'application/octet-stream', buffer: Buffer.from([0, 128, 255, 42]) },

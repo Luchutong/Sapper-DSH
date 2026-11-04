@@ -8,6 +8,7 @@ import type { WorkbenchApi } from '../workbench/contracts.js'
 import type { TaskResult } from './result.js'
 import type { ChildCapabilities } from '../store/runs.js'
 import { z } from 'zod'
+import type { Capabilities } from './capabilities.js'
 import { createTypertRemoteInfo } from '@deepseek-ai/dsh-typert-protocol/remote-info'
 import type { TypertRemoteCodecSpec } from '@deepseek-ai/dsh-typert-protocol'
 
@@ -45,6 +46,9 @@ export const PANEL_REMOTE = createTypertRemoteInfo(
   {
     package: 'sapper-dsh',
     methods: {
+      'sapperPanel/capabilities': {
+        service: 'sapperPanel', invocation: { kind: 'direct' }, parameters: [param('input', codec('CapabilitiesInput', () => z.object({ sessionId: z.string().min(1).max(256).optional() }).strict()))], result,
+      },
       'sapperPanel/overview': {
         service: 'sapperPanel',
         invocation: { kind: 'direct' },
@@ -230,6 +234,7 @@ export interface PanelState {
   }>
 }
 export interface PanelApi {
+  capabilities?(input: { sessionId?: string }): Promise<Capabilities>
   targets(): Promise<PanelTarget[]>
   state(sessionId: string): Promise<PanelState>
   action(sessionId: string, input: PanelAction): Promise<unknown>

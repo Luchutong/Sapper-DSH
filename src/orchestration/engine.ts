@@ -7,7 +7,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent, AgentOptions } from '@deepseek-ai/dsh-agent'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import { scopeParentOf } from '@deepseek-ai/dsh-scope'
-import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { createUserMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-subagent'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
 import type { Config } from '../settings.js'
@@ -30,6 +30,7 @@ import {
 import type { DispatchMode, CapturedCall } from './types.js'
 import { ChildBudget } from './budget.js'
 import { flagLiterals } from './flags.js'
+import { matchesTool } from './tool-policy.js'
 
 interface Child {
   role: 'reason' | 'explore' | 'verify'; controller: AbortController; calls: Map<string, CapturedCall>
@@ -38,6 +39,8 @@ interface Child {
   onFlags?: ((candidates: Candidate[]) => Promise<void>) | undefined
   notifications: Promise<void>
   parent: Agent
+  closing?: boolean
+  mask?: { key: string; dispose(): void }
 }
 class StopRunError extends StoreError {}
 class FlagStop extends StoreError {}
@@ -51,6 +54,7 @@ const readTools = new Set(['sapper_status', 'sapper_fact', 'sapper_intent', 'sap
 /** Owns exact managed activations. Child identities are reserved before first publication. */
 export class Orchestrator {
   private children = new Map<string, Child>()
+  private updatingTools = false
   private active = new Map<string, AbortController>()
   constructor(
     private ctx: Context,
@@ -63,20 +67,24 @@ export class Orchestrator {
       stage: string,
     ) => Promise<void>,
   ) {
+    ctx.on('tools/change', () => {
+      if (this.updatingTools) return
+      for (const [id, child] of this.children) {
+        const agent = ctx.agents.get(id as SessionId)
+        if (agent && !child.closing && !child.budget.finalizing) try { this.refreshTools(child, agent) } catch (error) { child.controller.abort(error) }
+      }
+    })
     ctx.on('agent/created', async ({ agent }) => {
       const child = this.children.get(String(agent.id))
       if (!child) return
       // Preset tools live on ancestor scopes, not necessarily the global registry.
       // A child-local native declaration also keeps structured_output callable under a PTC preset.
       agent.ctx.tools.presentAs('native')
-      const inherited = scopeParentOf(agent)
-      const names = ctx.tools.schemas(agent).map(t => t.name).filter(name => name !== 'run_code' && ctx.tools.get(name, inherited) && ctx.tools.get(name, child.parent) &&
-        ((child.role !== 'verify' && readTools.has(name)) || this.external(child, name)))
-      agent.ctx.tools.restrict({ allow: names })
+      this.refreshTools(child, agent)
       agent.ctx.tools.guard(exec => this.denial(exec))
       const tools = ctx.tools.schemas(agent).map(t => t.name)
       const external = tools.filter(name => this.external(child, name))
-      child.capabilities = { role: child.role, session_id: String(agent.id), tools, external_tools: external, max_output_tokens: child.config.orchestration.maxOutputTokens, state: 'running', steps: 0, step_limit: child.budget.limit, step_ceiling: child.config.orchestration.budgetMode === 'adaptive' && child.role !== 'reason' ? Math.max(child.budget.limit, child.config.orchestration.maxChildStepsCeiling) : child.budget.limit, started_at: new Date().toISOString() }
+      child.capabilities = { role: child.role, session_id: String(agent.id), tools, external_tools: external, tool_selectors: child.role === 'reason' ? [] : child.role === 'explore' ? child.config.orchestration.exploreTools : child.config.orchestration.verifyTools, ...(agent.options.provider ? { provider: agent.options.provider } : {}), ...(agent.options.model ? { model: agent.options.model } : {}), ...(agent.options.reasoningEffort ? { reasoning_effort: String(agent.options.reasoningEffort) } : {}), max_output_tokens: child.config.orchestration.maxOutputTokens, state: 'running', steps: 0, step_limit: child.budget.limit, step_ceiling: child.config.orchestration.budgetMode === 'adaptive' && child.role !== 'reason' ? Math.max(child.budget.limit, child.config.orchestration.maxChildStepsCeiling) : child.budget.limit, started_at: new Date().toISOString() }
       await child.onReady(child.capabilities)
       if (child.role !== 'reason' && !external.length) throw new StopRunError(`SAPPER_M3_TOOL_UNAVAILABLE: ${child.role} 未获得白名单中的外部取证工具；可见工具: ${tools.join(', ')}。请检查 DSH preset 与 orchestration.${child.role === 'explore' ? 'exploreTools' : 'verifyTools'}，增加 token 预算无法补齐工具。`)
       return undefined
@@ -112,6 +120,7 @@ export class Orchestrator {
       if (!child) return next()
       try {
         child.guard()
+        if (!child.budget.finalizing) this.refreshTools(child, payload.agent)
         const budget = child.budget.next(child.progress.size)
         if (budget.exhausted) throw new StopRunError('子代理步数预算耗尽（结构化收尾仍未完成）')
         if (child.capabilities) {
@@ -154,7 +163,27 @@ export class Orchestrator {
   private external(child: Child, name: string): boolean {
     return child.role !== 'reason' && !name.startsWith('sapper_') && name !== 'structured_output' &&
       !!this.ctx.tools.get(name, child.parent) &&
-      (child.role === 'explore' ? child.config.orchestration.exploreTools : child.config.orchestration.verifyTools).includes(name)
+      matchesTool(child.role === 'explore' ? child.config.orchestration.exploreTools : child.config.orchestration.verifyTools, name)
+  }
+  private refreshTools(child: Child, agent: Agent): void {
+    if (this.updatingTools) return
+    this.updatingTools = true
+    try {
+      // Registry schemas are presentation-agnostic. Read the ancestor view so our
+      // own finite mask cannot hide tools registered since the last boundary.
+      const inherited = scopeParentOf(agent)
+      const names = this.ctx.tools.schemas(inherited).map((t) => t.name).filter((name) => name !== 'run_code' && this.ctx.tools.get(name, child.parent) &&
+        ((child.role !== 'verify' && readTools.has(name)) || this.external(child, name))).sort()
+      const key = names.join('\n')
+      if (child.mask?.key === key) return
+      const dispose = agent.ctx.tools.restrict({ allow: names }), previous = child.mask
+      child.mask = { key, dispose }
+      previous?.dispose()
+      if (child.capabilities) {
+        child.capabilities.tools = this.ctx.tools.schemas(agent).map((t) => t.name)
+        child.capabilities.external_tools = child.capabilities.tools.filter((name) => this.external(child, name))
+      }
+    } finally { this.updatingTools = false }
   }
   private allowed(child: Child, name: string, args: unknown): boolean {
     if (name === 'structured_output') return true
@@ -222,6 +251,16 @@ export class Orchestrator {
         if (colon >= 0) { agentOptions.provider = selected.slice(0, colon); agentOptions.model = selected.slice(colon + 1) }
         else agentOptions.model = selected
       }
+      const roleEffort = config.orchestration.reasoningEfforts[role]
+      const effort = roleEffort !== 'inherit' ? roleEffort : config.orchestration.reasoningEffort
+      if (effort !== 'inherit') {
+        agentOptions.reasoningEffort = ReasoningEffortId(effort)
+        const inherited = parent.session.requestHeader()?.config ?? parent.options
+        const provider = agentOptions.provider ?? inherited.provider, model = agentOptions.model ?? inherited.model
+        const info = provider && model ? await this.ctx.get('llm')?.resolveModelInfo(provider, model, controller.signal) : undefined
+        if (!info?.reasoning?.efforts.some((e) => String(e.id) === effort))
+          throw new StopRunError(`SAPPER_REASONING_UNSUPPORTED: ${role} 的 ${provider ?? '?'}:${model ?? '?'} 不支持推理档位 ${effort}；可选：${info?.reasoning?.efforts.map((e) => String(e.id)).join(', ') || '模型默认'}。请在 Sapper 设置调整，不会静默替换。`)
+      }
       guard()
       controller.signal.throwIfAborted()
       for (;;) {
@@ -252,6 +291,7 @@ export class Orchestrator {
       return { value: result.structured, session, calls: child.calls }
     } finally {
       await child.notifications.catch(() => {})
+      child.closing = true
       if (child.capabilities) { child.capabilities.state ??= 'failed'; if (child.capabilities.state === 'running') child.capabilities.state = child.controller.signal.reason instanceof FlagStop ? 'stopped' : 'failed'; child.capabilities.ended_at = new Date().toISOString(); try { await child.onReady(child.capabilities) } catch {} }
       try { await activation?.dispose() } finally { controller.signal.removeEventListener('abort', stop); clearTimeout(timer); clearInterval(poll); signal.removeEventListener('abort', onAbort); this.children.delete(session) }
     }

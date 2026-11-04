@@ -50,10 +50,10 @@ describe('DSH 0.2 client entry', () => {
   it('reports a Host-refused write instead of treating false as a saved setting', async () => {
     const scope = makeScope(false)
     const renderer = create(<SapperSettings scope={scope} />)
-    await act(async () => { renderer.root.findByProps({ type: 'checkbox' }).props.onChange({ target: { checked: false } }) })
+    await act(async () => { renderer.root.findByProps({ 'aria-label': '启用 Sapper' }).props.onChange({ target: { checked: false } }) })
     expect(scope.set).toHaveBeenCalledWith('enabled', false)
     expect(renderer.root.findByProps({ role: 'alert' }).children.join('')).toContain('未接受此次保存')
-    expect(renderer.root.findByProps({ type: 'checkbox' }).props.checked).toBe(true)
+    expect(renderer.root.findByProps({ 'aria-label': '启用 Sapper' }).props.checked).toBe(true)
     renderer.unmount()
   })
   it('exposes automatic storage by default and writes only its nested setting on explicit selection', async () => {

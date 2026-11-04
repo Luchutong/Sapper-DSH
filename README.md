@@ -3,7 +3,8 @@
 将 [sapper-v2](https://github.com/N1nEmAn/sapper-v2) 的事实图与
 `reason → explore → verify` 循环移植为 DSH NEXT 桌面插件。
 
-**当前版本 `0.1.0-alpha.17`：新建题目支持多附件上传，保存到独立题目目录后再启动；持久化队列默认并行两题，结束生成一次主助手简报。**
+**当前版本 `0.1.0-alpha.18`：设置页可选择探索/复核工具范围、MCP 前缀、角色模型和默认推理强度；子代理支持使用父会话允许的 MCP 工具。**
+默认工具范围增加 `mcp__*`，已有显式白名单保持原值，可在设置页启用全部 MCP、选择服务前缀或精确工具。推理档位由 DSH 模型适配器提供。见 [工具与模型配置](docs/alpha18-validation.md)。
 附件支持多选、移除、上传进度、取消和失败恢复；中文及同名文件原样保存，分析代理从本题 `attachments/` 读取。使用方法与验证见 [附件上传](docs/alpha17-validation.md)。
 本版修复 browse 目录选择、插件作用域下命令受理，以及重启后未完成题目的恢复。已有 alpha.13 创建记录可直接继续，见 [修复与验收](docs/alpha14-validation.md)。
 alpha.15 在成功工具输出出现 flag 时立即向主会话显示未验证候选，无需等待探索收尾或独立复核；后续进度仍保留该值，见 [flag 即时回显](docs/alpha15-validation.md)。
@@ -91,7 +92,7 @@ flag 事实是权威记录，`flags/ledger.json` 是可重建索引。详细边�
 在 DSH NEXT 菜单“打开 DSH 终端”，执行后重启应用：
 
 ```powershell
-dsh plugin add "D:\BaiduSyncdisk\sapper移植\sapper-dsh-0.1.0-alpha.17.tgz"
+dsh plugin add "D:\BaiduSyncdisk\sapper移植\sapper-dsh-0.1.0-alpha.18.tgz"
 ```
 
 开发需要 Node.js 22+、pnpm 8.15.4 和 Python 3（仅 golden 测试使用）：

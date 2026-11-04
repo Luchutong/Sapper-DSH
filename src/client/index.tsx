@@ -9,6 +9,8 @@ import { workbenchController } from './workbench-store.js'
 import { connectPanel } from './connection.js'
 import { resultDefinition, ResultNode } from './result.js'
 import { VERSION } from '../constants.js'
+import { CapabilitySettings, type SettingValue } from './capability-settings.js'
+import type { WorkbenchPanelApi } from '../panel/rpc.js'
 
 export const name = 'sapper-dsh'
 export const inject = [
@@ -32,7 +34,7 @@ function BudgetNumber({ label, value, min, max, disabled, save }: { label: strin
   }} />
 }
 
-export function SapperSettings({ scope }: { scope: BrowserSettingsScope }) {
+export function SapperSettings({ scope, api }: { scope: BrowserSettingsScope; api?: Pick<WorkbenchPanelApi, 'capabilities'> | undefined }) {
   const state = useSyncExternalStore(
     listener => scope.subscribe(listener),
     () => scope.getSnapshot(),
@@ -45,7 +47,7 @@ export function SapperSettings({ scope }: { scope: BrowserSettingsScope }) {
   const storeValue = typeof state.value === 'object' && state.value !== null && 'store' in state.value ? state.value.store : null
   const approval = typeof storeValue === 'object' && storeValue !== null && 'approval' in storeValue && storeValue.approval === 'always' ? 'always' : 'session'
 
-  const save = async (path: string[], value: boolean | string | number) => {
+  const save = async (path: string[], value: SettingValue) => {
     setPending(true)
     setError('')
     try {
@@ -81,6 +83,7 @@ export function SapperSettings({ scope }: { scope: BrowserSettingsScope }) {
       <label>
         <input
           type="checkbox"
+          aria-label="启用 Sapper"
           checked={enabled}
           disabled={state.status !== 'ready' || !state.writable || pending}
           onChange={(event) => {
@@ -115,6 +118,8 @@ export function SapperSettings({ scope }: { scope: BrowserSettingsScope }) {
           : '正在等待 DSH 的 sapper 配置表单；不会自动写入默认值。'}
       </p>
       {error && <p role="alert">{error}</p>}
+      <p>工具范围、模型和推理强度保存后会停止正在运行的编排，请在发起任务前设置。</p>
+      <CapabilitySettings api={api} orchestration={orchestration} disabled={state.status !== 'ready' || !state.writable || pending} save={save} />
       <fieldset
         style={{
           marginTop: 20,
@@ -258,17 +263,19 @@ export function apply(ctx: BrowserContext): void {
       ),
     )
   }
-  const Panel = ({ view }: { view?: string }) =>
-    view === 'summary' ? (
+  const Panel = ({ view }: { view?: string }) => {
+    const snapshot = useSyncExternalStore(connection.subscribe, connection.getSnapshot, connection.getSnapshot)
+    return view === 'summary' ? (
       <p>工作区事实图与任务规划</p>
     ) : (
       <>
         <button onClick={controller.open} style={{ margin: 16 }}>
           打开 Sapper 比赛工作台 ↗
         </button>
-        <SapperSettings scope={scope} />
+        <SapperSettings scope={scope} api={snapshot.api} />
       </>
     )
+  }
   ctx.effect(() => ctx.configForms.whileServed(['sapper'], () => {
     const offCard = ctx.slots.inject('plugins.item', () => ctx.slots.register({
       name: 'plugins.item', id: 'sapper', label: 'Sapper', order: 100,

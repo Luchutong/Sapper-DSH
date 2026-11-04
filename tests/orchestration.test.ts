@@ -4,7 +4,7 @@ import path from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import { Loader } from '@deepseek-ai/cordis-plugin-loader'
 import AgentPresetRegistry from '@deepseek-ai/dsh-agent-preset-registry'
-import { LlmAdapter, ToolCallId } from '@deepseek-ai/dsh-llm'
+import { LlmAdapter, ToolCallId, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { scopeParentOf } from '@deepseek-ai/dsh-scope'
@@ -38,6 +38,10 @@ afterEach(async () => {
   for (const f of cleanup.splice(0).reverse()) await f()
 })
 interface Scenario {
+  externalName?: string
+  verifyExternalName?: string
+  registeredTools?: string[]
+  parentEffort?: string
   summaryAttack?: boolean
   userRead?: boolean
   userGate?: Promise<void>
@@ -64,7 +68,10 @@ interface Scenario {
 class FixtureModel extends LlmAdapter {
   requests: GenerateOptions[] = []
   async listModels() {
-    return [{ provider: 'fixture', id: 'fixture-model', name: 'Fixture model' }]
+    return [{ provider: 'fixture', id: 'fixture-model', name: 'Fixture model' }, { provider: 'fixture', id: 'fixture-other', name: 'Other fixture' }]
+  }
+  override async resolveModel(provider: string, model: string) {
+    return { provider, id: model, name: model, reasoning: { efforts: (model === 'fixture-other' ? ['other-only'] : ['fixture-low', 'fixture-max']).map((id) => ({ id: ReasoningEffortId(id), name: id })) } }
   }
   constructor(readonly scenario: Scenario) {
     super()
@@ -141,7 +148,7 @@ class FixtureModel extends LlmAdapter {
     if (role === 'reason') args = { intents: this.scenario.emptyReason ? [] : Array.from({ length: this.scenario.proposals ?? 1 }, (_, n) => ({ title: `Check fixture ${n}`, description: `Read local fixture ${n}`, from: ['f001'], success_criteria: 'Fixture content contains VERIFIED-LOCAL-7C42', completes_goal: !!this.scenario.completesGoal })) }
     else if (!tools.length && this.scenario.writeup) { name = role === 'explore' ? 'pwsh' : 'read'; args = role === 'explore' ? { code: 'write-local-wp' } : { path: 'WP.md' } }
     else if (!tools.length && this.scenario.attack) { name = 'sapper_fact'; args = { action: 'create', description: 'BYPASS' } }
-    else if (tools.length < (this.scenario.attack ? requiredReads + 1 : requiredReads) && !(role === 'explore' && (this.scenario.noEvidence || this.scenario.forged))) { name = 'read'; args = { path: requiredReads > 1 ? `fixture-${tools.length}.txt` : 'fixture.txt' } }
+    else if (tools.length < (this.scenario.attack ? requiredReads + 1 : requiredReads) && !(role === 'explore' && (this.scenario.noEvidence || this.scenario.forged))) { name = (role === 'verify' ? this.scenario.verifyExternalName : undefined) ?? this.scenario.externalName ?? 'read'; args = { path: requiredReads > 1 ? `fixture-${tools.length}.txt` : 'fixture.txt' } }
     else if (role === 'explore') args = { title: 'Fixture observation', description: this.scenario.writeup ? 'WP.md: local evidence and reproduction steps saved' : this.scenario.flag ?? 'Local fixture contains VERIFIED-LOCAL-7C42', kind: this.scenario.flag && !this.scenario.writeup ? 'flag' : 'note', ...(this.scenario.recipe ? { reproduction: this.scenario.recipe } : {}), evidence: this.scenario.noEvidence ? [] : [{ receipt_id: this.scenario.forged ? 'invented' : receipt }] }
     else args = { goal_achieved: !!this.scenario.completesGoal && !this.scenario.denyGoal, verified: !this.scenario.reject, issues: this.scenario.reject ? 'REPRODUCTION-MISMATCH' : '', evidence: this.scenario.noVerifyEvidence || this.scenario.reject ? [] : [{ receipt_id: receipt }] }
     yield { type: 'reasoning-delta', index: 1, text: role === 'explore' ? 'EXPLORER-PRIVATE-TRACE' : 'fixture reasoning' }
@@ -208,12 +215,12 @@ async function setup(
       return 'WP.md saved' + (scenario.writeup && scenario.flag ? '\n' + scenario.flag : '')
     },
   })
-  if (topology === 'global') { ctx.tools.register(readDefinition); if ('writeup' in scenario) ctx.tools.register(wpDefinition) }
+  if (topology === 'global') { ctx.tools.register(readDefinition); for (const name of scenario.registeredTools ?? []) ctx.tools.register({ ...readDefinition, name }); if ('writeup' in scenario) ctx.tools.register(wpDefinition) }
   else {
     await ctx.plugin(Loader)
     await ctx.plugin(AgentPresetRegistry, { default: 'fixture' })
     ctx.loader.builtins.fixtureTools = { inject: ['tools', 'systemPrompt'], apply(scoped: Context) {
-      scoped.tools.register(readDefinition); if ('writeup' in scenario) scoped.tools.register(wpDefinition)
+      scoped.tools.register(readDefinition); for (const name of scenario.registeredTools ?? []) scoped.tools.register({ ...readDefinition, name }); if ('writeup' in scenario) scoped.tools.register(wpDefinition)
       if (topology === 'preset-ptc') scoped.tools.presentAs('ptc')
     } }
     await ctx.agentPresets.register({ id: 'fixture', plugins: [{ name: 'cordis:fixtureTools' }] })
@@ -232,7 +239,7 @@ async function setup(
   await mountAgentLoopTestHarness(ctx)
   const parentHandle = await ctx.agents.create({
     sessionId: SessionId('m3-parent'),
-    agentOptions: { provider: 'fixture', model: 'fixture-model' },
+    agentOptions: { provider: 'fixture', model: 'fixture-model', ...(scenario.parentEffort ? { reasoningEffort: ReasoningEffortId(scenario.parentEffort) } : {}) },
     meta: { cwd, ...(topology !== 'global' ? { agentPreset: 'fixture' } : {}) },
     ...(topology !== 'global'
       ? {
@@ -481,6 +488,82 @@ it('respects the DSH delegation-depth cap instead of expanding it for a nested c
   expect((await store.read()).facts.filter(f => f.id !== 'goal')).toHaveLength(1)
 })
 
+it('inherits parent-visible MCP tools from a preset and records independent MCP evidence for both roles', async () => {
+  const name = 'mcp__ida__decompile', { dispatch, store, model, read } = await setup({ externalName: name, registeredTools: [name] }, {}, false, 1, 'preset-ptc')
+  const run = await dispatch()
+  expect(run.state, JSON.stringify(run)).toBe('completed')
+  expect(read).toHaveBeenCalledTimes(2)
+  const outcome = (await store.readRun(run.id)).outcomes[0]!
+  expect(outcome.candidate?.evidence[0]?.tool).toBe(name)
+  expect(outcome.verification?.evidence[0]?.tool).toBe(name)
+  expect(outcome.candidate?.explorer_session).not.toBe(outcome.verification?.verifier_session)
+  expect(run.children?.filter((c) => c.role !== 'reason').every((c) => c.external_tools.includes(name))).toBe(true)
+  for (const r of model.requests.filter((r) => JSON.stringify(r.messages).includes('# Sapper reason'))) expect(r.tools?.map((t) => t.name)).not.toContain(name)
+})
+it('limits MCP prefixes to the selected server and configures verifier tools independently', async () => {
+  const name = 'mcp__ida__decompile', other = 'mcp__browser__navigate', { dispatch, model } = await setup({ externalName: name, verifyExternalName: 'read', registeredTools: [name, other] }, { orchestration: { exploreTools: ['mcp__ida__*'], verifyTools: ['read'] } })
+  expect((await dispatch()).state).toBe('completed')
+  for (const r of model.requests.filter((r) => JSON.stringify(r.messages).includes('# Sapper explore'))) {
+    expect(r.tools?.map((t) => t.name)).toContain(name)
+    expect(r.tools?.map((t) => t.name)).not.toContain(other)
+    expect(r.tools?.map((t) => t.name)).not.toContain('read')
+  }
+  for (const r of model.requests.filter((r) => JSON.stringify(r.messages).includes('# Sapper verify'))) expect(r.tools?.map((t) => t.name)).not.toContain(name)
+})
+it('never restores an MCP tool denied in the parent even when its exact name is configured', async () => {
+  const name = 'mcp__ida__decompile', { parent, dispatch, model, read, ctx, config } = await setup({ externalName: name, registeredTools: [name] }, { orchestration: { exploreTools: [name] } }, false, 1, 'preset')
+  parent.ctx.tools.restrict({ deny: [name] })
+  const { capabilities } = await import('../src/panel/capabilities.js')
+  expect((await capabilities(ctx, config, String(parent.id))).tools.find((t) => t.name === name)).toMatchObject({ available: false, explore: false })
+  expect((await dispatch()).stop_reason).toContain('SAPPER_M3_TOOL_UNAVAILABLE')
+  expect(model.requests).toHaveLength(1)
+  expect(read).not.toHaveBeenCalled()
+})
+it('refreshes MCP tools registered between child inference boundaries without changing parent presentation', async () => {
+  const scenario: Scenario = {}, { ctx, dispatch, model } = await setup(scenario, {}, false, 1, 'preset-ptc')
+  let registered = false
+  scenario.beforeRead = async () => {
+    if (registered) return
+    registered = true
+    ctx.tools.register(defineTool({ name: 'mcp__ida__late', description: 'Late MCP capability', parameters: {}, output: { schema: { type: 'string' }, render: (_a,v) => [{ type: 'text', text: v }] }, execute: async () => 'late' }))
+  }
+  expect((await dispatch()).state).toBe('completed')
+  const explore = model.requests.filter((r) => JSON.stringify(r.messages).includes('# Sapper explore'))
+  expect(explore[0]?.tools?.map((t) => t.name)).not.toContain('mcp__ida__late')
+  expect(explore.at(-1)?.tools?.map((t) => t.name)).toContain('mcp__ida__late')
+})
+it('honors a parent MCP revocation at the final execution guard after a tool was advertised', async () => {
+  const name = 'mcp__ida__decompile', { ctx, parent, dispatch, read, store } = await setup({ externalName: name, registeredTools: [name] }, { orchestration: { maxVerify: 1 } })
+  let denied = false
+  ctx.on('tools/pre-execute', async (exec, next) => { if (exec.name === name && !denied) { denied = true; parent.ctx.tools.restrict({ deny: [name] }) } return next() })
+  const run = await dispatch()
+  expect(run.state).toBe('failed')
+  expect(read).not.toHaveBeenCalled()
+  expect((await store.read()).facts.some((f) => f.verification_status === 'confirmed')).toBe(false)
+})
+it('passes adapter-owned default and role reasoning efforts into actual child requests', async () => {
+  const { dispatch, model } = await setup({}, { orchestration: { reasoningEffort: 'fixture-max', reasoningEfforts: { verify: 'fixture-low' } } })
+  const run = await dispatch()
+  expect(run.state, JSON.stringify(run)).toBe('completed')
+  for (const r of model.requests) expect(r.reasoningEffort).toBe(JSON.stringify(r.messages).includes('# Sapper verify') ? 'fixture-low' : 'fixture-max')
+  expect(run.children?.find((c) => c.role === 'verify')?.reasoning_effort).toBe('fixture-low')
+})
+it('inherits parent reasoning effort and lets a changed role model resolve its own default', async () => {
+  const { dispatch, model } = await setup({ parentEffort: 'fixture-max' }, { orchestration: { models: { verify: 'fixture:fixture-other' } } })
+  expect((await dispatch()).state).toBe('completed')
+  const verify = model.requests.filter((r) => JSON.stringify(r.messages).includes('# Sapper verify'))
+  expect(verify.length).toBeGreaterThan(0)
+  for (const r of verify) { expect(r.model).toBe('fixture-other'); expect(r.reasoningEffort).toBeUndefined() }
+  for (const r of model.requests.filter((r) => !JSON.stringify(r.messages).includes('# Sapper verify'))) expect(r.reasoningEffort).toBe('fixture-max')
+})
+it('rejects unsupported reasoning before any child model request instead of silently guessing an effort', async () => {
+  const { dispatch, model } = await setup({}, { orchestration: { reasoningEffort: 'invented-max' } })
+  const run = await dispatch()
+  expect(run.state).toBe('failed')
+  expect(run.stop_reason).toContain('SAPPER_REASONING_UNSUPPORTED')
+  expect(model.requests).toHaveLength(0)
+})
+
 it('inherits preset-scoped file tools into fresh explore/verify sessions', async () => {
   const { dispatch, ctx, parent, model, read } = await setup({}, {}, false, 1, 'preset')
   expect(ctx.tools.get('read')).toBeUndefined()
@@ -619,7 +702,7 @@ it(
     )
     const ClientGateway = await import('@deepseek-ai/dsh-api-gateway/client')
     const { PANEL_REMOTE } = await import('../src/panel/rpc.js')
-    const panelScenario: Scenario = { completesGoal: true, writeup: false }
+    const panelScenario: Scenario = { completesGoal: true, writeup: false, registeredTools: ['mcp__ida__decompile', 'mcp__browser__navigate'] }
     const { ctx, parent, cwd } = await setup(
       panelScenario,
       {},
@@ -663,6 +746,10 @@ it(
     expect(await invoke('targets', {})).toEqual([
       { id: String(parent.id), cwd },
     ])
+    const capabilityList = await connection.getSnapshot().api!.capabilities!({ sessionId: String(parent.id) })
+    expect(capabilityList.tools.find((t) => t.name === 'read')).toMatchObject({ available: true, explore: true, verify: true })
+    expect(capabilityList.models.find((m) => m.id === 'fixture-model')?.efforts.map((e) => e.id)).toEqual(['fixture-low', 'fixture-max'])
+    await expect(ctx.typertGateway.invoke({ namespace: 'sapperPanel', method: 'capabilities', args: { input: { cwd: '/forged' } }, peer })).rejects.toThrow()
     expect(await invoke('state', { sessionId: String(parent.id) })).toMatchObject({ tasks: [], runs: [] })
     const panelResults: import('../src/panel/result.js').TaskResult[] = []
     ctx.on('session/event', (session, event) => {

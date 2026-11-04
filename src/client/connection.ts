@@ -50,6 +50,7 @@ export function connectPanel(ctx: BrowserContext) {
       return result.value
     }
     const api: WorkbenchPanelApi = {
+      capabilities: (input) => invoke('capabilities', { input }) as Promise<import('../panel/capabilities.js').Capabilities>,
       node: (input, id) =>
         invoke('node', { input, id }) as ReturnType<WorkbenchPanelApi['node']>,
       overview: () =>

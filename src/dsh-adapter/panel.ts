@@ -1,4 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis'
+import { z } from 'zod'
 import {
   Remote,
   TypertRemoteService,
@@ -45,6 +46,7 @@ import { writePermission } from './permissions.js'
 import { NativeWorkbench } from '../workbench/native.js'
 import { publicAttachments } from '../workbench/attachments.js'
 import { StoreError } from '../store/validation.js'
+import { capabilities } from '../panel/capabilities.js'
 
 interface Job {
   input: PanelAction
@@ -100,6 +102,11 @@ export class TaskPanelService extends TypertRemoteService {
       }
       await Promise.allSettled([...this.jobs.values()].map((j) => j.done))
     })
+  }
+  @Remote
+  async capabilities(input: { sessionId?: string }) {
+    this.owner()
+    return capabilities(this.ctx, this.getConfig(), z.object({ sessionId: z.string().min(1).max(256).optional() }).strict().parse(input).sessionId)
   }
   @Remote
   async overview() {

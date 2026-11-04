@@ -110,3 +110,12 @@ alpha.13 的可见结果记录使用 SDK `appendPluginRecord` 写 `plugin:sapper
 创建分为 prepare、原生上传、importAttachment 与 launch。prepare 仅创建可恢复的目录、工作区和会话；客户端持有 Session 引用，通过正式 fileUpload.upload 传递 File，模型不会在附件上传期间启动。importAttachment 只接受同一接收 Session 的暂存凭证，先持久化 SDK FileAttachmentRef，再从 AttachmentStore 流式复制、计算大小和 SHA256，以不覆盖目标的方式发布到本题 attachments/。客户端不能提供宿主读取路径或自行授权的文件引用。
 
 启动清单与 accepted 文件引用保存在原 sapper_workbench 域，每个 requestId 的 prepare/import/launch 串行执行。重启后可以完成已接收文件的复制；尚在浏览器的 File 需要用户重新选择。launch 再次校验全部文件已保存且字节摘要一致，才进入原 CommandRuntime/队列。任务开始写入附件 note，长清单放 doc，避免挤占目标和上下文预算。详情与主会话卡片只展示上传元数据，不把上传成功标记成分析结论或确认事实。
+
+
+## alpha.18 MCP 与模型能力
+
+panel.capabilities 经 owner-only Remote 查询指定主会话或全局的工具目录、父会话可见性和模型元数据，不执行 MCP 工具。设置页使用原 Config transport 保存 exploreTools/verifyTools、角色模型、插件默认与角色推理档位；新题目的模型偏好另支持主会话 reasoningEffort。
+
+统一 tool-policy 仅允许 MCP 命名空间前缀及外部工具精确名称。Orchestrator 将配置范围与父会话和祖先作用域可见工具取交集，给子代理安装有限 mask，监听 tools/change 并在推理边界更新。guard 在执行前重新检查父会话能力，不能用前缀恢复被撤销的工具。MCP 成功输出沿用原独立回执、候选与复核链。规划角色不获得 MCP，连接器本身的工作区和 Agent 激活限制仍独立生效。
+
+推理强度通过 AgentOptions.reasoningEffort 传给正式 spawn，显式值先验证所选精确模型的 resolveModelInfo；默认继承与跨模型清除旧档位沿用 SDK 契约。模型列表之外的当前路由和已配置角色路由也查询元数据，不将目录成员资格作为执行授权。

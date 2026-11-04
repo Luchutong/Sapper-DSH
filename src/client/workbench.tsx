@@ -15,6 +15,8 @@ import { GraphPreview } from './graph.js'
 import { DirectoryPicker } from './directory-picker.js'
 import { candidateLabel } from './result.js'
 import { launchWithAttachments, type DraftAttachment } from './launch-attachments.js'
+import { EffortSelect } from './capability-settings.js'
+import type { Capabilities } from '../panel/capabilities.js'
 
 const labels: Record<string, string> = {
   queued: '排队中',
@@ -269,6 +271,8 @@ function NewChallenge({
     [model, setModel] = useState(
       initial?.input.model?.model ?? saved.model?.model ?? data.defaults.model?.model ?? '',
     ),
+    [reasoning, setReasoning] = useState(initial?.input.model?.reasoningEffort ?? saved.model?.reasoningEffort ?? data.defaults.model?.reasoningEffort ?? 'inherit'),
+    [capabilities, setCapabilities] = useState<Capabilities>(),
     [pending, setPending] = useState(false),
     [error, setError] = useState(initial?.error ?? ''),
     [picking, setPicking] = useState(false),
@@ -277,6 +281,7 @@ function NewChallenge({
   const transfer = useRef<AbortController>()
   const mounted = useRef(true)
   useEffect(() => () => { mounted.current = false; transfer.current?.abort() }, [])
+  useEffect(() => { let active = true; void api.capabilities?.({}).then((value) => { if (active) setCapabilities(value) }).catch(() => {}); return () => { active = false } }, [api])
   const launch = async () => {
     setPending(true)
     setError('')
@@ -295,8 +300,8 @@ function NewChallenge({
             model: {
               provider,
               model,
-              ...(saved.model?.reasoningEffort
-                ? { reasoningEffort: saved.model.reasoningEffort }
+              ...(reasoning !== 'inherit'
+                ? { reasoningEffort: reasoning }
                 : {}),
             },
           }
@@ -419,7 +424,7 @@ function NewChallenge({
             <input
               aria-label="模型 provider"
               value={provider}
-              onChange={(e) => setProvider(e.target.value)}
+              onChange={(e) => { setProvider(e.target.value); setReasoning('inherit') }}
             />
           </label>
           <label>
@@ -427,9 +432,10 @@ function NewChallenge({
             <input
               aria-label="模型"
               value={model}
-              onChange={(e) => setModel(e.target.value)}
+              onChange={(e) => { setModel(e.target.value); setReasoning('inherit') }}
             />
           </label>
+          <EffortSelect label="任务推理强度" value={reasoning} model={capabilities?.models.find((m) => m.provider === provider && m.id === model)} disabled={pending || Boolean(request)} change={setReasoning} />
         </details>
       </fieldset>
       <fieldset disabled={pending} className="sp-attachment-picker">

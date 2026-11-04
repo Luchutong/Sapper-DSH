@@ -18,6 +18,7 @@ export interface RunRecord {
   flag_observations?: Array<{ intent_id: string; candidate: Candidate }>
 }
 export interface ChildCapabilities {
+  tool_selectors?: readonly string[]; provider?: string; model?: string; reasoning_effort?: string
   role: 'reason' | 'explore' | 'verify'; session_id: string; tools: string[]; external_tools: string[]; max_output_tokens: number
   state?: 'running' | 'completed' | 'failed' | 'stopped'; steps?: number; step_limit?: number; step_ceiling?: number; extensions?: number; finalizing?: boolean; started_at?: string; ended_at?: string
 }

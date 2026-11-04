@@ -1,4 +1,5 @@
 import Schema from '@deepseek-ai/schemastery'
+import { EXPLORE_TOOLS, VERIFY_TOOLS, validToolSelector } from './orchestration/tool-policy.js'
 
 const positive = (fallback: number, max: number) =>
   Schema.number().min(1).max(max).step(1).default(fallback)
@@ -39,8 +40,10 @@ const PlainConfig = group({
     maxChildStepsCeiling: positive(128, 512).description('自动模式单个子代理的硬上限；临近上限时预留结构化收尾'),
     maxOutputTokens: positive(16384, 65536),
     requireApproval: Schema.boolean().default(true).description('工作区写入模式启动编排需审批；完全权限自动授权，不控制普通图写入'),
-    exploreTools: Schema.array(Schema.string()).default(['read', 'glob', 'grep', 'bash', 'pwsh', 'web_search', 'web_fetch']),
-    verifyTools: Schema.array(Schema.string()).default(['read', 'glob', 'grep', 'bash', 'pwsh']),
+    exploreTools: Schema.array(Schema.string()).default(EXPLORE_TOOLS),
+    verifyTools: Schema.array(Schema.string()).default(VERIFY_TOOLS),
+    reasoningEffort: Schema.string().default('inherit').description('子代理默认推理强度；inherit 沿用父会话或模型默认'),
+    reasoningEfforts: group({ reason: Schema.string().default('inherit'), explore: Schema.string().default('inherit'), verify: Schema.string().default('inherit') }),
     models: group({
       reason: Schema.string().default('inherit'),
       explore: Schema.string().default('inherit'),
@@ -80,6 +83,8 @@ export function validateConfig(config: Config): void {
     if (!selected.trim() || selected.startsWith(':') || selected.endsWith(':')) throw new Error('角色模型必须是 inherit、model 或 provider:model')
   }
   for (const tool of [...config.orchestration.exploreTools, ...config.orchestration.verifyTools]) {
-    if (!/^[a-z][a-z0-9_]*$/.test(tool) || tool.startsWith('sapper_') || ['structured_output', 'run_code', 'send_message', 'interrupt_agent'].includes(tool)) throw new Error('M3 外部工具白名单无效；禁止图写入、PTC 传输和代理通信')
+    if (!validToolSelector(tool)) throw new Error('外部工具范围无效；仅 MCP 命名空间支持末尾 *，禁止图写入、PTC 传输和递归委派')
   }
+  for (const effort of [config.orchestration.reasoningEffort, ...Object.values(config.orchestration.reasoningEfforts)])
+    if (!effort.trim() || effort.length > 128 || /[\x00-\x1f]/.test(effort)) throw new Error('推理强度必须是 inherit 或模型提供的有效档位 ID')
 }

@@ -2,8 +2,16 @@ import { describe, expect, it } from 'vitest'
 import { resolveConfig } from '../src/settings.js'
 import { resolveStorePath } from '../src/store/paths.js'
 import path from 'node:path'
+import { matchesTool } from '../src/orchestration/tool-policy.js'
 
 describe('settings and workspace boundary', () => {
+  it('supports exact and MCP-only prefix selectors while retaining explicit empty scopes', () => {
+    expect(resolveConfig().orchestration.exploreTools).toContain('mcp__*')
+    expect(resolveConfig({ orchestration: { exploreTools: [] } }).orchestration.exploreTools).toEqual([])
+    expect(matchesTool(['mcp__ida__*'], 'mcp__ida__decompile')).toBe(true)
+    expect(matchesTool(['mcp__ida__*'], 'mcp__browser__read')).toBe(false)
+    for (const tool of ['*', 'read*', 'sapper_fact', 'subagent', 'run_code']) expect(() => resolveConfig({ orchestration: { exploreTools: [tool] } })).toThrow()
+  })
   it('resolves nested defaults and keeps automatic execution off', () => {
     const config = resolveConfig({ context: { maxChars: 1024 } })
     expect(config.context.maxChars).toBe(1024)
