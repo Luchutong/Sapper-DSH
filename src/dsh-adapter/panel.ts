@@ -24,6 +24,7 @@ import { taskCatalog, taskRoot } from '../store/tasks.js'
 import { GraphStore } from '../store/graph.js'
 import { frontier } from '../render/frontier.js'
 import { RESULT_RECORD, type TaskResult } from '../panel/result.js'
+import { runCandidates } from '../orchestration/flags.js'
 import type { RunRecord } from '../store/runs.js'
 import { UNTRUSTED_NOTICE } from '../render/context.js'
 import { WorkbenchStore } from '../workbench/store.js'
@@ -717,24 +718,21 @@ export class TaskPanelService extends TypertRemoteService {
       explore: '正在探索并收集证据',
       verify: '正在独立复核',
       'flag-found':
-        '发现带工具证据的 flag，已停止其他路线，正在保存和回收子会话',
+        '已获取未验证 flag，可先提交测试；正在停止其他路线和回收子会话，无需等待复核',
+      'flag-candidate': '已获取未验证 flag，可先提交测试；后台复核不阻塞此结果',
     }
     await this.persist(job)
     this.notice(
       agent,
       job,
-      stage === 'flag-found' ? 'flag-found' : 'progress',
+      stage === 'flag-found' || stage === 'flag-candidate' ? 'flag-found' : 'progress',
       labels[stage] ?? stage,
       {
         run_id: run.id,
-        candidates: run.outcomes
-          .filter((o) => o.candidate && o.state !== 'confirmed')
-          .map((o) => ({
-            title: o.candidate!.title,
-            description: o.candidate!.description,
-            kind: o.candidate!.kind,
-            status: 'unverified' as const,
-          })),
+        candidates: runCandidates(run),
+        confirmed: run.outcomes.filter((o) => o.state === 'confirmed' && o.candidate?.kind === 'flag').map((o) => ({
+          id: o.fact_id!, title: o.candidate!.title, description: o.candidate!.description, kind: 'flag',
+        })),
       },
     )
   }
@@ -773,26 +771,7 @@ export class TaskPanelService extends TypertRemoteService {
         description: f.description,
         kind: f.kind ?? 'note',
       }))
-    const candidates = (run?.outcomes ?? [])
-      .filter(
-        (o) =>
-          o.candidate &&
-          o.state !== 'confirmed' &&
-          !confirmed.some(
-            (f) =>
-              f.kind === o.candidate!.kind &&
-              f.description === o.candidate!.description,
-          ),
-      )
-      .map((o) => ({
-        title: o.candidate!.title,
-        description: o.candidate!.description,
-        kind: o.candidate!.kind,
-        status:
-          o.verification?.verified === false
-            ? ('rejected' as const)
-            : ('unverified' as const),
-      }))
+    const candidates = (run ? runCandidates(run) : []).filter((candidate) => !confirmed.some((f) => f.kind === candidate.kind && f.description === candidate.description))
     const wp_path =
       graph.project.purpose === 'writeup' &&
       (await exists(path.join(cwd, 'WP.md')))

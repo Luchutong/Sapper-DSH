@@ -14,7 +14,7 @@ import type { Config } from '../settings.js'
 import { validateConfig } from '../settings.js'
 import { GraphStore } from '../store/graph.js'
 import type { WriteOptions } from '../store/graph.js'
-import type { RunRecord, RunOutcome, ChildCapabilities } from '../store/runs.js'
+import type { RunRecord, RunOutcome, ChildCapabilities, Candidate } from '../store/runs.js'
 import { StoreError } from '../store/validation.js'
 import { frontier } from '../render/frontier.js'
 import { renderGraphContext } from '../render/snapshot.js'
@@ -29,11 +29,14 @@ import {
 } from './types.js'
 import type { DispatchMode, CapturedCall } from './types.js'
 import { ChildBudget } from './budget.js'
+import { flagLiterals } from './flags.js'
 
 interface Child {
   role: 'reason' | 'explore' | 'verify'; controller: AbortController; calls: Map<string, CapturedCall>
   budget: ChildBudget; progress: Set<string>; capabilities?: ChildCapabilities; config: Config; guard: () => void
   onReady: (capabilities: ChildCapabilities) => Promise<void>
+  onFlags?: ((candidates: Candidate[]) => Promise<void>) | undefined
+  notifications: Promise<void>
   parent: Agent
 }
 class StopRunError extends StoreError {}
@@ -81,7 +84,13 @@ export class Orchestrator {
     ctx.tools.guard((exec) => this.denial(exec))
     ctx.on('tools/result', (exec, result) => {
       const child = this.children.get(String(exec.agent?.id))
-      if (!child || result.isError || !this.external(child, exec.name)) return
+      if (!child || result.isError) return
+      if (exec.name === 'structured_output' && child.onFlags) {
+        const candidate = parseCandidate(exec.arguments, String(exec.agent!.id), child.calls)
+        if (candidate.kind === 'flag') this.notifyFlags(child, [candidate])
+        return
+      }
+      if (!this.external(child, exec.name)) return
       const text = result.content.filter(b => b.type === 'text').map(b => b.text).join('\n')
       if (text.trim()) {
         child.progress.add(createHash('sha256').update(exec.name + JSON.stringify(exec.arguments) + text).digest('hex'))
@@ -89,6 +98,13 @@ export class Orchestrator {
         child.calls.set(String(exec.callId), { tool: exec.name, text, receipt_id })
         const notice = `Sapper evidence receipt: ${JSON.stringify({ receipt_id, tool: exec.name })}. This receipt certifies this session's successful tool output. To cite it, use evidence: [{"receipt_id":"${receipt_id}"}]. Do not copy or escape the output.`
         exec.agent?.inject(createUserMessage({ content: [{ type: 'text', text: notice }], source: { kind: 'sapper-dsh', form: 'evidence', sections: [{ name: 'Evidence receipt', text: notice }] } }))
+        if (child.onFlags) {
+          const candidates = flagLiterals(text).map((value) => parseCandidate({
+            title: '工具输出中的 flag 候选', description: value, kind: 'flag', evidence: [{ receipt_id }],
+            reproduction: `Independently reproduce the successful ${exec.name} observation. Original arguments: ${JSON.stringify(exec.arguments).slice(0, 10000)}`,
+          }, String(exec.agent!.id), child.calls))
+          if (candidates.length) this.notifyFlags(child, candidates)
+        }
       }
     })
     ctx.on('agent/pre-step', async (payload, next) => {
@@ -122,6 +138,12 @@ export class Orchestrator {
   }
   isChild(agent: Agent): boolean {
     return this.children.has(String(agent.id))
+  }
+  private notifyFlags(child: Child, candidates: Candidate[]) {
+    // tools/result is a synchronous observation seam. Own the asynchronous
+    // persistence/publication here and drain it before any verification starts.
+    child.notifications = child.notifications.then(() => child.onFlags!(candidates))
+    void child.notifications.catch((error) => child.controller.abort(error))
   }
   isActive(root: string): boolean {
     return this.active.has(root)
@@ -162,6 +184,7 @@ export class Orchestrator {
     signal: AbortSignal,
     guard: () => void,
     onReady: Child['onReady'],
+    onFlags?: Child['onFlags'],
   ) {
     guard()
     signal.throwIfAborted()
@@ -171,7 +194,7 @@ export class Orchestrator {
       onAbort = () => controller.abort(signal.reason)
     signal.addEventListener('abort', onAbort, { once: true })
     if (signal.aborted) onAbort()
-    const child: Child = { role, controller, config, guard, calls: new Map(), budget: new ChildBudget(config.orchestration, config.orchestration.budgetMode === 'adaptive' && role !== 'reason'), progress: new Set(), onReady, parent }
+    const child: Child = { role, controller, config, guard, calls: new Map(), budget: new ChildBudget(config.orchestration, config.orchestration.budgetMode === 'adaptive' && role !== 'reason'), progress: new Set(), onReady, onFlags, notifications: Promise.resolve(), parent }
     this.children.set(session, child)
     let timer: ReturnType<typeof setTimeout> | undefined
     const poll = setInterval(() => {
@@ -221,12 +244,14 @@ export class Orchestrator {
       controller.signal.addEventListener('abort', stop, { once: true })
       if (controller.signal.aborted) stop()
       const result = await activation.result
+      await child.notifications
       controller.signal.throwIfAborted()
       guard()
       if (result.stopReason !== 'completed' || result.structured === undefined) throw new StopRunError(`子代理 ${role} 未完成结构化结果：${result.stopReason}（maxOutputTokens=${config.orchestration.maxOutputTokens}）；本次运行停止，不重复 reason 消耗预算`)
       if (child.capabilities) child.capabilities.state = 'completed'
       return { value: result.structured, session, calls: child.calls }
     } finally {
+      await child.notifications.catch(() => {})
       if (child.capabilities) { child.capabilities.state ??= 'failed'; if (child.capabilities.state === 'running') child.capabilities.state = child.controller.signal.reason instanceof FlagStop ? 'stopped' : 'failed'; child.capabilities.ended_at = new Date().toISOString(); try { await child.onReady(child.capabilities) } catch {} }
       try { await activation?.dispose() } finally { controller.signal.removeEventListener('abort', stop); clearTimeout(timer); clearInterval(poll); signal.removeEventListener('abort', onAbort); this.children.delete(session) }
     }
@@ -322,7 +347,21 @@ export class Orchestrator {
           if (!existing) {
             run.explored++
             const graph = await store.read(), intent = graph.intents.find(i => i.id === nodeId)!
-            const output = await this.child('explore', { goal: graph.project.goal, intent, facts: graph.facts.filter(f => intent.from.includes(f.id)) }, parent, config, pipelineSignal, guard, onReady)
+            const publishFlags = graph.project.purpose === 'writeup' ? undefined : async (candidates: Candidate[]) => {
+              guard()
+              if (foundFlag) return
+              run.flag_observations ??= []
+              const fresh = candidates.filter((candidate) => !run.flag_observations!.some((o) => o.candidate.description === candidate.description))
+              if (!fresh.length) return
+              run.flag_observations.push(...fresh.map((candidate) => ({ intent_id: nodeId, candidate })))
+              // Keep an independently verifiable candidate even when stopping the
+              // explorer before it returns structured_output or finishes disposal.
+              if (stopOnFlag) outcome.candidate = fresh[0]!
+              await store.saveRun(run, runOptions)
+              if (stopOnFlag) await stopForFlag()
+              else await this.progress?.(parent, store.root, run, 'flag-candidate')
+            }
+            const output = await this.child('explore', { goal: graph.project.goal, intent, facts: graph.facts.filter(f => intent.from.includes(f.id)) }, parent, config, pipelineSignal, guard, onReady, publishFlags)
             outcome.candidate = parseCandidate(output.value, output.session, output.calls)
             await store.saveRun(run, runOptions)
           }

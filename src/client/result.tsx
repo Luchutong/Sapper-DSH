@@ -47,7 +47,7 @@ export function ResultBody({
       }}
     >
       <h3 style={{ marginTop: 0 }}>
-        {result.phase && result.phase !== 'result'
+        {result.phase === 'flag-found' ? '发现 flag' : result.phase && result.phase !== 'result'
           ? 'Sapper 任务进度'
           : 'Sapper 任务结果'}
       </h3>
@@ -92,7 +92,7 @@ export function ResultBody({
           }}
         >
           <strong>
-            {c.status === 'rejected' ? '复核未通过' : '候选 · 尚未确认'} ·{' '}
+            {c.status === 'rejected' ? '复核未通过' : c.kind === 'flag' ? '未验证 flag · 可先提交测试' : '候选 · 尚未确认'} ·{' '}
             {c.title}
           </strong>
           <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace' }}>

@@ -15,6 +15,7 @@ export interface RunRecord {
   state: 'running' | 'completed' | 'failed' | 'cancelled'; created_at: string; updated_at: string
   steps: number; explored: number; outcomes: RunOutcome[]; intent_ids: string[]; stop_reason?: string
   children?: ChildCapabilities[]
+  flag_observations?: Array<{ intent_id: string; candidate: Candidate }>
 }
 export interface ChildCapabilities {
   role: 'reason' | 'explore' | 'verify'; session_id: string; tools: string[]; external_tools: string[]; max_output_tokens: number

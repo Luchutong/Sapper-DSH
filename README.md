@@ -3,8 +3,9 @@
 将 [sapper-v2](https://github.com/N1nEmAn/sapper-v2) 的事实图与
 `reason → explore → verify` 循环移植为 DSH NEXT 桌面插件。
 
-**当前版本 `0.1.0-alpha.14`：左侧比赛工作台，一键创建题目目录、DSH 工作区与主会话；持久化队列默认并行两题，结束生成一次主助手简报。**
+**当前版本 `0.1.0-alpha.15`：左侧比赛工作台，一键创建题目目录、DSH 工作区与主会话；持久化队列默认并行两题，结束生成一次主助手简报。**
 本版修复 browse 目录选择、插件作用域下命令受理，以及重启后未完成题目的恢复。已有 alpha.13 创建记录可直接继续，见 [修复与验收](docs/alpha14-validation.md)。
+alpha.15 在成功工具输出出现 flag 时立即向主会话显示未验证候选，无需等待探索收尾或独立复核；后续进度仍保留该值，见 [flag 即时回显](docs/alpha15-validation.md)。
 目标运行时为 **DSH 0.2.1-rc.2**，Cordis 4.0.5 / Schemastery 3.18.5。
 
 当前可维护工作区事实图、意图、长文档和本地 flag；每轮注入有预算的 frontier、
@@ -56,7 +57,7 @@ requires_confirmation 或设置为 always，也不额外 ask；确认来源记�
 子代理从实际 preset 继承文件/命令工具，启动时记录 tools/external_tools 清单；
 缺工具或 max-tokens 时停止本轮并报告原因。alpha.6 的失败图可直接重跑，不需重建。
 
-求解阶段首次提交有成功工具回执的 `kind=flag` 候选后立即停止其他路线并回传，不再等待自动复核；该结果明确标为未确认候选。显式 verify 仍可独立复核。已确认 flag 也会阻止后续无关探索，避免重复晋升与重复规划。结束本轮不伪造项目的独立验证完成状态。
+求解阶段成功外部工具输出出现常见格式的 flag 后即刻保存观察并向主会话回显，标为 **未验证 flag，可先提交测试**，不等待探索收尾或验证。非标准格式通过带实际回执的 `kind=flag` 结构化输出即时通知。默认随后停止其他路线、不自动复核；显式 verify 仍可独立复核。若项目配置为继续复核，候选始终可见，复核仅更新可信状态。WP 中引用历史 flag 不触发新发现；插件不替用户向平台提交。结束本轮不伪造项目的独立验证完成状态。
 
 工作台启动会立即在主会话显示受理与阶段卡片。运行中用 `/sapper steer <新方向>`：先停止并回收旧路线，再保留证据启动关联的新阶段。结束后 `/sapper wp [要求]` 根据已有证据编写本地 WP，`/sapper retry [纠错要求]` 重新取证，`/sapper continue <目标>` 开始后续工作，即使原项目已 completed 仍可使用。普通聊天可调用 `sapper_control` 完成这些操作，原任务与证据保留。
 
@@ -88,7 +89,7 @@ flag 事实是权威记录，`flags/ledger.json` 是可重建索引。详细边�
 在 DSH NEXT 菜单“打开 DSH 终端”，执行后重启应用：
 
 ```powershell
-dsh plugin add "D:\BaiduSyncdisk\sapper移植\sapper-dsh-0.1.0-alpha.14.tgz"
+dsh plugin add "D:\BaiduSyncdisk\sapper移植\sapper-dsh-0.1.0-alpha.15.tgz"
 ```
 
 开发需要 Node.js 22+、pnpm 8.15.4 和 Python 3（仅 golden 测试使用）：

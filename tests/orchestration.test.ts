@@ -59,6 +59,7 @@ interface Scenario {
   completesGoal?: boolean
   denyGoal?: boolean
   maxTokens?: 'reason' | 'explore' | 'verify'
+  verifyGate?: Promise<void>
 }
 class FixtureModel extends LlmAdapter {
   requests: GenerateOptions[] = []
@@ -126,6 +127,7 @@ class FixtureModel extends LlmAdapter {
       return
     }
     const role = raw.includes('# Sapper verify') ? 'verify' : raw.includes('# Sapper explore') ? 'explore' : 'reason'
+    if (role === 'verify') await this.scenario.verifyGate
     const receipt = raw.match(/ev-[a-f0-9-]{36}/g)?.at(-1) ?? 'missing-receipt'
     const tools = options.messages.filter((m) => m.role === 'tool')
     if (this.scenario.maxTokens === role) { yield { type: 'finish', reason: { kind: 'max-tokens' } }; return }
@@ -203,7 +205,7 @@ async function setup(
         path.join(exec.agent?.session.header.cwd ?? cwd, 'WP.md'),
         '# WP\nEvidence: VERIFIED-LOCAL-7C42\nReproduction: read the local fixture.\n',
       )
-      return 'WP.md saved'
+      return 'WP.md saved' + (scenario.writeup && scenario.flag ? '\n' + scenario.flag : '')
     },
   })
   if (topology === 'global') { ctx.tools.register(readDefinition); if ('writeup' in scenario) ctx.tools.register(wpDefinition) }
@@ -947,6 +949,73 @@ it('ends on the first evidence-backed flag, immediately reports it, drains compe
   expect(model.requests.filter(r => JSON.stringify(r.messages).includes('# Sapper verify'))).toEqual([])
 })
 
+it.each(['CTF2{EARLY-OUTPUT-7C42}', 'NONSTANDARD-FLAG-7C42'])('publishes a flag before explorer disposal and keeps it available for explicit verification (%s)', async (flag) => {
+  const { ctx, cwd, parent, model } = await setup({ flag }, {}, true, 1, 'preset', false),
+    service = ctx.get('sapperPanel') as TaskPanelService,
+    events: import('../src/panel/result.js').TaskResult[] = []
+  ctx.on('session/event', (session, event) => { if (session === parent.session && resultOfEvent(event)) events.push(resultOfEvent(event)!) })
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => { release = resolve }),
+    start = ctx.subagents.startActivation.bind(ctx.subagents)
+  const spy = vi.spyOn(ctx.subagents, 'startActivation').mockImplementation(async (input) => {
+    const activation = await start(input)
+    if (input.label !== 'Sapper explore') return activation
+    return { ...activation, dispose: async () => { await gate; await activation.dispose() } }
+  })
+  try {
+    service.submit(parent, { action: 'start', goal: 'Find the flag and return it immediately' })
+    await waitForRuntime(() => expect(events.some((e) => e.phase === 'flag-found')).toBe(true))
+    expect(events.find((e) => e.phase === 'flag-found')).toMatchObject({ state: 'running', confirmed: [], candidates: [{ kind: 'flag', description: flag, status: 'unverified' }] })
+    expect(events.some((e) => e.phase === 'result')).toBe(false)
+    expect(model.requests.filter((r) => JSON.stringify(r.messages).includes('# Sapper verify'))).toHaveLength(0)
+    const state = await service.state(String(parent.id))
+    expect(state.job?.state).toBe('running')
+    const store = new GraphStore((await resolveSelectedStore(cwd, resolveConfig()))!, cwd), run = await store.readRun('r001')
+    expect(run.flag_observations?.[0]?.candidate.description).toBe(flag)
+    expect(run.outcomes[0]?.candidate?.evidence).toHaveLength(1)
+    expect(run.outcomes[0]?.verify_attempts).toBe(0)
+    release()
+    await service.whenIdle(cwd)
+    expect((await service.state(String(parent.id))).job?.result?.candidates[0]?.description).toBe(flag)
+    service.submit(parent, { action: 'verify', task_id: state.active, run_id: 'r001', intent_id: run.outcomes[0]!.intent_id })
+    await service.whenIdle(cwd)
+    expect((await service.state(String(parent.id))).graph?.verified).toBe(1)
+  } finally { release(); spy.mockRestore(); await service.whenIdle(cwd) }
+})
+
+it('keeps an unverified flag visible while optional verification is blocked and confirms it only afterwards', async () => {
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => { release = resolve }),
+    { ctx, cwd, parent, store, model } = await setup({ flag: 'CTF2{VERIFY-LATER-7C42}', verifyGate: gate }, {}, true),
+    project = JSON.parse(await readFile(path.join(store.root, 'project.json'), 'utf8'))
+  project.stop_on_flag = false
+  await writeFile(path.join(store.root, 'project.json'), JSON.stringify(project))
+  const service = ctx.get('sapperPanel') as TaskPanelService, events: import('../src/panel/result.js').TaskResult[] = []
+  ctx.on('session/event', (session, event) => { if (session === parent.session && resultOfEvent(event)) events.push(resultOfEvent(event)!) })
+  try {
+    service.submit(parent, { action: 'run' })
+    await waitForRuntime(() => expect(model.requests.some((r) => JSON.stringify(r.messages).includes('# Sapper verify'))).toBe(true))
+    expect(events.filter((e) => e.phase === 'flag-found')).toHaveLength(1)
+    expect(events.at(-1)).toMatchObject({ state: 'running', confirmed: [], candidates: [{ kind: 'flag', description: 'CTF2{VERIFY-LATER-7C42}', status: 'unverified' }] })
+    expect((await service.state(String(parent.id))).graph?.verified).toBe(0)
+    const result = await service.result(parent, 'read-only-snapshot')
+    expect(result.candidates[0]?.description).toBe('CTF2{VERIFY-LATER-7C42}')
+    release()
+    await service.whenIdle(cwd)
+    expect(events.at(-1)).toMatchObject({ phase: 'result', candidates: [], confirmed: [{ description: 'CTF2{VERIFY-LATER-7C42}', kind: 'flag' }] })
+  } finally { release(); await service.whenIdle(cwd) }
+})
+
+it('does not broadcast a flag invented by the model without successful external evidence', async () => {
+  const { ctx, cwd, parent } = await setup({ flag: 'CTF2{MODEL-ONLY-7C42}', forged: true }, {}, true, 1, 'global', false),
+    service = ctx.get('sapperPanel') as TaskPanelService, events: import('../src/panel/result.js').TaskResult[] = []
+  ctx.on('session/event', (session, event) => { if (session === parent.session && resultOfEvent(event)) events.push(resultOfEvent(event)!) })
+  service.submit(parent, { action: 'start', goal: 'Find CTF2{MODEL-ONLY-7C42}, which is only a prompt string' })
+  await service.whenIdle(cwd)
+  expect(events.some((e) => e.phase === 'flag-found')).toBe(false)
+  expect(events.at(-1)?.candidates).toEqual([])
+})
+
 it('accepts a main-session steering tool, drains the old route and automatically runs a linked phase with the new direction', async () => {
   const scenario: Scenario = { hang: true }
   const { ctx, cwd, parent, model, execute } = await setup(scenario, {}, true, 1, 'preset', false)
@@ -983,8 +1052,12 @@ it('allows WP and correction phases after a completed goal, preserves original e
   const first = new GraphStore((await resolveSelectedStore(cwd, resolveConfig()))!, cwd), original = await first.read()
   expect(original.project.status).toBe('completed')
   scenario.writeup = true
+  scenario.flag = 'CTF2{HISTORICAL-WP-ONLY-7C42}'
+  const notices: import('../src/panel/result.js').TaskResult[] = []
+  ctx.on('session/event', (session, event) => { if (session === parent.session && resultOfEvent(event)) notices.push(resultOfEvent(event)!) })
   await ctx.commands.execute(parent, '/sapper wp Include the reproduction steps', [], new AbortController().signal)
   await service.whenIdle(cwd)
+  expect(notices.some((event) => event.phase === 'flag-found')).toBe(false)
   const wp = new GraphStore(
     (await resolveSelectedStore(cwd, resolveConfig()))!,
     cwd,

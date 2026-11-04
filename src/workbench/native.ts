@@ -34,6 +34,7 @@ import {
   type Phase,
 } from './contracts.js'
 import type { PanelAction } from '../panel/rpc.js'
+import { runCandidates } from '../orchestration/flags.js'
 
 export function directoryName(
   title: string,
@@ -353,6 +354,9 @@ export class NativeWorkbench {
             })
             for (const run of runs) {
               if (run.updated_at > updatedAt) updatedAt = run.updated_at
+              for (const candidate of runCandidates(run))
+                if (candidate.kind === 'flag' && flags.get(candidate.description) !== 'confirmed')
+                  flags.set(candidate.description, candidate.status === 'rejected' ? 'rejected' : 'candidate')
               for (const o of run.outcomes)
                 if (
                   o.candidate?.kind === 'flag' &&

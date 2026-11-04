@@ -171,6 +171,16 @@ it('projects live and reloaded Sapper result events into visible rows using the 
     expect(assembler.get('chat')!.nodes.get(snapshot.order[0]!)?.data).toEqual(
       result,
     )
+    const immediate = { ...result, phase: 'flag-found', state: 'running', summary: '已获取未验证 flag，可先提交测试', errors: [], candidates: [{ title: 'Tool observation', kind: 'flag', description: 'CTF2{LIVE-UI-7C42}', status: 'unverified' }] }
+    for (const [seq, phase] of [[2, 'flag-found'], [3, 'progress']] as const) {
+      assembler.append({ event: { type: 'plugin:sapper-dsh/result', ignorable: true, seq, timestamp: Date.now(), data: { ...immediate, phase } } } as never)
+      assembler.flush()
+      const live = assembler.get('chat')!, html = renderToStaticMarkup(<ResultNode node={live.nodes.get(live.order[0]!) as never} />)
+      expect(live.order).toHaveLength(1)
+      expect(html).toContain('CTF2{LIVE-UI-7C42}')
+      expect(html).toContain('未验证 flag · 可先提交测试')
+      expect(html).not.toContain('已独立复核 ·')
+    }
   } finally {
     await ctx.fiber.dispose()
   }

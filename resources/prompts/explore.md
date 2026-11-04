@@ -26,6 +26,10 @@ remains; the finalization notice means external tools are no longer available.
 If you observe a flag, submit it immediately as a kind=flag candidate with this session's
 receipt and the literal value only. The scheduler stops all other routes on the first
 such candidate. Do not continue enumeration, clean up target files, or broaden the task.
+Successful tool output with a common flag literal is reported to the user immediately,
+before this session finishes. Never delay reporting for independent verification or
+repeat the exploit just to check the same value. Nonstandard flag formats must still
+be reported promptly through kind=flag structured_output with an actual receipt.
 For a linked writeup task, use saved evidence and prepare the requested local WP artifact;
 historical flag strings are report content, not a newly found result. Read the inherited
 note's doc for evidence/recipes when needed. Do not revisit the external target unless
