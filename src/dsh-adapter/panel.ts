@@ -718,7 +718,7 @@ export class TaskPanelService extends TypertRemoteService {
       explore: '正在探索并收集证据',
       verify: '正在独立复核',
       'flag-found':
-        '已获取未验证 flag，可先提交测试；正在停止其他路线和回收子会话，无需等待复核',
+        'flag 已回显，可先提交测试；后台收尾不阻塞查看，验证状态见下方',
       'flag-candidate': '已获取未验证 flag，可先提交测试；后台复核不阻塞此结果',
     }
     await this.persist(job)

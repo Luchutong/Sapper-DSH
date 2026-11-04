@@ -35,8 +35,8 @@
 
 | 产物 | SHA256 |
 | --- | --- |
-| sapper-dsh-0.1.0-alpha.15.tgz | `2450f202bb2a0820a5270d9b6f87878db649701d626ca0f348ed9f28c066cce4` |
-| lib/index.js | `a3f89f7569882bcdac36f384d34f9b48780dad06636563fd2a68e7d84290b701` |
+| sapper-dsh-0.1.0-alpha.15.tgz | `7bd388777b92b81f62564596e07f33a0c48ded467eb9bfb3fc2a140f41058533` |
+| lib/index.js | `bce71a3f2b7c002d503c22f5a5fc07b061bed1016e5f64d150b79393c56de9bf` |
 | lib/client.js | `74a7c86eaba93bd3b67ea78d2dcbdcd31aac42097ae3940ea239cefef2213da5` |
 
 ## 升级后复验
