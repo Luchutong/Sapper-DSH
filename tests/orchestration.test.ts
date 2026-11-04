@@ -209,12 +209,23 @@ describe('M3 evidence gates, budgets and cancellation', () => {
     expect(ctx.agents.list()).toEqual([parent])
   })
   it('times out published children and does not leave them resident', async () => {
-    const { dispatch, config, ctx, parent } = await setup({ hang: true })
-    // Shorten only the test clock; the public schema requires whole minutes.
-    Object.defineProperty(config.orchestration, 'timeoutMin', { value: 0.002 })
-    const run = await dispatch()
-    expect(run.outcomes[0]?.error).toContain('超时')
-    expect(ctx.agents.list()).toEqual([parent])
+    const { dispatch, model, ctx, parent } = await setup({ hang: true }, { orchestration: { timeoutMin: 7 } })
+    // Fire the registered deadline only after explore is published. A 120ms wall-clock
+    // deadline races reason/preset startup on slower Windows workers.
+    const realSetTimeout = globalThis.setTimeout, deadlines: Array<() => void> = []
+    const clock = vi.spyOn(globalThis, 'setTimeout').mockImplementation(((handler: (...args: unknown[]) => void, delay?: number, ...args: unknown[]) => {
+      if (delay === 7 * 60000) deadlines.push(() => handler(...args))
+      return realSetTimeout(handler, delay, ...args)
+    }) as typeof setTimeout)
+    try {
+      const pending = dispatch()
+      await vi.waitFor(() => expect(model.requests.some(r => JSON.stringify(r.messages).includes('# Sapper explore'))).toBe(true))
+      expect(deadlines).toHaveLength(2)
+      deadlines[1]!()
+      const run = await pending
+      expect(run.outcomes[0]?.error).toContain('超时')
+      expect(ctx.agents.list()).toEqual([parent])
+    } finally { clock.mockRestore() }
   })
   it('fails preflight without modifying the graph when the provider is missing', async () => {
     const { disposeSubagents, dispatch, store } = await setup()
