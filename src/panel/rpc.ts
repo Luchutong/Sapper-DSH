@@ -2,7 +2,7 @@ import { z } from 'zod'
 import { createTypertRemoteInfo } from '@deepseek-ai/dsh-typert-protocol/remote-info'
 import type { TypertRemoteCodecSpec } from '@deepseek-ai/dsh-typert-protocol'
 
-export const actionSchema = z.object({ action: z.enum(['start', 'resume', 'cancel']), goal: z.string().max(8000).optional(), task_id: z.string().optional() }).strict()
+export const actionSchema = z.object({ action: z.enum(['start', 'resume', 'cancel', 'run']), goal: z.string().max(8000).optional(), task_id: z.string().optional() }).strict()
 export type PanelAction = z.infer<typeof actionSchema>
 function codec(name: string, create: () => z.ZodType): TypertRemoteCodecSpec { return { mode: 'strict', typeSymbol: 'sapper-dsh.' + name, create } }
 const string = codec('sessionId', () => z.string().min(1).max(256)), result = codec('panelResult', () => z.json())
@@ -15,7 +15,7 @@ export const PANEL_REMOTE = createTypertRemoteInfo({ package: 'sapper-dsh', meth
 export interface PanelTarget { id: string; cwd: string }
 export interface PanelState {
   cwd: string; warnings?: string[]; active: string; tasks: Array<{ id: string; goal: string; created_at: string }>
-  job?: { state: 'running' | 'completed' | 'failed' | 'cancelled'; error?: string; started_at: string }
+  job?: { id?: string; state: 'running' | 'cancelling' | 'completed' | 'failed' | 'cancelled'; error?: string; started_at: string }
   graph?: { goal: string; status: string; facts: number; verified: number; ready: number; integrity: string[] }
   runs: Array<{ id: string; state: string; steps: number; explored: number; stop_reason?: string; children?: Array<{ role: string }>; outcomes: Array<{ state: string; intent_id: string; error?: string; candidate?: { title: string }; verification?: { issues: string; verified: boolean } }> }>
 }

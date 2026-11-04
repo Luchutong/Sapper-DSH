@@ -1,8 +1,8 @@
 # 项目进度
 
-**当前交付 alpha.9：任务面板、普通工作区自动建图、独立证据回执。M2 用户验收已通过；alpha.7 的真实 M3 验收失败已作为本版回归依据。最新说明见文末与 [任务面板](task-panel.md)。**
+**当前交付 alpha.10：任务面板、普通工作区自动建图、独立证据回执。M2 用户验收已通过；alpha.7 的真实 M3 验收失败已作为本版回归依据。最新说明见文末与 [任务面板](task-panel.md)。**
 
-更新：2026-11-04（Asia/Shanghai）。当前 alpha.9，DSH 0.2.1-rc.2。
+更新：2026-11-04（Asia/Shanghai）。当前 alpha.10，DSH 0.2.1-rc.2。
 
 **M0/M1 已验收；本次桌面反馈确认 M2 通过。alpha.6 的 M3 因工具作用域与 token 耗尽失败，alpha.7 工具传递已恢复，但桌面证据转义仍失败；alpha.8 修复并加入任务面板。**
 [阶段跟踪 issue #1](https://github.com/Luchutong/Sapper-DSH/issues/1)。
@@ -110,3 +110,11 @@ alpha.8 最终工程验证：131 项测试（12 文件）通过；34 项真实 M
 alpha.8 的 Ubuntu/Windows × Node 22/24 最终 CI 通过。首次 Windows Node 22 暴露旧测试用 120ms 猜测子会话启动速度的时序假设；现改为等待 explore 发布后触发实际注册的超时回调。产品运行时超时策略未因此改变。
 
 alpha.9 最终本地验证：132 项测试（12 文件，35 项真实编排/面板测试）、类型、双端构建与打包检查通过。使用最终构建的宿主与客户端再次通过真实 Gateway + 浏览器的发起任务/独立复核探针。交付 `sapper-dsh-0.1.0-alpha.9.tgz`，SHA256 `07a1b4bd4d4b2845d895b2681d14ee7e2c9824f9f23a202e4ae1b25f8f2203d9`，副本位于 Windows `D:\BaiduSyncdisk\sapper移植`。
+
+## alpha.10：新会话命令快速受理
+
+用户实测新工作区 `/sapper start` 提交后输入框只读、首页停留。只读检查实际会话和图，确认后台有成功复核事实，旧命令等待整轮 58/161 秒才返回，导致 DSH 输入器一直停在 submitting。
+
+start/run 命令改为与面板共享后台任务管理器，立即返回 job ID；增加 job/cancel 命令，保留独立取消、ToolRuntime 权限、配置撤销、清理完成前防重入。面板自动展示命令任务，运行时可编辑下一目标。补充真实 DSH SubmitMachine + CommandRuntime + 阻塞子代理回归，覆盖旧测试遗漏的新会话输入器结算路径。原始用户工作区和会话仅作只读诊断，不改写真实运行或事实。
+
+alpha.10 本地验证：135 项测试（12 文件）、类型、双端构建、冻结锁文件离线安装及打包/兼容检查通过；37 项真实编排测试包括实际 DSH 输入器状态机的快速结算与后台取消。浏览器面板流程继续通过。交付 `sapper-dsh-0.1.0-alpha.10.tgz`，SHA256 `b79326919616e9184c3f2717a10ada54a9636403c88adb99175f1e10c3993bd4`，已复制到 Windows `D:\BaiduSyncdisk\sapper移植`。

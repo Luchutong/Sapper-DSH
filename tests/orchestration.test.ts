@@ -24,6 +24,8 @@ import { GraphStore } from '../src/store/graph.js'
 import { TaskPanelService } from '../src/dsh-adapter/panel.js'
 import { resolveSelectedStore } from '../src/store/tasks.js'
 import { checkedEvidence } from '../src/orchestration/types.js'
+import { dshComposer } from './fixtures/dsh-composer.js'
+import type { CommandClaim } from '@deepseek-ai/dsh-client-ui-conversation/client'
 
 const cleanup: Array<() => Promise<unknown>> = []
 afterEach(async () => { for (const f of cleanup.splice(0).reverse()) await f() })
@@ -286,7 +288,8 @@ describe('M3 completion and permission revocation', () => {
 it('runs /sapper run and reads /sapper runs through real CommandRuntime and ToolRuntime', async () => {
   const { ctx, parent, store, approval } = await setup({}, {}, true)
   const result = await ctx.commands.execute(parent, '/sapper run', [], new AbortController().signal)
-  expect(result?.result).toMatchObject({ kind: 'success', text: expect.stringContaining('confirmed') })
+  expect(result?.result).toMatchObject({ kind: 'success', text: expect.stringContaining('后台任务已受理') })
+  await (ctx.get('sapperPanel') as TaskPanelService).whenIdle(parent.session.header.cwd!)
   expect((await store.read()).facts.some(f => f.verification_status === 'confirmed')).toBe(true)
   const listed = await ctx.commands.execute(parent, '/sapper runs', [], new AbortController().signal)
   expect(listed?.result).toMatchObject({ kind: 'success', text: expect.stringContaining('r001') })
@@ -565,4 +568,57 @@ it('starts and monitors a fresh task beside an unreadable legacy M0 graph withou
   await service.whenIdle(cwd)
   expect(await service.state(String(parent.id))).toMatchObject({ job: { state: 'completed' }, graph: { status: 'completed', verified: 1 }, warnings: expect.any(Array) })
   expect(await readFile(legacy, 'utf8')).toBe(original)
+})
+
+it('acknowledges slash start before a blocked child finishes, keeps the session usable and cancels from commands', async () => {
+  let entered!: () => void
+  const reading = new Promise<void>(resolve => { entered = resolve })
+  const { ctx, parent, cwd } = await setup({ beforeRead: async signal => {
+    entered()
+    await new Promise<void>((_, reject) => { const stop = () => reject(signal.reason); signal.addEventListener('abort', stop, { once: true }); if (signal.aborted) stop() })
+  } }, {}, true, 1, 'preset', false)
+  const commandEvents: string[] = []
+  ctx.on('session/event', (session, event) => { if (session === parent.session && (event.type === 'command/run' || event.type === 'command/done')) commandEvents.push(event.type) })
+  const composer = await dshComposer(), transport = new AbortController()
+  const claim: CommandClaim = { name: 'sapper', token: '/sapper ', submit: async args => {
+    const result = await ctx.commands.execute(parent, '/sapper ' + args, [], transport.signal)
+    return result!.result
+  } }
+  const [adjudication] = composer.dispatch({ type: 'enter', mode: 'queue', draft: '/sapper start Verify local fixture' })
+  expect(composer.state.phase).toBe('adjudicating')
+  const [submission] = composer.dispatch({ type: 'adjudicated', attempt: adjudication!.attempt, outcome: { claim } })
+  expect(composer.state.phase).toBe('submitting')
+  const accepted = await submission!.claim.submit(submission!.args, ctx, [])
+  expect(accepted).toMatchObject({ kind: 'success', text: expect.stringContaining('后台任务已受理') })
+  const effects = composer.dispatch({ type: 'submit-settled', attempt: submission!.attempt, ok: accepted.kind === 'success', command: undefined, outcome: accepted })
+  expect(composer.state.phase).toBe('plain') // DSH InputBar derives editability from this actual SDK state.
+  expect(effects.some(effect => effect.type === 'commit-draft')).toBe(true)
+  // Disposing the completed command request must not abort the background child.
+  composer.dispatch({ type: 'release' })
+  transport.abort(new Error('completed composer request released'))
+  await reading
+  const service = ctx.get('sapperPanel') as TaskPanelService
+  expect(await service.state(String(parent.id))).toMatchObject({ job: { state: 'running' }, graph: { verified: 0 } })
+  expect(commandEvents).toEqual(['command/run', 'command/done'])
+  expect((await ctx.commands.execute(parent, '/sapper job', [], new AbortController().signal))?.result).toMatchObject({ kind: 'success', text: expect.stringContaining('running') })
+  expect((await ctx.commands.execute(parent, '/sapper status', [], new AbortController().signal))?.result.kind).toBe('success')
+  expect((await ctx.commands.execute(parent, '/sapper start Duplicate task', [], new AbortController().signal))?.result).toMatchObject({ kind: 'error', text: expect.stringContaining('已有任务') })
+  expect((await ctx.commands.execute(parent, '/sapper cancel', [], new AbortController().signal))?.result).toMatchObject({ kind: 'success', text: expect.stringContaining('已请求取消') })
+  await service.whenIdle(cwd)
+  expect(await service.state(String(parent.id))).toMatchObject({ job: { state: 'cancelled' }, graph: { ready: 1, verified: 0 }, runs: [{ state: 'cancelled' }] })
+  expect(ctx.agents.list()).toEqual([parent])
+})
+it('reports failed background command admission and permits a later retry without creating another graph', async () => {
+  const { ctx, parent, cwd, store } = await setup({}, {}, true, 1, 'preset', false)
+  parent.session.append('sandbox/mode', { mode: 'read-only' })
+  const service = ctx.get('sapperPanel') as TaskPanelService
+  const command = await ctx.commands.execute(parent, '/sapper start Verify local fixture', [], new AbortController().signal)
+  expect(command?.result.kind).toBe('success')
+  await service.whenIdle(cwd)
+  expect(await service.state(String(parent.id))).toMatchObject({ job: { state: 'failed', error: expect.stringContaining('只读') }, tasks: [] })
+  expect(await store.initialized()).toBe(false)
+  parent.session.append('sandbox/mode', { mode: 'danger-full-access' })
+  await ctx.commands.execute(parent, '/sapper start Verify local fixture', [], new AbortController().signal)
+  await service.whenIdle(cwd)
+  expect(await service.state(String(parent.id))).toMatchObject({ job: { state: 'completed' }, tasks: [expect.any(Object)], graph: { verified: 1 } })
 })

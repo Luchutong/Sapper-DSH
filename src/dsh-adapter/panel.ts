@@ -1,6 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { Remote, TypertRemoteService, principalOf } from '@deepseek-ai/dsh-typert-protocol'
 import type {} from '@deepseek-ai/dsh-typert-registry'
+import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
@@ -13,7 +14,7 @@ import { GraphStore } from '../store/graph.js'
 import { frontier } from '../render/frontier.js'
 import { StoreError } from '../store/validation.js'
 
-interface Job { callId: string; started: boolean; drained: Promise<void>; finish(): void; controller: AbortController; state: 'running' | 'completed' | 'failed' | 'cancelled'; error?: string; started_at: string; done?: Promise<void> }
+interface Job { callId: string; started: boolean; drained: Promise<void>; finish(): void; controller: AbortController; state: 'running' | 'cancelling' | 'completed' | 'failed' | 'cancelled'; error?: string; started_at: string; done?: Promise<void> }
 export class TaskPanelService extends TypertRemoteService {
   private jobs = new Map<string, Job>()
   constructor(ctx: Context, private getConfig: () => Config, private alive: () => boolean) {
@@ -47,7 +48,7 @@ export class TaskPanelService extends TypertRemoteService {
     try { if (await legacy.initialized()) { const g = await legacy.read(); tasks.unshift({ id: 'legacy', goal: g.project.goal, created_at: g.project.created_at }) } }
     catch (error) { warnings.push('原工作区图无法读取：' + (error as Error).message) }
     const job = this.jobs.get(base)
-    const state: PanelState = { cwd, active, tasks, runs: [], ...(job ? { job: { state: job.state, started_at: job.started_at, ...(job.error ? { error: job.error } : {}) } } : {}) }
+    const state: PanelState = { cwd, active, tasks, runs: [], ...(job ? { job: { id: job.callId, state: job.state, started_at: job.started_at, ...(job.error ? { error: job.error } : {}) } } : {}) }
     try { if (await store.initialized()) {
       const graph = await store.read(); warnings.push(...graph.warnings)
       const f = frontier(graph, { fullAccess: true, actor: String(agent.id) })
@@ -68,24 +69,39 @@ export class TaskPanelService extends TypertRemoteService {
   }
   @Remote({ resources: { session: (sessionId: string) => SessionId(sessionId) } })
   async action(sessionId: string, input: PanelAction) {
-    const agent = this.agent(sessionId), args = actionSchema.parse(input), base = resolveStorePath(agent.session.header.cwd, this.getConfig())!
+    return this.submit(this.agent(sessionId), input)
+  }
+  /** Shared command/panel launcher. Acknowledgement never waits for model or tool work. */
+  submit(agent: Agent, input: PanelAction) {
+    this.owner()
+    if (this.ctx.agents.get(agent.id) !== agent || !this.ctx.agents.roots().includes(agent)) throw new StoreError('需要当前工作区的普通 DSH 会话')
+    const args = actionSchema.parse(input), base = resolveStorePath(agent.session.header.cwd, this.getConfig())
+    if (!base) throw new StoreError('需要当前 DSH 工作区路径')
     const current = this.jobs.get(base)
-    if (args.action === 'cancel') { current?.controller.abort(new StoreError('用户取消任务')); return { accepted: true } }
-    if (current?.state === 'running') throw new StoreError('当前工作区已有任务运行')
+    if (args.action === 'cancel') {
+      if (!current || (current.state !== 'running' && current.state !== 'cancelling')) return { accepted: false, state: 'idle' }
+      current.state = 'cancelling'
+      current.controller.abort(new StoreError('用户取消任务'))
+      return { accepted: true, job_id: current.callId, state: current.state }
+    }
+    if (current?.state === 'running' || current?.state === 'cancelling') throw new StoreError('当前工作区已有任务运行；用 /sapper job 查看或 /sapper cancel 取消')
     if (args.action === 'start' && !args.goal?.trim()) throw new StoreError('请输入任务目标')
     let finish!: () => void
     const drained = new Promise<void>(resolve => { finish = resolve })
     const job: Job = { callId: randomUUID(), started: false, drained, finish, controller: new AbortController(), state: 'running', started_at: new Date().toISOString() }
     this.jobs.set(base, job)
-    // Keep the complete ToolRuntime lifecycle alive after RPC returns; it still owns policy checks.
-    job.done = this.ctx.tools.execute({ name: 'sapper_task', arguments: args, agent, callId: ToolCallId(job.callId), signal: job.controller.signal }).then(async result => {
+    // The job owns cancellation and drains the tool body even if the caller leaves the page.
+    const execution = args.action === 'run'
+      ? { name: 'sapper_dispatch', arguments: { mode: 'run' } }
+      : { name: 'sapper_task', arguments: args }
+    job.done = this.ctx.tools.execute({ ...execution, agent, callId: ToolCallId(job.callId), signal: job.controller.signal }).then(async result => {
       if (job.started) await job.drained
       if (result.isError) throw new StoreError(result.error.message)
       const run = result.value as { state?: string; stop_reason?: string }
       job.state = run.state === 'cancelled' ? 'cancelled' : run.state === 'failed' ? 'failed' : 'completed'
       if (run.stop_reason && job.state !== 'completed') job.error = run.stop_reason
     }).catch(async error => { if (job.started) await job.drained; job.state = job.controller.signal.aborted ? 'cancelled' : 'failed'; job.error = (error as Error).message })
-    return { accepted: true }
+    return { accepted: true, job_id: job.callId, state: job.state }
   }
   async whenIdle(cwd: string) { const base = resolveStorePath(cwd, this.getConfig()); if (base) await this.jobs.get(base)?.done }
 }

@@ -57,7 +57,7 @@ export function registerRuntime(ctx: Context, getConfig: () => Config): void {
   }
   const tools = [...createGraphTools(getConfig, () => alive, authorize, fullAccess), ...createRecallTools(getConfig, () => alive),
     createDispatchTool(getConfig, () => alive, authorize, dispatcher, lifecycle), createTaskTool(getConfig, () => alive, authorize, dispatcher, lifecycle)]
-  const syncCommand = registerSapperCommand(ctx, getConfig, () => alive)
+  const syncCommand = registerSapperCommand(ctx, getConfig, () => alive, taskPanel)
   const kb = new KnowledgeBase()
   let unregister: (() => void) | undefined
   const syncTool = () => {

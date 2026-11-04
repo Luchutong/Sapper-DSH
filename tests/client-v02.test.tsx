@@ -66,9 +66,12 @@ it('submits a goal from the task panel, shows failures, and resumes or cancels w
   let renderer!: ReturnType<typeof create>
   await act(async () => { renderer = create(<TaskPanel api={api} />) })
   await act(async () => { renderer.root.findByType('textarea').props.onChange({ target: { value: 'Check files' } }) })
-  await act(async () => { renderer.root.findByType('form').props.onSubmit({ preventDefault() {} }) })
+  await act(async () => { renderer.root.findByType('form').props.onSubmit({ preventDefault() {}, stopPropagation() {} }) })
   expect(api.action).toHaveBeenCalledWith('session-1', { action: 'start', goal: 'Check files' })
-  expect(renderer.root.findByType('textarea').props.disabled).toBe(true)
+  expect(renderer.root.findByType('textarea').props.disabled).toBe(false)
+  await act(async () => { renderer.root.findByType('textarea').props.onChange({ target: { value: 'Draft next task while the first runs' } }) })
+  expect(renderer.root.findByType('textarea').props.value).toBe('Draft next task while the first runs')
+  expect(renderer.root.findByProps({ type: 'submit' }).props.disabled).toBe(true)
   const button = (label: string) => renderer.root.findAllByType('button').find(b => b.children.join('') === label)!
   await act(async () => { button('取消任务').props.onClick() })
   expect(api.action).toHaveBeenLastCalledWith('session-1', { action: 'cancel' })
@@ -77,4 +80,22 @@ it('submits a goal from the task panel, shows failures, and resumes or cancels w
   await act(async () => { button('继续当前任务').props.onClick() })
   expect(renderer.root.findByProps({ role: 'alert' }).children.join('')).toContain('只读会话')
   await act(async () => { renderer.unmount() })
+})
+
+it('reveals a command-launched job in the dock and keeps a user-closed dock closed until the next job', async () => {
+  const { TaskDock } = await import('../src/client/task-panel.js')
+  vi.useFakeTimers()
+  let renderer!: ReturnType<typeof create>
+  let job = { id: 'first-job', state: 'running' as const, started_at: 'first' }
+  const api = { targets: async () => [{ id: 'session-1', cwd: '/ordinary project' }], state: async () => ({ cwd: '/ordinary project', active: 'legacy', tasks: [], runs: [], job }), action: async () => ({ accepted: true }) }
+  try {
+    await act(async () => { renderer = create(<TaskDock api={api} sessionId="session-1" />) })
+    expect(renderer.root.findByType('details').props.open).toBe(true)
+    await act(async () => { renderer.root.findByType('details').props.onToggle({ currentTarget: { open: false } }) })
+    await act(async () => { await vi.advanceTimersByTimeAsync(1200) })
+    expect(renderer.root.findByType('details').props.open).toBe(false)
+    job = { id: 'second-job', state: 'running', started_at: 'second' }
+    await act(async () => { await vi.advanceTimersByTimeAsync(1200) })
+    expect(renderer.root.findByType('details').props.open).toBe(true)
+  } finally { await act(async () => { renderer?.unmount() }); vi.useRealTimers() }
 })

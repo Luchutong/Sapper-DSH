@@ -2,8 +2,8 @@ import { useCallback, useEffect, useState } from 'react'
 import type { PanelApi, PanelState, PanelTarget } from '../panel/rpc.js'
 
 const box = { border: '1px solid var(--border-color, #7775)', borderRadius: 8, padding: 12, marginTop: 12 }
-const states: Record<string, string> = { running: '运行中', completed: '已结束', failed: '失败', cancelled: '已取消', active: '进行中', confirmed: '已验证', 'pending-verification': '等待复核' }
-export function TaskPanel({ api, sessionId }: { api: PanelApi; sessionId?: string }) {
+const states: Record<string, string> = { running: '运行中', cancelling: '取消中', completed: '已结束', failed: '失败', cancelled: '已取消', active: '进行中', confirmed: '已验证', 'pending-verification': '等待复核' }
+export function TaskPanel({ api, sessionId, onJob }: { api: PanelApi; sessionId?: string; onJob?: () => void }) {
   const [targets, setTargets] = useState<PanelTarget[]>([]), [selected, setSelected] = useState(sessionId ?? '')
   const [state, setState] = useState<PanelState>(), [goal, setGoal] = useState(''), [pending, setPending] = useState(false), [error, setError] = useState('')
   useEffect(() => { if (sessionId) setSelected(sessionId) }, [sessionId])
@@ -26,7 +26,9 @@ export function TaskPanel({ api, sessionId }: { api: PanelApi; sessionId?: strin
     }
     void load(); return () => { stopped = true; clearTimeout(timer) }
   }, [api, selected])
-  const running = state?.job?.state === 'running'
+  const jobIdentity = state?.job?.id ?? state?.job?.started_at
+  useEffect(() => { if (jobIdentity) onJob?.() }, [jobIdentity, onJob])
+  const running = state?.job?.state === 'running' || state?.job?.state === 'cancelling'
   const action = async (input: Parameters<PanelApi['action']>[1]) => {
     setPending(true); setError('')
     try { await api.action(selected, input); await refresh() }
@@ -41,10 +43,10 @@ export function TaskPanel({ api, sessionId }: { api: PanelApi; sessionId?: strin
     </select></label>}
     {state && <p style={{ fontSize: 12, opacity: .75 }}>{state.cwd}</p>}
     {!selected && <p>在 DSH 打开任意已有目录的对话即可使用。</p>}
-    <form onSubmit={e => { e.preventDefault(); void action({ action: 'start', goal: goal.trim() }) }}>
-      <label style={{ display: 'block' }}>任务目标<textarea aria-label="任务目标" placeholder="例如：检查当前项目的构建错误，修复后运行测试并记录结果" rows={3} value={goal} disabled={pending || running} onChange={e => setGoal(e.target.value)} maxLength={8000} style={{ display: 'block', width: '100%', boxSizing: 'border-box', margin: '8px 0', padding: 8, color: 'inherit', background: 'transparent', border: '1px solid #8887', borderRadius: 6 }} /></label>
+    <form onSubmit={e => { e.preventDefault(); e.stopPropagation(); void action({ action: 'start', goal: goal.trim() }) }}>
+      <label style={{ display: 'block' }}>任务目标<textarea aria-label="任务目标" placeholder="例如：检查当前项目的构建错误，修复后运行测试并记录结果" rows={3} value={goal} disabled={pending} onChange={e => setGoal(e.target.value)} maxLength={8000} style={{ display: 'block', width: '100%', boxSizing: 'border-box', margin: '8px 0', padding: 8, color: 'inherit', background: 'transparent', border: '1px solid #8887', borderRadius: 6 }} /></label>
       <button type="submit" disabled={!selected || !goal.trim() || pending || running}>发起任务</button>{' '}
-      {running && <button type="button" disabled={pending} onClick={() => { void action({ action: 'cancel' }) }}>取消任务</button>}
+      {running && <button type="button" disabled={pending || state?.job?.state === 'cancelling'} onClick={() => { void action({ action: 'cancel' }) }}>取消任务</button>}
       <span role="status" style={{ marginLeft: 8 }}>{pending ? '提交中…' : state?.job ? states[state.job.state] : '就绪'}</span>
     </form>
     {error && <p role="alert">{error}</p>}
@@ -66,4 +68,14 @@ export function TaskPanel({ api, sessionId }: { api: PanelApi; sessionId?: strin
       <button disabled={pending || running} onClick={() => { void action({ action: 'resume', task_id: t.id }) }}>打开任务</button>
     </div>)}</details>}
   </section>
+}
+
+
+export function TaskDock({ api, sessionId }: { api: PanelApi; sessionId?: string }) {
+  const [open, setOpen] = useState(false)
+  const revealJob = useCallback(() => setOpen(true), [])
+  return <details open={open} onToggle={event => setOpen(event.currentTarget.open)} style={{ width: '100%' }}>
+    <summary style={{ cursor: 'pointer' }}>Sapper 任务</summary>
+    <TaskPanel api={api} {...(sessionId ? { sessionId } : {})} onJob={revealJob} />
+  </details>
 }

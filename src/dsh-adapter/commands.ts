@@ -11,10 +11,11 @@ import { graphStatus } from '../render/status.js'
 import { renderGraphView } from '../render/snapshot.js'
 import { hasFullAccess } from './permissions.js'
 import { UNTRUSTED_NOTICE } from '../render/context.js'
+import type { TaskPanelService } from './panel.js'
 import { randomUUID } from 'node:crypto'
 
-const USAGE = '/sapper [status | graph | frontier | recall <query> | flag | kb <query|kb001> | start <goal> | run | runs]'
-export function registerSapperCommand(ctx: Context, getConfig: () => Config, alive: () => boolean): () => void {
+const USAGE = '/sapper [status | graph | frontier | recall <query> | flag | kb <query|kb001> | start <goal> | run | runs | job | cancel]'
+export function registerSapperCommand(ctx: Context, getConfig: () => Config, alive: () => boolean, jobs: Pick<TaskPanelService, 'submit' | 'state'>): () => void {
   let sync = () => {}
   const kb = new KnowledgeBase()
   const handler = async (invocation: CommandInvocation): Promise<CommandResult> => {
@@ -26,14 +27,19 @@ export function registerSapperCommand(ctx: Context, getConfig: () => Config, ali
       const [command = 'status', ...tail] = input.split(/\s+/u).filter(Boolean)
       const query = tail.join(' ')
       const cwd = invocation.agent.session.header.cwd
-      if (command === 'start') {
-        if (!query) return { kind: 'error', text: USAGE }
-        const result = await ctx.tools.execute({ name: 'sapper_task', arguments: { action: 'start', goal: query }, agent: invocation.agent, callId: randomUUID() as never, signal: invocation.signal })
-        return result.isError ? { kind: 'error', text: result.error.message } : { kind: 'success', text: JSON.stringify(result.value, null, 2) }
+      if (command === 'start' || command === 'run' || command === 'cancel') {
+        if (command === 'start' ? !query : tail.length) return { kind: 'error', text: USAGE }
+        const accepted = jobs.submit(invocation.agent, command === 'start' ? { action: 'start', goal: query } : { action: command })
+        if (command === 'cancel') return { kind: 'success', text: accepted.accepted ? '已请求取消，正在停止子会话和保存状态。用 /sapper job 查看清理结果。' : '当前工作区没有正在运行的任务。' }
+        return { kind: 'success', text: `Sapper 后台任务已受理（${accepted.job_id}）。输入框可继续使用。用 /sapper job 查看进度，/sapper cancel 取消；也可打开 Sapper 任务面板。` }
       }
-      if (command === 'run' || command === 'runs') {
+      if (command === 'job') {
         if (tail.length) return { kind: 'error', text: USAGE }
-        const result = await ctx.tools.execute({ name: 'sapper_dispatch', arguments: { mode: command === 'run' ? 'run' : 'status' }, agent: invocation.agent, callId: randomUUID() as never, signal: invocation.signal })
+        return { kind: 'success', text: UNTRUSTED_NOTICE + '\n' + JSON.stringify(await jobs.state(String(invocation.agent.id)), null, 2) }
+      }
+      if (command === 'runs') {
+        if (tail.length) return { kind: 'error', text: USAGE }
+        const result = await ctx.tools.execute({ name: 'sapper_dispatch', arguments: { mode: 'status' }, agent: invocation.agent, callId: randomUUID() as never, signal: invocation.signal })
         return result.isError ? { kind: 'error', text: result.error.message } : { kind: 'success', text: UNTRUSTED_NOTICE + '\n' + JSON.stringify(result.value, null, 2) }
       }
       if (command === 'kb') {
@@ -66,7 +72,7 @@ export function registerSapperCommand(ctx: Context, getConfig: () => Config, ali
     sync = () => {
       if (getConfig().enabled && !dispose) dispose = child.commands.register({
         definitionId: CommandDefinitionId('sapper-dsh:sapper'), name: 'sapper',
-        description: '查询 Sapper 图、召回、KB 与运行记录，或用 run 启动有预算的子代理编排',
+        description: '查询 Sapper 图、召回、KB 与运行记录，或后台启动/继续、查看进度及取消编排',
         input: { hint: USAGE }, handler,
       })
       if (!getConfig().enabled && dispose) { dispose(); dispose = undefined }

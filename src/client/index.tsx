@@ -1,7 +1,7 @@
 import { useState, useSyncExternalStore } from 'react'
 import type { BrowserContext, BrowserSettingsScope } from '../dsh-adapter/client.js'
 import { GraphPreview } from './graph.js'
-import { TaskPanel } from './task-panel.js'
+import { TaskPanel, TaskDock } from './task-panel.js'
 import { PANEL_REMOTE, type PanelApi } from '../panel/rpc.js'
 import { VERSION } from '../constants.js'
 
@@ -86,7 +86,7 @@ export function apply(ctx: BrowserContext): void {
     api = { targets: () => invoke('targets', {}) as ReturnType<PanelApi['targets']>, state: sessionId => invoke('state', { sessionId }) as ReturnType<PanelApi['state']>, action: (sessionId, input) => invoke('action', { sessionId, input }) }
     const panelApi = api
     ctx.effect(() => ctx.slots.inject('conversation.composer.dock', () => ctx.slots.register({ name: 'conversation.composer.dock', id: 'sapper-task', label: 'Sapper 任务', order: 90 },
-      ({ sessionId }) => <details style={{ width: '100%' }}><summary style={{ cursor: 'pointer' }}>Sapper 任务</summary><TaskPanel api={panelApi} {...(sessionId ? { sessionId } : {})} /></details>)))
+      ({ sessionId }) => <TaskDock api={panelApi} {...(sessionId ? { sessionId } : {})} />)))
   }
   const Panel = ({ view }: { view?: string }) => view === 'summary'
     ? <p>工作区事实图与任务规划</p>
