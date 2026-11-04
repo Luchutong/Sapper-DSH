@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { createTypertRemoteInfo } from '@deepseek-ai/dsh-typert-protocol/remote-info'
 import type { TypertRemoteCodecSpec } from '@deepseek-ai/dsh-typert-protocol'
 
-export const actionSchema = z.object({ action: z.enum(['start', 'resume', 'cancel', 'run']), goal: z.string().max(8000).optional(), task_id: z.string().optional() }).strict()
+export const actionSchema = z.object({ action: z.enum(['start', 'resume', 'cancel', 'run', 'steer', 'continue']), goal: z.string().max(8000).optional(), task_id: z.string().optional(), purpose: z.enum(['solve', 'writeup']).optional() }).strict()
 export type PanelAction = z.infer<typeof actionSchema>
 function codec(name: string, create: () => z.ZodType): TypertRemoteCodecSpec { return { mode: 'strict', typeSymbol: 'sapper-dsh.' + name, create } }
 const string = codec('sessionId', () => z.string().min(1).max(256)), result = codec('panelResult', () => z.json())

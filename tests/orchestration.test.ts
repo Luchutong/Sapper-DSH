@@ -33,7 +33,7 @@ vi.setConfig({ testTimeout: 20000, hookTimeout: 20000 })
 const waitForRuntime: typeof vi.waitFor = callback => vi.waitFor(callback, { timeout: 10000 })
 const cleanup: Array<() => Promise<unknown>> = []
 afterEach(async () => { for (const f of cleanup.splice(0).reverse()) await f() })
-interface Scenario { exploreReads?: number; verifyReads?: number; recipe?: string; noEvidence?: boolean; forged?: boolean; reject?: boolean; noVerifyEvidence?: boolean; beforeRead?: (signal: AbortSignal) => Promise<void>; attack?: boolean; proposals?: number; emptyReason?: boolean; hang?: boolean; completesGoal?: boolean; denyGoal?: boolean; maxTokens?: 'reason' | 'explore' | 'verify' }
+interface Scenario { writeup?: boolean; flag?: string; hangOther?: boolean; exploreReads?: number; verifyReads?: number; recipe?: string; noEvidence?: boolean; forged?: boolean; reject?: boolean; noVerifyEvidence?: boolean; beforeRead?: (signal: AbortSignal) => Promise<void>; attack?: boolean; proposals?: number; emptyReason?: boolean; hang?: boolean; completesGoal?: boolean; denyGoal?: boolean; maxTokens?: 'reason' | 'explore' | 'verify' }
 class FixtureModel extends LlmAdapter {
   requests: GenerateOptions[] = []
   constructor(readonly scenario: Scenario) { super() }
@@ -44,16 +44,17 @@ class FixtureModel extends LlmAdapter {
     const receipt = raw.match(/ev-[a-f0-9-]{36}/g)?.at(-1) ?? 'missing-receipt'
     const tools = options.messages.filter(m => m.role === 'tool')
     if (this.scenario.maxTokens === role) { yield { type: 'finish', reason: { kind: 'max-tokens' } }; return }
-    if (this.scenario.hang && role === 'explore') {
+    if ((this.scenario.hang || (this.scenario.hangOther && raw.includes('Read local fixture 1'))) && role === 'explore') {
       await new Promise<void>((_, reject) => { const stop = () => reject(options.signal?.reason); options.signal?.addEventListener('abort', stop, { once: true }); if (options.signal?.aborted) stop() })
       return
     }
     const requiredReads = role === 'verify' ? this.scenario.verifyReads ?? 1 : this.scenario.exploreReads ?? 1
     let name = 'structured_output', args: unknown
     if (role === 'reason') args = { intents: this.scenario.emptyReason ? [] : Array.from({ length: this.scenario.proposals ?? 1 }, (_, n) => ({ title: `Check fixture ${n}`, description: `Read local fixture ${n}`, from: ['f001'], success_criteria: 'Fixture content contains VERIFIED-LOCAL-7C42', completes_goal: !!this.scenario.completesGoal })) }
+    else if (!tools.length && this.scenario.writeup) { name = role === 'explore' ? 'pwsh' : 'read'; args = role === 'explore' ? { code: 'write-local-wp' } : { path: 'WP.md' } }
     else if (!tools.length && this.scenario.attack) { name = 'sapper_fact'; args = { action: 'create', description: 'BYPASS' } }
     else if (tools.length < (this.scenario.attack ? requiredReads + 1 : requiredReads) && !(role === 'explore' && (this.scenario.noEvidence || this.scenario.forged))) { name = 'read'; args = { path: requiredReads > 1 ? `fixture-${tools.length}.txt` : 'fixture.txt' } }
-    else if (role === 'explore') args = { title: 'Fixture observation', description: 'Local fixture contains VERIFIED-LOCAL-7C42', kind: 'note', ...(this.scenario.recipe ? { reproduction: this.scenario.recipe } : {}), evidence: this.scenario.noEvidence ? [] : [{ receipt_id: this.scenario.forged ? 'invented' : receipt }] }
+    else if (role === 'explore') args = { title: 'Fixture observation', description: this.scenario.writeup ? 'WP.md: local evidence and reproduction steps saved' : this.scenario.flag ?? 'Local fixture contains VERIFIED-LOCAL-7C42', kind: this.scenario.flag && !this.scenario.writeup ? 'flag' : 'note', ...(this.scenario.recipe ? { reproduction: this.scenario.recipe } : {}), evidence: this.scenario.noEvidence ? [] : [{ receipt_id: this.scenario.forged ? 'invented' : receipt }] }
     else args = { goal_achieved: !!this.scenario.completesGoal && !this.scenario.denyGoal, verified: !this.scenario.reject, issues: this.scenario.reject ? 'REPRODUCTION-MISMATCH' : '', evidence: this.scenario.noVerifyEvidence || this.scenario.reject ? [] : [{ receipt_id: receipt }] }
     yield { type: 'reasoning-delta', index: 1, text: role === 'explore' ? 'EXPLORER-PRIVATE-TRACE' : 'fixture reasoning' }
     yield { type: 'tool-call-delta', index: 0, id: ToolCallId('fixture-' + this.requests.length), name, argumentsDelta: JSON.stringify(args) }
@@ -63,7 +64,7 @@ class FixtureModel extends LlmAdapter {
 async function setup(scenario: Scenario = {}, input: ConfigInput = {}, commands = false, maxDepth = 1, topology: 'global' | 'preset' | 'preset-ptc' = 'global', bootstrap = true) {
   const cwd = await mkdtemp(path.join(os.tmpdir(), 'sapper M3 中文 '))
   cleanup.push(() => rm(cwd, { recursive: true, force: true }))
-  await writeFile(path.join(cwd, 'fixture.txt'), 'VERIFIED-LOCAL-7C42\n')
+  await writeFile(path.join(cwd, 'fixture.txt'), (scenario.flag ?? 'VERIFIED-LOCAL-7C42') + '\n')
   for (let i = 0; i < Math.max(scenario.exploreReads ?? 0, scenario.verifyReads ?? 0); i++) await writeFile(path.join(cwd, `fixture-${i}.txt`), `VERIFIED-LOCAL-7C42 observation ${i}\n`)
   const ctx = new Context(); cleanup.push(() => ctx.fiber.dispose())
   await mountAgentLoopTestDependencies(ctx, { workingDirectory: true })
@@ -75,12 +76,13 @@ async function setup(scenario: Scenario = {}, input: ConfigInput = {}, commands 
   ctx.llm.registerAdapter(['fixture'], model)
   const read = vi.fn(async (readArgs: unknown, exec: ToolRunContext) => { await scenario.beforeRead?.(exec.signal); return await readFile(path.join(cwd, (readArgs as { path: string }).path), 'utf8') })
   const readDefinition = defineTool({ name: 'read', description: 'Read local fixture', parameters: { path: { type: 'string', required: true } }, output: { schema: { type: 'string' }, render: (_a, v) => [{ type: 'text', text: v }] }, execute: read })
-  if (topology === 'global') ctx.tools.register(readDefinition)
+  const wpDefinition = defineTool({ name: 'pwsh', description: 'Local fixture WP writer', parameters: { code: { type: 'string', required: true } }, output: { schema: { type: 'string' }, render: (_a, v) => [{ type: 'text', text: v }] }, execute: async () => { await writeFile(path.join(cwd, 'WP.md'), '# WP\nEvidence: VERIFIED-LOCAL-7C42\nReproduction: read the local fixture.\n'); return 'WP.md saved' } })
+  if (topology === 'global') { ctx.tools.register(readDefinition); if ('writeup' in scenario) ctx.tools.register(wpDefinition) }
   else {
     await ctx.plugin(Loader)
     await ctx.plugin(AgentPresetRegistry, { default: 'fixture' })
     ctx.loader.builtins.fixtureTools = { inject: ['tools', 'systemPrompt'], apply(scoped: Context) {
-      scoped.tools.register(readDefinition)
+      scoped.tools.register(readDefinition); if ('writeup' in scenario) scoped.tools.register(wpDefinition)
       if (topology === 'preset-ptc') scoped.tools.presentAs('ptc')
     } }
     await ctx.agentPresets.register({ id: 'fixture', plugins: [{ name: 'cordis:fixtureTools' }] })
@@ -445,7 +447,8 @@ it('drives the task panel through actual client and host Typert Gateways with st
   const { RemoteAccessService } = await import('@deepseek-ai/dsh-api-remote-access')
   const ClientGateway = await import('@deepseek-ai/dsh-api-gateway/client')
   const { PANEL_REMOTE } = await import('../src/panel/rpc.js')
-  const { ctx, parent, cwd } = await setup({ completesGoal: true }, {}, false, 1, 'preset', false)
+  const panelScenario: Scenario = { completesGoal: true, writeup: false }
+  const { ctx, parent, cwd } = await setup(panelScenario, {}, false, 1, 'preset', false)
   await ctx.plugin(Registry)
   await ctx.plugin(RemoteAccessService)
   await ctx.plugin(Gateway, {})
@@ -479,7 +482,7 @@ it('drives the task panel through actual client and host Typert Gateways with st
   expect(await invoke('targets', {})).toEqual([{ id: String(parent.id), cwd }])
   expect(await invoke('state', { sessionId: String(parent.id) })).toMatchObject({ tasks: [], runs: [] })
   const panelResults: import('../src/panel/result.js').TaskResult[] = []
-  ctx.on('session/event', (session, event) => { if (session === parent.session && event.type === 'sapper/result') panelResults.push(event.data) })
+  ctx.on('session/event', (session, event) => { if (session === parent.session && event.type === 'sapper/result' && event.data.phase === 'result') panelResults.push(event.data) })
   await invoke('action', { sessionId: String(parent.id), input: { action: 'start', goal: 'Verify local fixture' } })
   await (ctx.get('sapperPanel') as TaskPanelService).whenIdle(cwd)
   expect(await invoke('state', { sessionId: String(parent.id) })).toMatchObject({ job: { state: 'completed', result: { stop_reason: 'goal-completed' } }, graph: { status: 'completed', verified: 1 } })
@@ -556,6 +559,15 @@ it('drives the task panel through actual client and host Typert Gateways with st
       await expect.poll(async () => panelResults.length).toBe(3)
       await expect.poll(async () => page.locator('#results article').count()).toBe(3)
       expect(await page.locator('#results').textContent()).toContain('已独立复核')
+      panelScenario.writeup = true
+      await dialog.getByLabel('补充方向或后续要求').fill('Include the minimal reproduction')
+      await dialog.getByRole('button', { name: '编写 WP', exact: true }).click()
+      await expect.poll(async () => (await serviceState()).tasks.length, { timeout: 10000 }).toBe(3)
+      await (ctx.get('sapperPanel') as TaskPanelService).whenIdle(cwd)
+      expect(await readFile(path.join(cwd, 'WP.md'), 'utf8')).toContain('Reproduction:')
+      await expect.poll(async () => panelResults.length).toBe(4)
+      await expect.poll(async () => page.locator('#results article').count()).toBe(4)
+      await dialog.getByRole('button', { name: '重新运行 / 纠正 flag', exact: true }).waitFor({ state: 'visible' })
       await page.keyboard.press('Escape')
       await dialog.waitFor({ state: 'hidden' })
       expect(await page.getByRole('button', { name: '打开 Sapper 任务' }).evaluate(el => el === document.activeElement)).toBe(true)
@@ -711,7 +723,7 @@ it('publishes confirmed results and incomplete candidates back to the originatin
   const parentTurns: string[] = []
   ctx.on('session/event', (session, event) => {
     if (session !== parent.session) return
-    if (event.type === 'sapper/result') results.push(event.data)
+    if (event.type === 'sapper/result' && (!event.data.phase || event.data.phase === 'result')) results.push(event.data)
     if (event.type === 'turn/start') parentTurns.push(event.type)
   })
   const service = ctx.get('sapperPanel') as TaskPanelService
@@ -736,4 +748,112 @@ it('denies extra evidence calls after entering finalization even when a model ig
   expect(run.state).toBe('failed')
   expect(run.outcomes[0]?.error).toContain('步数预算')
   expect(read).toHaveBeenCalledTimes(1)
+})
+
+it('ends on the first evidence-backed flag, immediately reports it, drains competing exploration and never starts verification or another reason', async () => {
+  const { ctx, cwd, parent, model } = await setup({ flag: 'CTF2{STOP-FIRST-7C42}', proposals: 2, hangOther: true }, { orchestration: { maxSteps: 8, maxExplore: 8, concurrency: 2 } }, true, 1, 'preset', false)
+  const events: import('../src/panel/result.js').TaskResult[] = []
+  ctx.on('session/event', (session, event) => { if (session === parent.session && event.type === 'sapper/result') events.push(event.data) })
+  const service = ctx.get('sapperPanel') as TaskPanelService
+  service.submit(parent, { action: 'start', goal: 'Find flag and stop immediately' })
+  expect(events[0]).toMatchObject({ phase: 'accepted', state: 'running' })
+  await service.whenIdle(cwd)
+  const state = await service.state(String(parent.id)), run = state.runs[0]!
+  expect(state.job?.state).toBe('completed')
+  expect(run).toMatchObject({ state: 'completed', stop_reason: 'flag-found' })
+  expect(run.children?.filter(c => c.role === 'verify')).toEqual([])
+  expect(run.children?.filter(c => c.role === 'reason')).toHaveLength(1)
+  expect(events.find(e => e.phase === 'flag-found')).toMatchObject({ candidates: [{ description: 'CTF2{STOP-FIRST-7C42}', status: 'unverified' }] })
+  expect(events.at(-1)).toMatchObject({ phase: 'result', confirmed: [], candidates: [{ description: 'CTF2{STOP-FIRST-7C42}' }] })
+  expect(state.graph?.verified).toBe(0)
+  expect(ctx.agents.list()).toEqual([parent])
+  const store = new GraphStore((await resolveSelectedStore(cwd, resolveConfig()))!, cwd)
+  expect((await store.read()).intents.every(i => i.worker === null)).toBe(true)
+  expect((await store.read()).hints).toEqual([])
+  expect(model.requests.filter(r => JSON.stringify(r.messages).includes('# Sapper verify'))).toEqual([])
+})
+
+it('accepts a main-session steering tool, drains the old route and automatically runs a linked phase with the new direction', async () => {
+  const scenario: Scenario = { hang: true }
+  const { ctx, cwd, parent, model, execute } = await setup(scenario, {}, true, 1, 'preset', false)
+  const service = ctx.get('sapperPanel') as TaskPanelService
+  service.submit(parent, { action: 'start', goal: 'Find evidence' })
+  await waitForRuntime(() => expect(model.requests.some(r => JSON.stringify(r.messages).includes('# Sapper explore'))).toBe(true))
+  const first = await resolveSelectedStore(cwd, resolveConfig())
+  scenario.hang = false
+  expect(await execute('sapper_control', { action: 'steer', goal: 'Explore the other direction, checking local fixture' })).toMatchObject({ accepted: true, state: 'cancelling' })
+  await service.whenIdle(cwd)
+  const state = await service.state(String(parent.id))
+  expect(state.tasks).toHaveLength(2)
+  expect(state.tasks[1]?.goal).toContain('Explore the other direction')
+  expect((await new GraphStore(first!, cwd).readRun('r001')).state).toBe('cancelled')
+  const next = new GraphStore((await resolveSelectedStore(cwd, resolveConfig()))!, cwd)
+  expect((await next.read()).project.parent_task).toBe(state.tasks[0]?.id)
+  expect(state.job?.state).toBe('completed')
+  expect(ctx.agents.list()).toEqual([parent])
+})
+
+it('allows WP and correction phases after a completed goal, preserves original evidence and does not treat historical flags as new success', async () => {
+  const scenario: Scenario = { completesGoal: true, writeup: false }
+  const { ctx, cwd, parent, execute } = await setup(scenario, {}, true, 1, 'preset', false)
+  const service = ctx.get('sapperPanel') as TaskPanelService
+  service.submit(parent, { action: 'start', goal: 'Verify original evidence' }); await service.whenIdle(cwd)
+  const first = new GraphStore((await resolveSelectedStore(cwd, resolveConfig()))!, cwd), original = await first.read()
+  expect(original.project.status).toBe('completed')
+  scenario.writeup = true
+  await ctx.commands.execute(parent, '/sapper wp Include the reproduction steps', [], new AbortController().signal)
+  await service.whenIdle(cwd)
+  const wp = new GraphStore((await resolveSelectedStore(cwd, resolveConfig()))!, cwd)
+  expect(await readFile(path.join(cwd, 'WP.md'), 'utf8')).toContain('Reproduction:')
+  expect((await wp.read()).project).toMatchObject({ purpose: 'writeup', stop_on_flag: false })
+  expect((await wp.read()).facts.find(f => f.title === '前序任务与证据线索')?.doc).toContain('VERIFIED-LOCAL-7C42')
+  scenario.writeup = false
+  await execute('sapper_control', { action: 'continue', purpose: 'solve' })
+  await service.whenIdle(cwd)
+  const history = (await service.state(String(parent.id))).tasks
+  expect(history).toHaveLength(3)
+  expect(history[2]?.goal).toBe('Verify original evidence')
+  expect(await first.read()).toEqual(original)
+  expect((await wp.read()).project.status).toBe('completed')
+})
+
+it('retains a flag candidate for explicit independent verification and stops again without duplicate promotion', async () => {
+  const { dispatch, store } = await setup({ flag: 'flag{VERIFY-LATER-7C42}' })
+  const first = await dispatch()
+  expect(first.stop_reason).toBe('flag-found')
+  expect(first.outcomes[0]?.verify_attempts).toBe(0)
+  const verified = await dispatch('verify', { run_id: first.id, intent_id: first.outcomes[0]!.intent_id })
+  expect(verified).toMatchObject({ state: 'completed', stop_reason: 'flag-found', outcomes: [{ state: 'confirmed', verify_attempts: 1 }] })
+  const after = await dispatch()
+  expect(after).toMatchObject({ state: 'completed', stop_reason: 'flag-found', explored: 0 })
+  expect((await store.read()).facts.filter(f => f.kind === 'flag')).toHaveLength(1)
+  expect((await store.read()).integrity).toEqual([])
+})
+
+it('keeps background control inside the main session permission boundary and lets an explicit cancel discard a queued direction', async () => {
+  const scenario: Scenario = { hang: true }
+  const { ctx, cwd, parent, model, execute } = await setup(scenario, {}, true, 1, 'preset', false)
+  const service = ctx.get('sapperPanel') as TaskPanelService
+  parent.session.append('sandbox/mode', { mode: 'read-only' })
+  await expect(execute('sapper_control', { action: 'continue', goal: 'Switch direction' })).rejects.toThrow('只读')
+  expect((await service.state(String(parent.id))).tasks).toHaveLength(0)
+  parent.session.append('sandbox/mode', { mode: 'danger-full-access' })
+  service.submit(parent, { action: 'start', goal: 'Find evidence' })
+  await waitForRuntime(() => expect(model.requests.some(r => JSON.stringify(r.messages).includes('# Sapper explore'))).toBe(true))
+  await execute('sapper_control', { action: 'steer', goal: 'Switch direction' })
+  service.submit(parent, { action: 'cancel' })
+  await service.whenIdle(cwd)
+  expect((await service.state(String(parent.id))).tasks).toHaveLength(1)
+  expect(ctx.agents.list()).toEqual([parent])
+})
+
+it('reports durable partial results after cancellation instead of losing already confirmed evidence', async () => {
+  const { ctx, cwd, parent } = await setup({ proposals: 2, hangOther: true }, { orchestration: { maxExplore: 2, maxSteps: 2 } }, true, 1, 'preset', false)
+  const service = ctx.get('sapperPanel') as TaskPanelService
+  service.submit(parent, { action: 'start', goal: 'Check two routes' })
+  await waitForRuntime(async () => expect((await service.state(String(parent.id))).graph?.verified).toBe(1))
+  service.submit(parent, { action: 'cancel' }); await service.whenIdle(cwd)
+  const state = await service.state(String(parent.id))
+  expect(state.job).toMatchObject({ state: 'cancelled', result: { phase: 'result', confirmed: [{ description: 'Local fixture contains VERIFIED-LOCAL-7C42' }] } })
+  expect(ctx.agents.list()).toEqual([parent])
 })

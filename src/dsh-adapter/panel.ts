@@ -17,7 +17,7 @@ import type { RunRecord } from '../store/runs.js'
 import { UNTRUSTED_NOTICE } from '../render/context.js'
 import { StoreError } from '../store/validation.js'
 
-interface Job { callId: string; started: boolean; drained: Promise<void>; finish(): void; controller: AbortController; state: 'running' | 'cancelling' | 'completed' | 'failed' | 'cancelled'; error?: string; started_at: string; done?: Promise<void>; result?: TaskResult }
+interface Job { agentId: string; goal: string; taskId?: string; next?: { goal: string; purpose: 'solve' | 'writeup' }; activity: Array<{ at: string; stage: string }>; callId: string; started: boolean; drained: Promise<void>; finish(): void; controller: AbortController; state: 'running' | 'cancelling' | 'completed' | 'failed' | 'cancelled'; error?: string; started_at: string; done?: Promise<void>; result?: TaskResult }
 export class TaskPanelService extends TypertRemoteService {
   private jobs = new Map<string, Job>()
   constructor(ctx: Context, private getConfig: () => Config, private alive: () => boolean) {
@@ -83,16 +83,30 @@ export class TaskPanelService extends TypertRemoteService {
     const current = this.jobs.get(base)
     if (args.action === 'cancel') {
       if (!current || (current.state !== 'running' && current.state !== 'cancelling')) return { accepted: false, state: 'idle' }
+      delete current.next
       current.state = 'cancelling'
       current.controller.abort(new StoreError('用户取消任务'))
       return { accepted: true, job_id: current.callId, state: current.state }
+    }
+    if (args.action === 'steer') {
+      if (!args.goal?.trim()) throw new StoreError('请输入新的探索方向')
+      if (!current || current.state !== 'running') throw new StoreError('当前没有正在运行的任务；结束后用 /sapper continue 或 /sapper retry')
+      if (current.agentId !== String(agent.id)) throw new StoreError('请从发起任务的主会话调整方向')
+      const nextGoal = `原任务：${current.goal}\n用户调整方向：${args.goal.trim()}`
+      if (nextGoal.length > 8000) throw new StoreError('合并后的任务目标最多 8000 字符，请缩短新方向')
+      current.next = { goal: nextGoal, purpose: 'solve' }
+      current.state = 'cancelling'
+      current.controller.abort(new StoreError('用户调整方向，正在停止原路线'))
+      this.notice(agent, current, 'direction', `已收到新方向：${args.goal.trim()}。停止并回收原路线后自动继续。`)
+      return { accepted: true, job_id: current.callId, state: 'cancelling' }
     }
     if (current?.state === 'running' || current?.state === 'cancelling') throw new StoreError('当前工作区已有任务运行；用 /sapper job 查看或 /sapper cancel 取消')
     if (args.action === 'start' && !args.goal?.trim()) throw new StoreError('请输入任务目标')
     let finish!: () => void
     const drained = new Promise<void>(resolve => { finish = resolve })
-    const job: Job = { callId: randomUUID(), started: false, drained, finish, controller: new AbortController(), state: 'running', started_at: new Date().toISOString() }
+    const job: Job = { agentId: String(agent.id), goal: args.goal?.trim() ?? '', activity: [], callId: randomUUID(), started: false, drained, finish, controller: new AbortController(), state: 'running', started_at: new Date().toISOString() }
     this.jobs.set(base, job)
+    this.notice(agent, job, 'accepted', `任务已受理：${args.goal?.trim() || '继续当前工作区任务'}。可用 /sapper steer <方向> 调整、/sapper cancel 停止；结束后用 /sapper wp 或 /sapper retry。`)
     // The job owns cancellation and drains the tool body even if the caller leaves the page.
     const execution = args.action === 'run'
       ? { name: 'sapper_dispatch', arguments: { mode: 'run' } }
@@ -101,34 +115,53 @@ export class TaskPanelService extends TypertRemoteService {
       if (job.started) await job.drained
       if (result.isError) throw new StoreError(result.error.message)
       const run = result.value as { state?: string; stop_reason?: string; task_id?: string; id?: string }
-      try { job.result = await this.result(agent, job.callId, run.task_id, run.id); this.deliver(agent, job.result) } catch (error) { this.ctx.logger.warn('Sapper 结果回传失败：%s', (error as Error).message) }
+      try { job.result = await this.result(agent, job.callId, run.task_id, run.id); job.result.activity = job.activity; this.deliver(agent, job.result) } catch (error) { this.ctx.logger.warn('Sapper 结果回传失败：%s', (error as Error).message) }
       job.state = run.state === 'cancelled' ? 'cancelled' : run.state === 'failed' ? 'failed' : 'completed'
       if (run.stop_reason && job.state !== 'completed') job.error = run.stop_reason
-    }).catch(async error => { if (job.started) await job.drained; job.state = job.controller.signal.aborted ? 'cancelled' : 'failed'; job.error = (error as Error).message; job.result = { job_id: job.callId, task_id: 'unknown', goal: args.goal ?? '', state: job.state, summary: `Sapper 启动/运行失败：${job.error}`, confirmed: [], candidates: [], errors: [job.error] }; try { this.deliver(agent, job.result) } catch {} })
+    }).catch(async error => { if (job.started) await job.drained; job.state = job.controller.signal.aborted ? 'cancelled' : 'failed'; job.error = (error as Error).message; job.result = { job_id: job.callId, task_id: 'unknown', goal: args.goal ?? '', state: job.state, summary: `Sapper 启动/运行失败：${job.error}`, confirmed: [], candidates: [], errors: [job.error] }; try { if (job.taskId) job.result = { ...await this.result(agent, job.callId, job.taskId), activity: job.activity }; this.deliver(agent, job.result) } catch {} })
+    job.done = job.done.then(() => {
+      if (!job.next || this.jobs.get(base) !== job || !this.alive() || !this.getConfig().enabled) return
+      const next = job.next; delete job.next
+      this.submit(agent, { action: 'continue', goal: next.goal, purpose: next.purpose, ...(job.taskId ? { task_id: job.taskId } : {}) })
+    }).catch(error => { job.error = (error as Error).message; this.notice(agent, job, 'result', `新方向启动失败：${job.error}`) })
     return { accepted: true, job_id: job.callId, state: job.state }
+  }
+  private notice(agent: Agent, job: Job, phase: NonNullable<TaskResult['phase']>, summary: string, extra: Partial<TaskResult> = {}) {
+    job.activity.push({ at: new Date().toISOString(), stage: summary }); job.activity = job.activity.slice(-40)
+    this.deliver(agent, { job_id: job.callId, task_id: job.taskId ?? 'pending', goal: job.goal, state: job.state, summary, confirmed: [], candidates: [], errors: [], activity: [...job.activity], phase, ...extra })
+  }
+  async progress(agent: Agent, root: string, run: RunRecord, stage: string) {
+    const base = resolveStorePath(agent.session.header.cwd, this.getConfig())
+    const job = base && this.jobs.get(base)
+    if (!job || job.agentId !== String(agent.id) || job.state !== 'running' || job.controller.signal.aborted) return
+    if (!job.goal) job.goal = (await new GraphStore(root, agent.session.header.cwd!).read()).project.goal
+    job.taskId = root === base ? 'legacy' : root.split(/[\\/]/).at(-1)!
+    const labels: Record<string, string> = { reason: '正在规划下一步', explore: '正在探索并收集证据', verify: '正在独立复核', 'flag-found': '发现带工具证据的 flag，已停止其他路线，正在保存和回收子会话' }
+    this.notice(agent, job, stage === 'flag-found' ? 'flag-found' : 'progress', labels[stage] ?? stage, {
+      run_id: run.id, candidates: run.outcomes.filter(o => o.candidate && o.state !== 'confirmed').map(o => ({ title: o.candidate!.title, description: o.candidate!.description, kind: o.candidate!.kind, status: 'unverified' as const })),
+    })
   }
   async result(agent: Agent, jobId: string, selected?: string, runId?: string): Promise<TaskResult> {
     const cwd = agent.session.header.cwd!, base = resolveStorePath(cwd, this.getConfig())!
     const catalog = await taskCatalog(base, cwd), taskId = selected ?? catalog?.active ?? 'legacy'
     const store = new GraphStore(taskRoot(base, taskId), cwd), graph = await store.read()
     const run: RunRecord | undefined = runId ? await store.readRun(runId) : (await store.listRuns()).at(-1)
-    const confirmed = (run?.outcomes ?? []).filter(o => o.state === 'confirmed').flatMap(o => {
-      const f = graph.facts.find(f => f.id === o.fact_id)
-      return f ? [{ id: f.id, title: f.title ?? f.id, description: f.description, kind: f.kind ?? 'note' }] : []
-    })
-    const candidates = (run?.outcomes ?? []).filter(o => o.candidate && o.state !== 'confirmed').map(o => ({ title: o.candidate!.title, description: o.candidate!.description, kind: o.candidate!.kind, status: o.verification?.verified === false ? 'rejected' as const : 'unverified' as const }))
+    const confirmed = graph.facts.filter(f => f.verification_status === 'confirmed' && (f.kind === 'flag' || run?.outcomes.some(o => o.fact_id === f.id))).map(f => ({ id: f.id, title: f.title ?? f.id, description: f.description, kind: f.kind ?? 'note' }))
+    const candidates = (run?.outcomes ?? []).filter(o => o.candidate && o.state !== 'confirmed' && !confirmed.some(f => f.kind === o.candidate!.kind && f.description === o.candidate!.description)).map(o => ({ title: o.candidate!.title, description: o.candidate!.description, kind: o.candidate!.kind, status: o.verification?.verified === false ? 'rejected' as const : 'unverified' as const }))
     const errors = [...new Set((run?.outcomes ?? []).flatMap(o => o.error ? [o.error] : []))]
-    const summary = `${graph.project.status === 'completed' ? '目标已独立复核完成。' : '本轮已结束，目标仍待完成。'}\n${graph.project.goal}\n已确认结果 ${confirmed.length} 项；未确认候选 ${candidates.length} 项。${run?.stop_reason ? '\n停止原因：' + run.stop_reason : ''}`
-    return { job_id: jobId, task_id: taskId, ...(run ? { run_id: run.id, stop_reason: run.stop_reason ?? '' } : {}), goal: graph.project.goal, state: run?.state ?? graph.project.status, summary, confirmed, candidates, errors }
+    const summary = `${run?.stop_reason === 'flag-found' ? '发现 flag，已按约束结束本轮。候选状态与独立复核状态见下方。' : graph.project.status === 'completed' ? '目标已独立复核完成。' : '本轮已结束，目标仍待完成。'}\n${graph.project.goal}\n已确认结果 ${confirmed.length} 项；未确认候选 ${candidates.length} 项。${run?.stop_reason ? '\n停止原因：' + run.stop_reason : ''}`
+    return { phase: 'result', job_id: jobId, task_id: taskId, ...(run ? { run_id: run.id, stop_reason: run.stop_reason ?? '' } : {}), goal: graph.project.goal, state: run?.state ?? graph.project.status, summary, confirmed, candidates, errors }
   }
   private deliver(agent: Agent, result: TaskResult) {
     agent.session.append('sapper/result', result)
     const text = UNTRUSTED_NOTICE + '\n' + JSON.stringify(result)
+    // Frequent stage cards are visible events; only acceptance, direction and final results enter model context.
+    if (result.phase === 'progress') return
     agent.inject(createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'sapper-dsh', form: 'result', sections: [{ name: 'Sapper task result', text }] } }))
   }
   @Remote({ resources: { session: (sessionId: string) => SessionId(sessionId) } })
   async report(sessionId: string) { const agent = this.agent(sessionId), result = await this.result(agent, 'report-' + randomUUID()); this.deliver(agent, result); return result }
-  async whenIdle(cwd: string) { const base = resolveStorePath(cwd, this.getConfig()); if (base) await this.jobs.get(base)?.done }
+  async whenIdle(cwd: string) { const base = resolveStorePath(cwd, this.getConfig()); if (!base) return; for (;;) { const job = this.jobs.get(base); await job?.done; if (this.jobs.get(base) === job) return } }
 }
 export function registerTaskPanel(ctx: Context, getConfig: () => Config, alive: () => boolean) {
   const service = new TaskPanelService(ctx, getConfig, alive)

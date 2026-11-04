@@ -31,6 +31,7 @@ interface Child {
   parent: Agent
 }
 class StopRunError extends StoreError {}
+class FlagStop extends StoreError {}
 function mustStop(error: unknown): boolean {
   return error instanceof StopRunError || (error instanceof Error && error.cause !== undefined && mustStop(error.cause)) ||
     (error instanceof AggregateError && error.errors.some(mustStop))
@@ -42,7 +43,7 @@ const readTools = new Set(['sapper_status', 'sapper_fact', 'sapper_intent', 'sap
 export class Orchestrator {
   private children = new Map<string, Child>()
   private active = new Map<string, AbortController>()
-  constructor(private ctx: Context, private getConfig: () => Config, private alive: () => boolean) {
+  constructor(private ctx: Context, private getConfig: () => Config, private alive: () => boolean, private progress?: (parent: Agent, root: string, run: RunRecord, stage: string) => Promise<void>) {
     ctx.on('agent/created', async ({ agent }) => {
       const child = this.children.get(String(agent.id))
       if (!child) return
@@ -164,7 +165,7 @@ export class Orchestrator {
       if (child.capabilities) child.capabilities.state = 'completed'
       return { value: result.structured, session, calls: child.calls }
     } finally {
-      if (child.capabilities) { child.capabilities.state ??= 'failed'; if (child.capabilities.state === 'running') child.capabilities.state = 'failed'; child.capabilities.ended_at = new Date().toISOString(); try { await child.onReady(child.capabilities) } catch {} }
+      if (child.capabilities) { child.capabilities.state ??= 'failed'; if (child.capabilities.state === 'running') child.capabilities.state = child.controller.signal.reason instanceof FlagStop ? 'stopped' : 'failed'; child.capabilities.ended_at = new Date().toISOString(); try { await child.onReady(child.capabilities) } catch {} }
       try { await activation?.dispose() } finally { controller.signal.removeEventListener('abort', stop); clearTimeout(timer); clearInterval(poll); signal.removeEventListener('abort', onAbort); this.children.delete(session) }
     }
   }
@@ -183,12 +184,23 @@ export class Orchestrator {
       guard()
       record = await store.beginRun(mode, actor, runOptions)
       const run = record, managed = { ...runOptions, managedRun: run.id }
+      const stopOnFlag = (await store.read()).project.stop_on_flag !== false
+      let foundFlag = false
+      const pipelines = new Set<AbortController>()
+      const stopForFlag = async () => {
+        if (foundFlag || !stopOnFlag) return
+        foundFlag = true; run.stop_reason = 'flag-found'
+        // Stop every competing pipeline immediately; the winning candidate is already durable.
+        for (const pipeline of pipelines) pipeline.abort(new FlagStop('发现 flag，停止其他路线'))
+        await this.progress?.(parent, store.root, run, 'flag-found')
+      }
       const onReady = async (capabilities: ChildCapabilities) => {
         run.children ??= []
         const index = run.children.findIndex(c => c.session_id === capabilities.session_id)
         if (index < 0) run.children.push({ ...capabilities })
         else run.children[index] = { ...capabilities }
         await store.saveRun(run, runOptions)
+        if (index < 0) await this.progress?.(parent, store.root, run, capabilities.role)
       }
       const reason = async () => {
         const graph = await store.read()
@@ -205,19 +217,23 @@ export class Orchestrator {
         await store.saveRun(run, runOptions)
         return proposals.length
       }
-      const verify = async (outcome: RunOutcome) => {
+      const verify = async (outcome: RunOutcome, pipelineSignal: AbortSignal) => {
         if (!outcome.candidate || outcome.verify_attempts >= config.orchestration.maxVerify) throw new StoreError('候选不存在或复核次数已达上限')
-        outcome.verify_attempts = await store.reserveVerification(outcome.intent_id, actor, run.id, outcome.candidate.explorer_session, config.orchestration.maxVerify, managed)
+        outcome.verify_attempts = await store.reserveVerification(outcome.intent_id, actor, run.id, outcome.candidate.explorer_session, config.orchestration.maxVerify, { ...managed, signal: pipelineSignal })
         await store.saveRun(run, runOptions)
         const intent = await store.readNode('intent', outcome.intent_id)
         // No explorer transcript, reasoning, graph history, or unrelated facts are sent.
-        const output = await this.child('verify', { goal: (await store.read()).project.goal, intent: { id: intent.id, description: intent.description, success_criteria: intent.doc, completes_goal: intent.completes_goal === true }, candidate: outcome.candidate }, parent, config, signal, guard, onReady)
+        const output = await this.child('verify', { goal: (await store.read()).project.goal, intent: { id: intent.id, description: intent.description, success_criteria: intent.doc, completes_goal: intent.completes_goal === true }, candidate: outcome.candidate }, parent, config, pipelineSignal, guard, onReady)
         outcome.verification = parseVerification(output.value, output.session, output.calls)
         if (!outcome.verification.verified) throw new StoreError('verify rejected: ' + outcome.verification.issues)
-        await store.promoteVerified(run, outcome, actor, managed)
+        await store.promoteVerified(run, outcome, actor, { ...managed, signal: pipelineSignal })
+        if (outcome.candidate.kind === 'flag') await stopForFlag()
       }
       const attempt = async (nodeId: string, existing?: RunOutcome) => {
         guard()
+        if (foundFlag) return
+        const pipeline = new AbortController(); pipelines.add(pipeline)
+        const pipelineSignal = AbortSignal.any([signal, pipeline.signal])
         await store.intentAction('claim', nodeId, actor, undefined, managed)
         const outcome: RunOutcome = existing ? structuredClone(existing) : { intent_id: nodeId, state: 'pending-verification', verify_attempts: 0 }
         outcome.state = 'pending-verification'; delete outcome.fact_id; delete outcome.error
@@ -227,19 +243,33 @@ export class Orchestrator {
           if (!existing) {
             run.explored++
             const graph = await store.read(), intent = graph.intents.find(i => i.id === nodeId)!
-            const output = await this.child('explore', { goal: graph.project.goal, intent, facts: graph.facts.filter(f => intent.from.includes(f.id)) }, parent, config, signal, guard, onReady)
+            const output = await this.child('explore', { goal: graph.project.goal, intent, facts: graph.facts.filter(f => intent.from.includes(f.id)) }, parent, config, pipelineSignal, guard, onReady)
             outcome.candidate = parseCandidate(output.value, output.session, output.calls)
             await store.saveRun(run, runOptions)
           }
+          if (!existing && stopOnFlag && outcome.candidate?.kind === 'flag') {
+            await stopForFlag()
+            await store.intentAction('release', nodeId, actor, undefined, managed)
+            return
+          }
+          pipelineSignal.throwIfAborted()
           if (mode === 'explore') await store.intentAction('release', nodeId, actor, undefined, managed)
-          else await verify(outcome)
+          else await verify(outcome, pipelineSignal)
         } catch (error) {
+          if (pipeline.signal.reason instanceof FlagStop) {
+            if (!outcome.fact_id) {
+              outcome.state = outcome.candidate ? 'pending-verification' : 'stopped'
+              const { signal: _cancelled, ...cleanup } = managed
+              await store.intentAction('release', nodeId, actor, undefined, cleanup)
+            }
+            return
+          }
           outcome.state = 'failed'; outcome.error = (error as Error).message
           // Cleanup may record a cancellation, but still rechecks current file permissions/config.
           const { signal: _cancelled, ...cleanup } = options
           try { await store.failManaged(nodeId, actor, run, outcome.error, cleanup) } catch { /* Revoked writes leave a visible claimed intent for explicit recovery. */ }
           if (signal.aborted || mustStop(error)) throw error
-        }
+        } finally { pipelines.delete(pipeline) }
       }
       if (mode === 'reason') await reason()
       else if (mode === 'verify') {
@@ -256,6 +286,8 @@ export class Orchestrator {
         while (run.steps < config.orchestration.maxSteps && run.explored < config.orchestration.maxExplore) {
           guard()
           const graph = await store.read()
+          if (foundFlag) break
+          if (stopOnFlag && graph.facts.some(f => f.kind === 'flag' && f.verification_status === 'confirmed' && f.data?.status !== 'rejected')) { await stopForFlag(); break }
           if (graph.project.status === 'completed') { run.stop_reason = 'goal-completed'; break }
           const ready = frontier(graph, { fullAccess: options.autoConfirm?.() ?? false, actor }).ready.filter(i => !attempted.has(i.id))
           if (!ready.length) {
@@ -276,7 +308,7 @@ export class Orchestrator {
         }
         run.stop_reason ??= (await store.read()).project.status === 'completed' ? 'goal-completed' : 'budget-exhausted'
       }
-      guard(); run.state = run.outcomes.some(o => o.state === 'failed') ? 'failed' : 'completed'
+      guard(); run.state = !foundFlag && run.outcomes.some(o => o.state === 'failed') ? 'failed' : 'completed'
       await store.saveRun(run, runOptions)
       return run
     } catch (error) {

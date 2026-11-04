@@ -3,7 +3,7 @@
 将 [sapper-v2](https://github.com/N1nEmAn/sapper-v2) 的事实图与
 `reason → explore → verify` 循环移植为 DSH NEXT 桌面插件。
 
-**当前版本 `0.1.0-alpha.11`：修复工作区会话列表与任务入口，加入进度时间线、事实图、主会话结果卡片和按证据进展自动延长的预算。**
+**当前版本 `0.1.0-alpha.12`：发现 flag 即停止并回传，主会话显示启动与阶段信息，支持调整探索方向，以及结束后续写 WP 和纠错重跑。**
 目标运行时为 **DSH 0.2.1-rc.2**，Cordis 4.0.5 / Schemastery 3.18.5。
 
 当前可维护工作区事实图、意图、长文档和本地 flag；每轮注入有预算的 frontier、
@@ -17,7 +17,7 @@
 
 | 工具 | 当前操作 |
 | --- | --- |
-| sapper_task | start / resume；按用户目标自动建独立图并运行，保留旧图 |
+| sapper_task | start / resume / continue；按用户目标自动建独立图并运行，保留旧图 |
 | sapper_init | create / recover；初始化不覆盖已有文件，recover 重放待完成事务 |
 | sapper_status | summary / frontier / graph；项目状态、数量、就绪/阻塞分组与完整性诊断 |
 | sapper_fact | create / get / list；可在创建结果事实时原子结案 source_intent |
@@ -26,6 +26,7 @@
 | sapper_flag | record / list / update；本地记录与去重，不联网提交 |
 | sapper_recall | 按标题/描述召回事实与意图；返回 ID、摘要、匹配原因，不展开 doc |
 | sapper_kb | search / get / list；离线知识检索，get 才展开详情与命令示例 |
+| sapper_control | status / result / steer / continue / cancel；主会话干预与后台后续阶段 |
 | sapper_dispatch | reason / explore / verify / run / status / recover；有预算的子代理循环与运行记录 |
 
 普通图写入默认跟随 DSH 会话文件权限自动执行，不逐次请求批准；包括初始化、文档、
@@ -47,10 +48,14 @@ requires_confirmation 或设置为 always，也不额外 ask；确认来源记�
 
 面板发起任务或 `/sapper start <目标>` 会自动准备存储并开始运行。已有图也可
 显式调用 `sapper_dispatch {"mode":"run"}` 或 `/sapper run`，开始后连续推进就绪意图，
-必要时 reason 提出新任务，explore 收集候选证据，verify 独立复核后才原子写入
+必要时 reason 提出新任务，explore 收集候选证据，普通候选经 verify 独立复核后才原子写入
 `verification_status=confirmed` 的事实。`/sapper runs` 只读查看运行摘要。`/sapper start` 和 `/sapper run` 立即返回后台任务编号；用 `/sapper job` 查看进度、`/sapper cancel` 取消。
 子代理从实际 preset 继承文件/命令工具，启动时记录 tools/external_tools 清单；
 缺工具或 max-tokens 时停止本轮并报告原因。alpha.6 的失败图可直接重跑，不需重建。
+
+求解阶段首次提交有成功工具回执的 `kind=flag` 候选后立即停止其他路线并回传，不再等待自动复核；该结果明确标为未确认候选。显式 verify 仍可独立复核。已确认 flag 也会阻止后续无关探索，避免重复晋升与重复规划。结束本轮不伪造项目的独立验证完成状态。
+
+任务窗口启动会立即在主会话显示受理与阶段卡片。运行中用 `/sapper steer <新方向>`：先停止并回收旧路线，再保留证据启动关联的新阶段。结束后 `/sapper wp [要求]` 根据已有证据编写本地 WP，`/sapper retry [纠错要求]` 重新取证，`/sapper continue <目标>` 开始后续工作，即使原项目已 completed 仍可使用。普通聊天可调用 `sapper_control` 完成这些操作，原任务与证据保留。
 
 默认使用 DSH 内置 spawn，模型继承父会话；无需配置第三方 CLI。角色、模型、超时
 和工具权限均通过当前 DSH 接口。候选与失败记录保存在 `.sapper/runs/`，失败意图
@@ -80,7 +85,7 @@ flag 事实是权威记录，`flags/ledger.json` 是可重建索引。详细边�
 在 DSH NEXT 菜单“打开 DSH 终端”，执行后重启应用：
 
 ```powershell
-dsh plugin add "D:\BaiduSyncdisk\sapper移植\sapper-dsh-0.1.0-alpha.11.tgz"
+dsh plugin add "D:\BaiduSyncdisk\sapper移植\sapper-dsh-0.1.0-alpha.12.tgz"
 ```
 
 开发需要 Node.js 22+、pnpm 8.15.4 和 Python 3（仅 golden 测试使用）：
@@ -99,7 +104,7 @@ corepack pnpm pack --pack-destination dist
 ## 工程与进度
 
 - `src/store/`：校验、路径、队列、原子 IO、事务与图操作。
-- `src/tools/`：九个工具、参数/返回值、写入分类。
+- `src/tools/`：图工具、召回、KB、编排与会话控制，以及写入分类。
 - `src/dsh-adapter/`：DSH 生命周期、审批、slash commands 和消息来源边界。
 - `src/client/`：输入框任务入口、独立窗口、进度时间线、事实图、主会话结果卡片与预算设置。
 - `src/render/`：frontier、历史、状态和共用预算的上下文；不自动展开 doc。

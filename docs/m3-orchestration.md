@@ -111,3 +111,9 @@ TS/Python 写锁不互通，必须顺序交接。已提交事务遵循原存储�
 自动测试使用真实 AgentLoop/SubagentRuntime/ToolRuntime 与确定性本地模型适配器，
 证明接口、生命周期和状态机。没有在测试中调用在线模型或真实目标；在线模型的实际
 工具选择、语义判断与桌面交互按统一指南验收。
+
+## alpha.12 求解结束与后续阶段
+
+求解阶段（project.stop_on_flag 不为 false）以带成功工具证据的 flag 候选为本轮结束条件；候选保存后设置 stop_reason=flag-found，取消其他流水线，回收子会话并释放意图，不再自动 verify/reason。运行结束与目标已独立确认是两个状态；候选不会因此成为 confirmed。用户可显式 verify，或通过主会话启动新的纠错阶段。
+
+parent_task/purpose 元数据记录新阶段的来源；purpose=writeup 的 stop_on_flag=false，允许在报告中引用历史 flag。历史事实、旧候选与复现步骤以 note 传入，不能作为新一轮成功工具回执。新的求解/纠错仍需新证据。

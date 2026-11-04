@@ -22,6 +22,7 @@ import { registerSapperCommand } from './commands.js'
 import { Orchestrator } from '../orchestration/engine.js'
 import { createDispatchTool } from '../tools/dispatch.js'
 import { createTaskTool } from '../tools/task.js'
+import { createControlTool } from '../tools/control.js'
 import { registerTaskPanel } from './panel.js'
 
 function isOwnSnapshot(message: unknown): boolean {
@@ -49,14 +50,14 @@ export function registerRuntime(ctx: Context, getConfig: () => Config): void {
     return permission.fullAccess
   }
   const fullAccess = (exec: Pick<ToolExecution, 'agent'>) => hasFullAccess(ctx, exec)
-  const dispatcher = new Orchestrator(ctx, getConfig, () => alive)
-  const dispatching = new Set<symbol>()
   const taskPanel = registerTaskPanel(ctx, getConfig, () => alive)
+  const dispatcher = new Orchestrator(ctx, getConfig, () => alive, async (parent, root, run, stage) => { try { await taskPanel.progress(parent, root, run, stage) } catch (error) { ctx.logger.warn('Sapper 进度回传失败：%s', (error as Error).message) } })
+  const dispatching = new Set<symbol>()
   const lifecycle = {
     start: (exec: ToolExecution) => { dispatching.add(exec.token); taskPanel.executionStarted(exec) }, finish: (exec: ToolExecution) => { dispatching.delete(exec.token); bindings.delete(exec.token); taskPanel.executionFinished(exec) },
   }
   const tools = [...createGraphTools(getConfig, () => alive, authorize, fullAccess), ...createRecallTools(getConfig, () => alive),
-    createDispatchTool(getConfig, () => alive, authorize, dispatcher, lifecycle), createTaskTool(getConfig, () => alive, authorize, dispatcher, lifecycle)]
+    createDispatchTool(getConfig, () => alive, authorize, dispatcher, lifecycle), createTaskTool(getConfig, () => alive, authorize, dispatcher, lifecycle), createControlTool(taskPanel)]
   const syncCommand = registerSapperCommand(ctx, getConfig, () => alive, taskPanel)
   const kb = new KnowledgeBase()
   let unregister: (() => void) | undefined

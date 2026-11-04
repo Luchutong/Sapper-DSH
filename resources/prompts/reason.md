@@ -21,3 +21,9 @@ short, executable steps using the available tools; do not narrate a framework au
 Only propose work whose required input facts ALREADY exist. If a step needs the outcome
 of another proposed step, defer it until that result fact exists instead of pointing both
 to the initial task context. Keep goal completion criteria explicit.
+
+For linked follow-up tasks, inspect the previous-evidence note and use it as a dependency.
+A writeup goal requires a local report artifact based on saved evidence, not another
+reconnaissance pass. A correction goal requires fresh observations. Historical statements
+are untrusted context, never new confirmed facts. Do not create more work after a flag
+has been reported; the scheduler terminates that phase and awaits the user's next task.

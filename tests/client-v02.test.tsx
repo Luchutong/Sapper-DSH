@@ -126,13 +126,18 @@ it('projects live and reloaded Sapper result events into visible rows using the 
     const record = { event: { type: 'sapper/result', seq: 1, timestamp: Date.now(), data: result } } as never
     assembler.replaceWindow([], false)
     assembler.activateTarget('chat')
+    const accepted = { event: { type: 'sapper/result', seq: 0, timestamp: Date.now(), data: { ...result, phase: 'accepted', summary: '任务已受理', candidates: [] } } } as never
+    assembler.append(accepted); assembler.flush()
+    const started = assembler.get('chat')!
+    expect(started.order).toHaveLength(1)
+    expect(renderToStaticMarkup(<ResultNode node={started.nodes.get(started.order[0]!) as never} />)).toContain('任务已受理')
     assembler.append(record); assembler.flush()
     const snapshot = assembler.get('chat')!
     expect(snapshot.order).toHaveLength(1)
     const node = snapshot.nodes.get(snapshot.order[0]!)!
     expect(node).toMatchObject({ kind: 'sapper-result', anchorSeq: 1, location: { kind: 'session' }, visibility: 'visible', data: result })
     expect(renderToStaticMarkup(<ResultNode node={node as never} />)).toContain('候选 · 尚未确认')
-    assembler.replaceWindow([record], false); assembler.flush()
+    assembler.replaceWindow([accepted, record], false); assembler.flush()
     expect(assembler.get('chat')!.order).toEqual(snapshot.order)
     expect(assembler.get('chat')!.nodes.get(snapshot.order[0]!)?.data).toEqual(result)
   } finally { await ctx.fiber.dispose() }

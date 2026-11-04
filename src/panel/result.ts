@@ -1,4 +1,5 @@
 export interface TaskResult {
+  phase?: 'accepted' | 'progress' | 'direction' | 'flag-found' | 'result'; activity?: Array<{ at: string; stage: string }>
   job_id: string; task_id: string; run_id?: string; goal: string; state: string; summary: string
   confirmed: Array<{ id: string; title: string; description: string; kind: string }>
   candidates: Array<{ title: string; description: string; kind: string; status: 'unverified' | 'rejected' }>

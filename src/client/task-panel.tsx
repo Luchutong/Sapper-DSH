@@ -4,8 +4,9 @@ import { ResultBody } from './result.js'
 import type { PanelApi, PanelState, PanelTarget } from '../panel/rpc.js'
 
 const box = { border: '1px solid var(--border-color, #7775)', borderRadius: 8, padding: 12, marginTop: 12 }
-const states: Record<string, string> = { running: '运行中', cancelling: '取消中', completed: '已结束', failed: '失败', cancelled: '已取消', active: '进行中', confirmed: '已验证', 'pending-verification': '等待复核' }
+const states: Record<string, string> = { stopped: '已停止', running: '运行中', cancelling: '取消中', completed: '已结束', failed: '失败', cancelled: '已取消', active: '进行中', confirmed: '已验证', 'pending-verification': '等待复核' }
 export function TaskPanel({ api, sessionId, onJob }: { api: PanelApi; sessionId?: string; onJob?: () => void }) {
+  const [direction, setDirection] = useState('')
   const [tab, setTab] = useState('progress'), [reportMessage, setReportMessage] = useState('')
   const [targets, setTargets] = useState<PanelTarget[]>([]), [selected, setSelected] = useState(sessionId ?? '')
   const [state, setState] = useState<PanelState>(), [goal, setGoal] = useState(''), [pending, setPending] = useState(false), [error, setError] = useState('')
@@ -60,6 +61,13 @@ export function TaskPanel({ api, sessionId, onJob }: { api: PanelApi; sessionId?
       <p>{state.graph.status === 'completed' ? '目标已独立验证完成' : '目标待完成'} · 事实 {state.graph.facts} · 已验证 {state.graph.verified} · 待推进 {state.graph.ready}</p>
       {!!state.graph.integrity.length && <p role="alert">{state.graph.integrity.join('；')}</p>}
       {!running && state.graph.status !== 'completed' && <button disabled={pending} onClick={() => { void action({ action: 'resume', task_id: state.active }) }}>继续当前任务</button>}
+    </div>}
+    {state?.graph && <div style={box}>
+      <label>补充方向或后续要求<textarea aria-label="补充方向或后续要求" rows={2} value={direction} onChange={e => setDirection(e.target.value)} style={{ display: 'block', width: '100%', boxSizing: 'border-box', color: 'inherit', background: 'transparent', margin: '8px 0' }} /></label>
+      {running ? <button type="button" disabled={pending || !direction.trim() || state.job?.state === 'cancelling'} onClick={() => { void action({ action: 'steer', goal: direction.trim() }) }}>按新方向继续</button> : <>
+        <button type="button" disabled={pending} onClick={() => { void action({ action: 'continue', goal: `根据前序证据编写本地 WP，保存为 WP.md；不重新访问外部目标。${direction}`, purpose: 'writeup' }) }}>编写 WP</button>{' '}
+        <button type="button" disabled={pending} onClick={() => { void action({ action: 'continue', ...(direction.trim() ? { goal: direction.trim() } : {}), purpose: 'solve' }) }}>重新运行 / 纠正 flag</button>
+      </>}
     </div>}
     {state?.graph && <nav aria-label="任务视图" style={{ display: 'flex', gap: 8, marginTop: 16 }}>
       {[['progress','运行进度'],['graph','事实图'],['results','结果与候选']].map(([id, label]) => <button type="button" key={id} aria-pressed={tab === id} onClick={() => setTab(id!)}>{label}</button>)}

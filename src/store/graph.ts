@@ -344,6 +344,13 @@ export class GraphStore {
       return intent
     }, options)
   }
+  async configurePhase(parentTask: string, purpose: 'solve' | 'writeup', solveGoal: string, options?: WriteOptions): Promise<void> {
+    return this.mutate(async changes => {
+      const graph = await this.healthy()
+      graph.project.parent_task = parentTask; graph.project.purpose = purpose; graph.project.solve_goal = solveGoal; graph.project.stop_on_flag = purpose !== 'writeup'
+      changes.set('project.json', graph.project)
+    }, options)
+  }
   async beginRun(mode: RunRecord['mode'], actor: string, options?: WriteOptions): Promise<RunRecord> {
     return this.mutate(async changes => {
       const graph = await this.healthy()

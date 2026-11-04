@@ -7,7 +7,7 @@ export interface Candidate {
 }
 export interface Verification { verified: boolean; evidence: Evidence[]; issues: string; verifier_session: string; goal_achieved?: boolean }
 export interface RunOutcome {
-  intent_id: string; state: 'pending-verification' | 'confirmed' | 'failed'; candidate?: Candidate
+  intent_id: string; state: 'pending-verification' | 'confirmed' | 'failed' | 'stopped'; candidate?: Candidate
   verification?: Verification; verify_attempts: number; fact_id?: string; error?: string
 }
 export interface RunRecord {
@@ -18,7 +18,7 @@ export interface RunRecord {
 }
 export interface ChildCapabilities {
   role: 'reason' | 'explore' | 'verify'; session_id: string; tools: string[]; external_tools: string[]; max_output_tokens: number
-  state?: 'running' | 'completed' | 'failed'; steps?: number; step_limit?: number; step_ceiling?: number; extensions?: number; finalizing?: boolean; started_at?: string; ended_at?: string
+  state?: 'running' | 'completed' | 'failed' | 'stopped'; steps?: number; step_limit?: number; step_ceiling?: number; extensions?: number; finalizing?: boolean; started_at?: string; ended_at?: string
 }
 export function runId(value: unknown): string {
   if (typeof value !== 'string' || !/^r\d{3,}$/.test(value)) throw new StoreError('run_id 必须形如 r001')

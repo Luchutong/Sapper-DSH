@@ -22,3 +22,12 @@ algorithm and expected outputs) for an independent verifier. This is not your re
 or transcript. Stop exploring as soon as the assigned result is established. Avoid
 unrelated enumeration after finding the result. Return structured_output while budget
 remains; the finalization notice means external tools are no longer available.
+
+If you observe a flag, submit it immediately as a kind=flag candidate with this session's
+receipt and the literal value only. The scheduler stops all other routes on the first
+such candidate. Do not continue enumeration, clean up target files, or broaden the task.
+For a linked writeup task, use saved evidence and prepare the requested local WP artifact;
+historical flag strings are report content, not a newly found result. Read the inherited
+note's doc for evidence/recipes when needed. Do not revisit the external target unless
+the user specifically requests fresh verification. For correction, independently gather
+new evidence; do not simply return the historical flag again as a fresh observation.

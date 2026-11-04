@@ -14,7 +14,7 @@ import { UNTRUSTED_NOTICE } from '../render/context.js'
 import type { TaskPanelService } from './panel.js'
 import { randomUUID } from 'node:crypto'
 
-const USAGE = '/sapper [status | graph | frontier | recall <query> | flag | kb <query|kb001> | start <goal> | run | runs | job | result | cancel]'
+const USAGE = '/sapper [status | graph | frontier | recall <query> | flag | kb <query|kb001> | start <goal> | run | runs | job | result | steer <方向> | continue <目标> | retry [纠错要求] | wp [要求] | cancel]'
 export function registerSapperCommand(ctx: Context, getConfig: () => Config, alive: () => boolean, jobs: Pick<TaskPanelService, 'submit' | 'state' | 'report'>): () => void {
   let sync = () => {}
   const kb = new KnowledgeBase()
@@ -27,6 +27,12 @@ export function registerSapperCommand(ctx: Context, getConfig: () => Config, ali
       const [command = 'status', ...tail] = input.split(/\s+/u).filter(Boolean)
       const query = tail.join(' ')
       const cwd = invocation.agent.session.header.cwd
+      if (['steer', 'continue', 'retry', 'wp'].includes(command)) {
+        if ((command === 'steer' || command === 'continue') && !query) return { kind: 'error', text: USAGE }
+        const goal = command === 'wp' ? `根据前序任务证据编写本地 WP（解题报告），保存为 WP.md；不重新访问外部目标。${query}` : query
+        const accepted = jobs.submit(invocation.agent, { action: command === 'steer' ? 'steer' : 'continue', ...(goal ? { goal } : {}), purpose: command === 'wp' ? 'writeup' : 'solve' })
+        return { kind: 'success', text: `已受理（${accepted.job_id}）。${command === 'steer' ? '停止原路线后自动按新方向继续。' : '已保留前序任务，正在启动后续阶段。'}` }
+      }
       if (command === 'start' || command === 'run' || command === 'cancel') {
         if (command === 'start' ? !query : tail.length) return { kind: 'error', text: USAGE }
         const accepted = jobs.submit(invocation.agent, command === 'start' ? { action: 'start', goal: query } : { action: command })

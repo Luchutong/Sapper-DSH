@@ -86,3 +86,9 @@ CI 和打包阶段均执行；各版本的桌面验收分别记录。
 任务命令/面板共用 TaskPanelService，发起即返回后台编号。运行结束读取实际图与运行记录，向发起者会话追加持久化 `sapper/result` 事件；客户端注册独立 Conversation Definition 和 keyed Chat 节点渲染器。结果卡片无需主模型轮次即可出现，模型上下文另收到不可信摘要。窗口支持历史结果补发。
 
 客户端将命名空间贡献挂载和动态依赖注入分开，所有 RPC 使用注入 `remote.sapperPanel` 后的 scoped remote。输入入口使用正式 `conversation.input.left`，窗口 portal 到 document.body，避免旧 composer dock 的布局裁切。只读 SVG 关系图、子代理时间线与结果标签页共享服务状态。预算按新证据延长并预留结构化收尾，同时保留时限、硬步数上限、取消、权限和独立证据约束。
+
+## alpha.12 交互与任务阶段
+
+TaskPanelService 接收引擎的阶段通知，使用同一个 job_id 更新持久化主会话卡片。steer 先取消并等待原 ToolRuntime 执行体及子会话排空，再自动发起 linked continue；cancel 会删除排队方向。普通聊天通过 sapper_control 进入同一服务，仍受工具策略和根会话归属限制。
+
+求解运行收到经过成功工具回执检查的 flag 候选后，调度器设置 flag-found 并取消其余流水线，释放未完成意图，保存候选并正常结束本轮；不自动提升 confirmed。completed 项目之后的 WP/纠错以新任务图延续，parent_task/purpose 链接历史，历史数据作为 note 继承。writeup 明确关闭 flag 早停，solve 维持早停。旧图和已确认事实保持可追溯。

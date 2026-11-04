@@ -121,6 +121,7 @@ export function isMutation(name: string, args: unknown): boolean {
   if (name === 'sapper_dispatch') return !(args && typeof args === 'object' && 'mode' in args && args.mode === 'status')
   if (name === 'sapper_init' || name === 'sapper_task') return true
   const action = args && typeof args === 'object' && 'action' in args ? args.action : undefined
+  if (name === 'sapper_control') return action !== 'status' && action !== 'result'
   if (name === 'sapper_fact' || name === 'sapper_intent') return action !== 'get' && action !== 'list'
   if (name === 'sapper_doc') return action !== 'get'
   if (name === 'sapper_flag') return action !== 'list'
