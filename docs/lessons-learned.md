@@ -194,3 +194,5 @@ DSH 会在 agent/pre-step 前组装该步工具列表，因此在 pre-step 收�
 仅在 Cordis 根 Context 上测试 RPC 会漏掉插件 fiber 的依赖检查。设置页旧报错来自只注入 remote、却从原作用域读取 remote.sapperPanel。测试应同时证明旧作用域确实报 without inject，以及动态注入后的 scoped remote 可调用真正的 Gateway。
 
 后台工具成功也不代表用户看到了答案。后台任务必须把实际结果写成持久化会话事件，注册真实 Conversation/Chat 扩展，区分候选和确认；测试覆盖实时、历史重载和失败结果。输入器下方 dock 可以被裁切，应在正式 input.left 插槽放可见按钮，通过顶层 portal 展示窗口，并验证被裁切的输入容器、焦点恢复和提交后失焦时 Esc 关闭。
+
+同次 CI 的 Windows 22/24 记录还显示冷磁盘上真实 SDK/事务测试超过默认 5 秒，启动屏障超过 vi.waitFor 的默认 1 秒；后续清理与写入竞争又产生 ENOTEMPTY。编排测试单独采用 20 秒执行/清理时限、10 秒事件等待，产品预算用原有受控时钟单独验证，所有证据/取消/权限断言保留。这类测试环境时限应与产品执行预算分开，不通过盲目重跑掩盖失败。

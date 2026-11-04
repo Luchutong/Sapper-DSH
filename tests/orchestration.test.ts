@@ -27,6 +27,10 @@ import { checkedEvidence } from '../src/orchestration/types.js'
 import { dshComposer } from './fixtures/dsh-composer.js'
 import type { CommandClaim } from '@deepseek-ai/dsh-client-ui-conversation/client'
 
+// Real SDK setup and durable multi-file writes are much slower on cold Windows CI disks.
+// These are harness deadlines, independent of the runtime budgets tested below.
+vi.setConfig({ testTimeout: 20000, hookTimeout: 20000 })
+const waitForRuntime: typeof vi.waitFor = callback => vi.waitFor(callback, { timeout: 10000 })
 const cleanup: Array<() => Promise<unknown>> = []
 afterEach(async () => { for (const f of cleanup.splice(0).reverse()) await f() })
 interface Scenario { exploreReads?: number; verifyReads?: number; recipe?: string; noEvidence?: boolean; forged?: boolean; reject?: boolean; noVerifyEvidence?: boolean; beforeRead?: (signal: AbortSignal) => Promise<void>; attack?: boolean; proposals?: number; emptyReason?: boolean; hang?: boolean; completesGoal?: boolean; denyGoal?: boolean; maxTokens?: 'reason' | 'explore' | 'verify' }
@@ -205,10 +209,10 @@ describe('M3 evidence gates, budgets and cancellation', () => {
   it('cancels and drains an already-published child through the caller signal', async () => {
     const { dispatch, model, store, ctx, parent } = await setup({ hang: true })
     const controller = new AbortController(), pending = dispatch('run', {}, controller.signal)
-    await vi.waitFor(() => expect(model.requests.some(r => JSON.stringify(r.messages).includes('# Sapper explore'))).toBe(true))
+    await waitForRuntime(() => expect(model.requests.some(r => JSON.stringify(r.messages).includes('# Sapper explore'))).toBe(true))
     controller.abort(new Error('fixture-cancelled'))
     await expect(pending).rejects.toThrow('aborted')
-    await vi.waitFor(async () => expect((await store.readRun('r001')).state).toBe('cancelled'))
+    await waitForRuntime(async () => expect((await store.readRun('r001')).state).toBe('cancelled'))
     expect((await store.read()).intents[0]?.worker).toBeNull()
     expect(ctx.agents.list()).toEqual([parent])
   })
@@ -223,7 +227,7 @@ describe('M3 evidence gates, budgets and cancellation', () => {
     }) as typeof setTimeout)
     try {
       const pending = dispatch()
-      await vi.waitFor(() => expect(model.requests.some(r => JSON.stringify(r.messages).includes('# Sapper explore'))).toBe(true))
+      await waitForRuntime(() => expect(model.requests.some(r => JSON.stringify(r.messages).includes('# Sapper explore'))).toBe(true))
       expect(deadlines).toHaveLength(2)
       deadlines[1]!()
       const run = await pending
@@ -265,10 +269,10 @@ describe('M3 completion and permission revocation', () => {
   it('drains on permission revocation, preserves the graph, and explicitly recovers the interrupted run later', async () => {
     const { dispatch, model, parent, ctx, store, execute } = await setup({ hang: true })
     const pending = dispatch().catch(error => error)
-    await vi.waitFor(() => expect(model.requests.some(r => JSON.stringify(r.messages).includes('# Sapper explore'))).toBe(true))
+    await waitForRuntime(() => expect(model.requests.some(r => JSON.stringify(r.messages).includes('# Sapper explore'))).toBe(true))
     parent.session.append('sandbox/mode', { mode: 'read-only' })
     await pending
-    await vi.waitFor(() => expect(ctx.agents.list()).toEqual([parent]))
+    await waitForRuntime(() => expect(ctx.agents.list()).toEqual([parent]))
     expect((await store.readRun('r001')).state).toBe('running')
     parent.session.append('sandbox/mode', { mode: 'danger-full-access' })
     expect(await execute('sapper_dispatch', { mode: 'recover', run_id: 'r001' })).toMatchObject({ state: 'cancelled' })
@@ -278,10 +282,10 @@ describe('M3 completion and permission revocation', () => {
   it('stops children on plugin disable and removes the dispatch tool', async () => {
     const { dispatch, model, ctx, parent, setConfig } = await setup({ hang: true })
     const pending = dispatch().catch(error => error)
-    await vi.waitFor(() => expect(model.requests.some(r => JSON.stringify(r.messages).includes('# Sapper explore'))).toBe(true))
+    await waitForRuntime(() => expect(model.requests.some(r => JSON.stringify(r.messages).includes('# Sapper explore'))).toBe(true))
     setConfig({ enabled: false })
     await pending
-    await vi.waitFor(() => expect(ctx.agents.list()).toEqual([parent]))
+    await waitForRuntime(() => expect(ctx.agents.list()).toEqual([parent]))
     expect(ctx.tools.get('sapper_dispatch')).toBeUndefined()
   })
 })
@@ -463,7 +467,7 @@ it('drives the task panel through actual client and host Typert Gateways with st
     wrongScope = () => PANEL_REMOTE.methods['sapperPanel/targets']!.invoke(scoped.remote, {})
     connection = connectPanel(scoped as unknown as import('../src/dsh-adapter/client.js').BrowserContext)
   } })
-  await vi.waitFor(() => expect(connection.getSnapshot().api, connection.getSnapshot().error).toBeDefined())
+  await waitForRuntime(() => expect(connection.getSnapshot().api, connection.getSnapshot().error).toBeDefined())
   expect(wrongScope).toThrow(/without inject/)
   const invoke = async (method: string, args: { sessionId?: string; input?: import('../src/panel/rpc.js').PanelAction }) => {
     const api = connection.getSnapshot().api!
@@ -564,7 +568,7 @@ it('drives the task panel through actual client and host Typert Gateways with st
     } finally { await browser.close(); await new Promise<void>(resolve => server.close(() => resolve())) }
   }
   await consumer.dispose()
-}, process.env.SAPPER_BROWSER_PROBE === '1' ? 45000 : 5000)
+}, process.env.SAPPER_BROWSER_PROBE === '1' ? 45000 : 20000)
 
 it('resumes a failed legacy workspace graph through the panel without recreating facts or rerunning reason', async () => {
   const scenario = { forged: true, completesGoal: true }
