@@ -552,3 +552,17 @@ it('keeps read-only panel starts out of the filesystem and reports the actual po
   expect(await store.initialized()).toBe(false)
   await expect(readFile(path.join(cwd, '.sapper', 'tasks', 'index.json'))).rejects.toMatchObject({ code: 'ENOENT' })
 })
+
+it('starts and monitors a fresh task beside an unreadable legacy M0 graph without overwriting it', async () => {
+  const { ctx, cwd, parent } = await setup({ completesGoal: true }, {}, false, 1, 'preset', false)
+  const { mkdir } = await import('node:fs/promises')
+  await mkdir(path.join(cwd, '.sapper'))
+  const legacy = path.join(cwd, '.sapper', 'project.json'), original = JSON.stringify({ goal: 'Old M0 preview', status: 'active' })
+  await writeFile(legacy, original)
+  const service = ctx.get('sapperPanel') as TaskPanelService
+  expect((await service.state(String(parent.id))).warnings?.join(' ')).toContain('无法读取')
+  await service.action(String(parent.id), { action: 'start', goal: 'Verify local fixture' })
+  await service.whenIdle(cwd)
+  expect(await service.state(String(parent.id))).toMatchObject({ job: { state: 'completed' }, graph: { status: 'completed', verified: 1 }, warnings: expect.any(Array) })
+  expect(await readFile(legacy, 'utf8')).toBe(original)
+})

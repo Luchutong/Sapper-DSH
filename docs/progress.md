@@ -1,8 +1,8 @@
 # 项目进度
 
-**当前交付 alpha.8：任务面板、普通工作区自动建图、独立证据回执。M2 用户验收已通过；alpha.7 的真实 M3 验收失败已作为本版回归依据。最新说明见文末与 [任务面板](task-panel.md)。**
+**当前交付 alpha.9：任务面板、普通工作区自动建图、独立证据回执。M2 用户验收已通过；alpha.7 的真实 M3 验收失败已作为本版回归依据。最新说明见文末与 [任务面板](task-panel.md)。**
 
-更新：2026-11-04（Asia/Shanghai）。当前 alpha.8，DSH 0.2.1-rc.2。
+更新：2026-11-04（Asia/Shanghai）。当前 alpha.9，DSH 0.2.1-rc.2。
 
 **M0/M1 已验收；本次桌面反馈确认 M2 通过。alpha.6 的 M3 因工具作用域与 token 耗尽失败，alpha.7 工具传递已恢复，但桌面证据转义仍失败；alpha.8 修复并加入任务面板。**
 [阶段跟踪 issue #1](https://github.com/Luchutong/Sapper-DSH/issues/1)。
@@ -102,3 +102,11 @@ SHA256：`8ee81d62be82236a7911f44ddbaea8fedcb75e984e51d56ea4aecd1378ac0c41`。
 alpha.8 最终工程验证：131 项测试（12 文件）通过；34 项真实 M3/面板编排测试覆盖回执、隔离、旧图继续、权限及取消，主客端 Typert Gateways 均实际参与。构建产物浏览器探针通过、pageerror 为零，并确认第二个任务在面板显示完成；冻结锁文件离线安装、包内依赖/兼容检查通过。Windows 隔离 profile 完成 alpha.7 → alpha.8 安装，退出码 0，无版本豁免；安装后 host SHA256 与本地 lib 完全一致。
 
 交付包：`sapper-dsh-0.1.0-alpha.8.tgz`，SHA256 `19e326e01833aa569d4c0b968a75dd1d870251a18e1a5e7762444df5d78d65e8`。副本位于 Windows `D:\BaiduSyncdisk\sapper移植`。现有 desktop profile 和用户验收事实图未修改。
+
+## alpha.9：早期图兼容补充
+
+保留 M0 最小图或不可读取的旧图时，面板显示诊断并继续列出、监控独立的新任务，避免未选中的历史图阻断整个面板。旧文件原文不改写。补充真实子代理回归，确认旁置旧 M0 图的新任务可独立完成。
+
+alpha.8 的 Ubuntu/Windows × Node 22/24 最终 CI 通过。首次 Windows Node 22 暴露旧测试用 120ms 猜测子会话启动速度的时序假设；现改为等待 explore 发布后触发实际注册的超时回调。产品运行时超时策略未因此改变。
+
+alpha.9 最终本地验证：132 项测试（12 文件，35 项真实编排/面板测试）、类型、双端构建与打包检查通过。使用最终构建的宿主与客户端再次通过真实 Gateway + 浏览器的发起任务/独立复核探针。交付 `sapper-dsh-0.1.0-alpha.9.tgz`，SHA256 `07a1b4bd4d4b2845d895b2681d14ee7e2c9824f9f23a202e4ae1b25f8f2203d9`，副本位于 Windows `D:\BaiduSyncdisk\sapper移植`。

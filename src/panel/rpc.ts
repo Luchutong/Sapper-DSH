@@ -14,7 +14,7 @@ export const PANEL_REMOTE = createTypertRemoteInfo({ package: 'sapper-dsh', meth
 } }, z)
 export interface PanelTarget { id: string; cwd: string }
 export interface PanelState {
-  cwd: string; active: string; tasks: Array<{ id: string; goal: string; created_at: string }>
+  cwd: string; warnings?: string[]; active: string; tasks: Array<{ id: string; goal: string; created_at: string }>
   job?: { state: 'running' | 'completed' | 'failed' | 'cancelled'; error?: string; started_at: string }
   graph?: { goal: string; status: string; facts: number; verified: number; ready: number; integrity: string[] }
   runs: Array<{ id: string; state: string; steps: number; explored: number; stop_reason?: string; children?: Array<{ role: string }>; outcomes: Array<{ state: string; intent_id: string; error?: string; candidate?: { title: string }; verification?: { issues: string; verified: boolean } }> }>

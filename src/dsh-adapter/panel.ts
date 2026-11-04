@@ -43,11 +43,14 @@ export class TaskPanelService extends TypertRemoteService {
     const catalog = await taskCatalog(base, cwd), active = catalog?.active ?? 'legacy'
     const store = new GraphStore(taskRoot(base, active), cwd), tasks = [...catalog?.tasks ?? []]
     const legacy = new GraphStore(base, cwd)
-    if (await legacy.initialized()) { const g = await legacy.read(); tasks.unshift({ id: 'legacy', goal: g.project.goal, created_at: g.project.created_at }) }
+    const warnings: string[] = []
+    try { if (await legacy.initialized()) { const g = await legacy.read(); tasks.unshift({ id: 'legacy', goal: g.project.goal, created_at: g.project.created_at }) } }
+    catch (error) { warnings.push('原工作区图无法读取：' + (error as Error).message) }
     const job = this.jobs.get(base)
     const state: PanelState = { cwd, active, tasks, runs: [], ...(job ? { job: { state: job.state, started_at: job.started_at, ...(job.error ? { error: job.error } : {}) } } : {}) }
-    if (await store.initialized()) {
-      const graph = await store.read(), f = frontier(graph, { fullAccess: true, actor: String(agent.id) })
+    try { if (await store.initialized()) {
+      const graph = await store.read(); warnings.push(...graph.warnings)
+      const f = frontier(graph, { fullAccess: true, actor: String(agent.id) })
       state.graph = { goal: graph.project.goal, status: graph.project.status, facts: graph.facts.filter(f => f.id !== 'goal').length, verified: graph.facts.filter(f => f.verification_status === 'confirmed').length, ready: f.ready.length, integrity: graph.integrity }
       state.runs = (await store.listRuns()).slice(-8).reverse().map(run => ({
         id: run.id, state: run.state, steps: run.steps, explored: run.explored,
@@ -59,6 +62,8 @@ export class TaskPanelService extends TypertRemoteService {
         })),
       }))
     }
+    } catch (error) { warnings.push('当前任务图无法读取：' + (error as Error).message) }
+    if (warnings.length) state.warnings = [...new Set(warnings)]
     return JSON.parse(JSON.stringify(state)) as PanelState
   }
   @Remote({ resources: { session: (sessionId: string) => SessionId(sessionId) } })

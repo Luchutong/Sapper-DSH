@@ -48,6 +48,7 @@ export function TaskPanel({ api, sessionId }: { api: PanelApi; sessionId?: strin
       <span role="status" style={{ marginLeft: 8 }}>{pending ? '提交中…' : state?.job ? states[state.job.state] : '就绪'}</span>
     </form>
     {error && <p role="alert">{error}</p>}
+    {!!state?.warnings?.length && <p role="alert">{state.warnings.join('；')}</p>}
     {state?.job?.error && <p role="alert">{state.job.error}</p>}
     {state?.graph && <div style={box}>
       <strong>{state.graph.goal}</strong>
