@@ -33,6 +33,8 @@ import {
   addressSchema,
   launchSchema,
   preferencesSchema,
+  importAttachmentSchema,
+  type ImportAttachment,
   type JobRecord,
   type LaunchInput,
   type Preferences,
@@ -41,6 +43,7 @@ import {
 import { archiveWriteup } from '../workbench/artifacts.js'
 import { writePermission } from './permissions.js'
 import { NativeWorkbench } from '../workbench/native.js'
+import { publicAttachments } from '../workbench/attachments.js'
 import { StoreError } from '../store/validation.js'
 
 interface Job {
@@ -112,6 +115,16 @@ export class TaskPanelService extends TypertRemoteService {
   async launch(input: LaunchInput) {
     this.owner()
     return this.native.launch(launchSchema.parse(input))
+  }
+  @Remote
+  async prepare(input: LaunchInput) {
+    this.owner()
+    return this.native.prepare(launchSchema.parse(input))
+  }
+  @Remote
+  async importAttachment(input: ImportAttachment) {
+    this.owner()
+    return this.native.importAttachment(importAttachmentSchema.parse(input))
   }
   @Remote
   async detail(input: TaskAddress) {
@@ -798,6 +811,8 @@ export class TaskPanelService extends TypertRemoteService {
     }
   }
   private deliver(agent: Agent, result: TaskResult) {
+    const files = publicAttachments(this.workbench.snapshot().launches[result.job_id]?.files)
+    if (files.length) result.attachments = files
     result.session_id = String(agent.id)
     appendPluginRecord(agent.session, RESULT_RECORD, result)
     const text = UNTRUSTED_NOTICE + '\n' + JSON.stringify(result)

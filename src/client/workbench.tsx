@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { BrowserContext } from '../dsh-adapter/client.js'
 import type { WorkbenchPanelApi, PanelAction } from '../panel/rpc.js'
 import type {
@@ -14,6 +14,7 @@ import { workbenchStyle } from './workbench-style.js'
 import { GraphPreview } from './graph.js'
 import { DirectoryPicker } from './directory-picker.js'
 import { candidateLabel } from './result.js'
+import { launchWithAttachments, type DraftAttachment } from './launch-attachments.js'
 
 const labels: Record<string, string> = {
   queued: '排队中',
@@ -173,7 +174,7 @@ export function Workbench({
             </button>
           ))}
           {data?.launches
-            ?.filter((l) => l.error && !l.jobId)
+            ?.filter((l) => !l.jobId)
             .map((l) => (
               <button
                 key={l.requestId}
@@ -184,7 +185,7 @@ export function Workbench({
                 }}
               >
                 <strong>{l.title}</strong>
-                <span className="sp-error">创建未完成，点击恢复</span>
+                <span className={l.error ? 'sp-error' : 'sp-muted'}>创建未完成，点击恢复</span>
               </button>
             ))}
           {!list.length && (
@@ -271,15 +272,22 @@ function NewChallenge({
     [pending, setPending] = useState(false),
     [error, setError] = useState(initial?.error ?? ''),
     [picking, setPicking] = useState(false),
+    [files, setFiles] = useState<DraftAttachment[]>(() => (initial?.input.attachments ?? []).map((f) => ({ ...f, stage: initial?.files?.find((saved) => saved.id === f.id)?.sha256 ? 'ready' : 'selected' }))),
     [request, setRequest] = useState<LaunchInput | undefined>(initial?.input)
+  const transfer = useRef<AbortController>()
+  const mounted = useRef(true)
+  useEffect(() => () => { mounted.current = false; transfer.current?.abort() }, [])
   const launch = async () => {
     setPending(true)
     setError('')
+    const controller = new AbortController()
+    transfer.current = controller
     const input = request ?? {
       requestId: crypto.randomUUID(),
       rootDir,
       title,
       goal,
+      ...(files.length ? { attachments: files.map(({ id, name, bytes }) => ({ id, name, bytes })) } : {}),
       ...(permission ? { permissionPreset: permission } : {}),
       ...(preset ? { agentPreset: preset } : {}),
       ...(provider && model
@@ -305,13 +313,17 @@ function NewChallenge({
           : {}),
         ...(input.agentPreset ? { agentPreset: input.agentPreset } : {}),
       })
-      const record = await api.launch(input)
-      await done()
-      if (record.sessionId) ctx.uiWorkspace?.openSession(record.sessionId)
+      await launchWithAttachments(api, ctx, input, files, controller.signal, (progress) => {
+        if (mounted.current && (!controller.signal.aborted || progress.stage === 'failed')) setFiles((all) => all.map((f) => f.id === progress.id ? { ...f, ...progress } : f))
+      }, async (record) => {
+        if (!mounted.current) return
+        await done()
+        if (record.sessionId) ctx.uiWorkspace?.openSession(record.sessionId)
+      })
     } catch (e) {
-      setError((e as Error).message)
+      if (mounted.current) setError((e as Error).message)
     } finally {
-      setPending(false)
+      if (mounted.current) setPending(false)
     }
   }
   return (
@@ -420,6 +432,36 @@ function NewChallenge({
           </label>
         </details>
       </fieldset>
+      <fieldset disabled={pending} className="sp-attachment-picker">
+        <legend>题目附件（可选）</legend>
+        <p className="sp-muted">ZIP、程序、图片等文件会原样保存到本题 attachments 文件夹；全部保存后才开始任务。</p>
+        {!request && <label>
+          添加附件
+          <input aria-label="添加题目附件" type="file" multiple disabled={!ctx.fileUpload || data.uploadAvailable === false} onChange={(event) => {
+            const selected = Array.from(event.currentTarget.files ?? [])
+            if (selected.length + files.length > 128) { setError('每题最多添加 128 个附件'); return }
+            setFiles((all) => [...all, ...selected.map((file) => ({ id: crypto.randomUUID(), name: file.name, bytes: file.size, file, stage: 'selected' as const }))])
+            event.currentTarget.value = ''
+          }} />
+        </label>}
+        {(!ctx.fileUpload || data.uploadAvailable === false) && <p role="status">DSH 文件上传服务尚未就绪，仍可不带附件创建。</p>}
+        <ul className="sp-attachments">
+          {files.map((file) => <li key={file.id}>
+            <strong>{file.name}</strong> <small>{file.bytes.toLocaleString()} 字节</small>
+            <p role="status">{file.stage === 'ready' ? '已保存' : file.stage === 'uploading' ? `正在上传 ${file.loaded ?? 0} / ${file.bytes} 字节` : file.stage === 'saving' ? '正在保存到题目目录…' : file.stage === 'failed' ? file.error : file.file ? '等待上传' : '需重新选择此附件以继续上传'}</p>
+            {(file.stage === 'uploading' || file.stage === 'saving') && <progress aria-label={`${file.name} 上传进度`} value={file.loaded ?? 0} max={file.bytes || 1} />}
+            {!request ? <button type="button" onClick={() => setFiles((all) => all.filter((f) => f.id !== file.id))}>移除 {file.name}</button> : file.stage !== 'ready' && <label>
+              重新选择 {file.name}
+              <input type="file" aria-label={`重新选择 ${file.name}`} onChange={(event) => {
+                const selected = event.currentTarget.files?.[0]
+                if (!selected) return
+                if (selected.name !== file.name || selected.size !== file.bytes) { setError(`请选择同名且同大小的原附件：${file.name}`); return }
+                setFiles((all) => all.map((f) => f.id === file.id ? { ...f, file: selected, stage: 'selected', error: undefined } : f))
+              }} />
+            </label>}
+          </li>)}
+        </ul>
+      </fieldset>
       {error && (
         <p role="alert" className="sp-error">
           {error}。已创建的内容会保留，重试将继续同一请求。
@@ -448,6 +490,7 @@ function NewChallenge({
           <button
             onClick={() => {
               setRequest(undefined)
+              setFiles((all) => all.filter((f) => f.file).map((f) => ({ ...f, id: crypto.randomUUID(), stage: 'selected', loaded: 0, error: undefined })))
               setError('')
             }}
             disabled={pending}
@@ -455,6 +498,7 @@ function NewChallenge({
             另建题目
           </button>
         )}
+        {pending && files.some((f) => f.stage === 'uploading' || f.stage === 'saving') && <button onClick={() => transfer.current?.abort()}>取消上传</button>}
         <button onClick={close} disabled={pending}>
           返回列表
         </button>
@@ -904,6 +948,7 @@ function Details({
         )}
         {tab === '文件' && (
           <>
+            {!!detail?.attachments?.length && <section className="sp-card"><h3>题目附件</h3><ul className="sp-attachments">{detail.attachments.map((f) => <li key={f.id}><strong>{f.name}</strong> · {f.bytes.toLocaleString()} 字节<p>{f.path}</p></li>)}</ul></section>}
             <p className="sp-muted">
               预览本题 WP 与 evidence 文件。预览内容不执行脚本。
             </p>

@@ -15,11 +15,13 @@ import type {} from '@deepseek-ai/dsh-api-session-controller'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import type {} from '@deepseek-ai/dsh-permission-presets'
 import type {} from '@deepseek-ai/dsh-agent-preset-registry'
+import type {} from '@deepseek-ai/dsh-client-file-upload'
+import type { FileUploadReceiptId } from '@deepseek-ai/dsh-client-file-upload/types'
 import type { TaskPanelService } from '../dsh-adapter/panel.js'
 import { runId as validateRunId } from '../store/runs.js'
 import { GraphStore } from '../store/graph.js'
 import { taskCatalog, taskRoot } from '../store/tasks.js'
-import { safePath } from '../store/io.js'
+import { safePath, exists } from '../store/io.js'
 import { StoreError } from '../store/validation.js'
 import {
   launchSchema,
@@ -32,9 +34,11 @@ import {
   type WorkbenchSnapshot,
   type Challenge,
   type Phase,
+  type ImportAttachment,
 } from './contracts.js'
 import type { PanelAction } from '../panel/rpc.js'
 import { runCandidates } from '../orchestration/flags.js'
+import { attachmentPath, materializeAttachment, publicAttachments, validateAttachment } from './attachments.js'
 
 export function directoryName(
   title: string,
@@ -55,10 +59,7 @@ export function directoryName(
   return `${slug}-${date.toISOString().replace(/[-:]/g, '').slice(0, 15)}-${requestId.slice(0, 8)}`
 }
 export class NativeWorkbench {
-  private inflight = new Map<
-    string,
-    { input: LaunchInput; promise: Promise<LaunchRecord> }
-  >()
+  private inflight = new Map<string, Promise<unknown>>()
   private overviewCache:
     | { until: number; promise: Promise<WorkbenchSnapshot> }
     | undefined
@@ -113,19 +114,56 @@ export class NativeWorkbench {
   }
   launch(input: LaunchInput) {
     input = launchSchema.parse(input)
-    const pending = this.inflight.get(input.requestId)
-    if (pending) {
-      if (JSON.stringify(pending.input) !== JSON.stringify(input))
-        return Promise.reject(new StoreError('同一启动请求不能更换目标或目录'))
-      return pending.promise
-    }
-    const promise = this.provision(input).finally(() =>
-      this.inflight.delete(input.requestId),
-    )
-    this.inflight.set(input.requestId, { input, promise })
-    return promise
+    return this.exclusive(input.requestId, () => this.provision(input, true))
   }
-  private async provision(input: LaunchInput): Promise<LaunchRecord> {
+  prepare(input: LaunchInput) {
+    input = launchSchema.parse(input)
+    return this.exclusive(input.requestId, () => this.provision(input, false))
+  }
+  private exclusive<T>(id: string, action: () => Promise<T>): Promise<T> {
+    const next = (this.inflight.get(id) ?? Promise.resolve()).catch(() => {}).then(action)
+    this.inflight.set(id, next)
+    return next.finally(() => { if (this.inflight.get(id) === next) this.inflight.delete(id) })
+  }
+  async importAttachment(input: ImportAttachment): Promise<LaunchRecord> {
+    return this.exclusive(input.requestId, async () => {
+      await this.store.ready
+      const record = this.store.snapshot().launches[input.requestId]
+      if (!record?.sessionId || record.jobId) throw new StoreError('题目未准备好或已经启动，不能更换附件')
+      const file = record.files?.find((f) => f.id === input.attachmentId)
+      if (!file) throw new StoreError('附件不属于该创建请求')
+      if (file.sha256) { await validateAttachment(record.cwd, file); return record }
+      const agent = await this.panel.resolveAgent(record.sessionId)
+      if (await realpath(agent.session.header.cwd!) !== await realpath(record.cwd)) throw new StoreError('附件会话目录不匹配')
+      const uploads = this.ctx.get('fileUploads')
+      const source = uploads?.resolve(agent, input.receiptId as FileUploadReceiptId)
+      if (!source) throw new StoreError('附件上传凭证无效或不属于本题会话，请重新上传')
+      if (source.bytes !== file.bytes) throw new StoreError('附件大小与创建清单不一致')
+      if (file.source && (file.source.attachmentId !== source.attachmentId || file.source.name !== source.name || file.source.bytes !== source.bytes)) throw new StoreError('同一附件不能更换已上传的内容')
+      file.source = { ...source }
+      // Persist authority before copying: a host restart loses staged receipts,
+      // but an already accepted immutable reference can finish materialization.
+      await this.saveLaunch(record)
+      try {
+        file.sha256 = await materializeAttachment(this.ctx, record.cwd, file)
+        delete record.error
+        await this.saveLaunch(record)
+        const bindingId = `sapper-attachment:${record.requestId}:${file.id}`
+        const binding = uploads!.bindPrompt(agent, [input.receiptId as FileUploadReceiptId], bindingId)
+        try { binding.commit(); uploads!.retirePrompt(agent, bindingId) } finally { binding[Symbol.dispose]() }
+        return record
+      } catch (error) {
+        record.error = (error as Error).message
+        await this.saveLaunch(record)
+        throw error
+      }
+    })
+  }
+  private async saveLaunch(record: LaunchRecord) {
+    await this.store.change((d) => { d.launches[record.requestId] = structuredClone(record) })
+    this.overviewCache = undefined
+  }
+  private async provision(input: LaunchInput, start: boolean): Promise<LaunchRecord> {
     await this.store.ready
     if (!this.store.durable)
       throw new StoreError('正在等待 DSH 工作台持久化服务，请稍后重试')
@@ -143,6 +181,7 @@ export class NativeWorkbench {
     // not the incidental key order stored by the persistence schema.
     if (existing && JSON.stringify(launchSchema.parse(existing.input)) !== JSON.stringify(input))
       throw new StoreError('同一启动请求不能更换目标或目录；请新建题目')
+    if (existing?.jobId) return existing
     let record: LaunchRecord = existing ?? {
       requestId: input.requestId,
       input,
@@ -152,12 +191,10 @@ export class NativeWorkbench {
         directoryName(input.title || '题目', input.requestId),
       ),
       createdAt: new Date().toISOString(),
+      ...(input.attachments?.length ? { files: input.attachments.map((f, i) => ({ ...f, path: attachmentPath(f, i) })) } : {}),
     }
     const save = async () => {
-      await this.store.change((d) => {
-        d.launches[input.requestId] = { ...record }
-      })
-      this.overviewCache = undefined
+      await this.saveLaunch(record)
     }
     await save()
     try {
@@ -229,6 +266,20 @@ export class NativeWorkbench {
           permissions.set(agent.session, input.permissionPreset)
         }
         await sessions.rename({ sessionId: agent.id, title: record.title })
+        for (const file of record.files ?? [])
+          if (file.source && (!file.sha256 || !await exists(path.resolve(record.cwd, file.path)))) {
+            file.sha256 = await materializeAttachment(this.ctx, record.cwd, file)
+            await save()
+          }
+        if (!start) {
+          delete record.error
+          await save()
+          return record
+        }
+        for (const file of record.files ?? []) {
+          if (!file.sha256) throw new StoreError(`附件尚未上传完成：${file.name}`)
+          await validateAttachment(record.cwd, file)
+        }
         record.jobId = await this.panel.startNative(
           agent,
           input.goal,
@@ -250,6 +301,15 @@ export class NativeWorkbench {
     const promise = this.collect()
     this.overviewCache = { until: Date.now() + 800, promise }
     return promise
+  }
+  attachmentContext(callId: string, sessionId: string, cwd: string) {
+    const record = this.store.snapshot().launches[callId]
+    if (!record || record.sessionId !== sessionId || record.cwd !== cwd) return
+    const files = publicAttachments(record.files)
+    if (!files.length) return
+    return { title: '用户上传的题目附件', kind: 'note' as const,
+      description: `用户已上传 ${files.length} 个文件。附件目录：${path.join(cwd, 'attachments')}\n逐项文件名、相对路径、大小与上传时 SHA256 见本记录 doc。上传仅证明文件已收到，内容仍需实际读取分析。`,
+      doc: JSON.stringify({ source: 'user-upload', files }, null, 2) }
   }
   private async collect(): Promise<WorkbenchSnapshot> {
     await this.store.flush()
@@ -477,6 +537,7 @@ export class NativeWorkbench {
       permissions = this.ctx.get('permissionPresets'),
       presets = this.ctx.get('agentPresets')
     return {
+      uploadAvailable: typeof this.ctx.get('fileUploads')?.resolve === 'function' && !!this.ctx.get('attachments'),
       preferences: data.preferences,
       durable: this.store.durable,
       available: Boolean(
@@ -592,6 +653,7 @@ export class NativeWorkbench {
         ...(snapshot ? { snapshot } : {}),
       })),
       totalNodes,
+      attachments: Object.values(this.store.snapshot().launches).filter((l) => l.cwd === workspace.cwd).flatMap((l) => publicAttachments(l.files)),
       hiddenNodes: Math.max(0, totalNodes - (state.graph?.nodes?.length ?? 0)),
     }
   }

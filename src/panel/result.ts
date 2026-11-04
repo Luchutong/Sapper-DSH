@@ -1,4 +1,5 @@
 export interface TaskResult {
+  attachments?: import('../workbench/contracts.js').PublicAttachment[]
   phase?: 'accepted' | 'progress' | 'direction' | 'flag-found' | 'result'
   activity?: Array<{ at: string; stage: string }>
   wp_path?: string

@@ -104,3 +104,9 @@ NativeWorkbench 将 requestId 对应的目录、原生 Workspace、Session 和 j
 Briefs 在结果持久化后调用 Agent.followup，忙碌或真实用户待处理时延后。简报 job ID 和消息 ID 在独立域去重；agent/pre-step 识别该自动轮，tools.guard 禁用其工具，turn/end 记录完成/失败。后台执行使用宿主持有的不可伪造 AbortSignal 与自动简报区分；正常用户轮不继承约束。失败提供显式重试，重启不重放已完成内容。
 
 alpha.13 的可见结果记录使用 SDK `appendPluginRecord` 写 `plugin:sapper-dsh/result`（ignorable），冷恢复会保留并跳过未知记录；客户端校验 payload 并保持旧已加载 `sapper/result` 卡片兼容。旧版必需自定义事件可能被 DSH JSONL 冷恢复拒绝，不自动修改用户日志。新 WP 同时存入阶段的 `artifacts/rNNN/WP.md` 与 snapshot.json，文件预览优先读取所选运行的快照。
+
+## alpha.17 题目附件
+
+创建分为 prepare、原生上传、importAttachment 与 launch。prepare 仅创建可恢复的目录、工作区和会话；客户端持有 Session 引用，通过正式 fileUpload.upload 传递 File，模型不会在附件上传期间启动。importAttachment 只接受同一接收 Session 的暂存凭证，先持久化 SDK FileAttachmentRef，再从 AttachmentStore 流式复制、计算大小和 SHA256，以不覆盖目标的方式发布到本题 attachments/。客户端不能提供宿主读取路径或自行授权的文件引用。
+
+启动清单与 accepted 文件引用保存在原 sapper_workbench 域，每个 requestId 的 prepare/import/launch 串行执行。重启后可以完成已接收文件的复制；尚在浏览器的 File 需要用户重新选择。launch 再次校验全部文件已保存且字节摘要一致，才进入原 CommandRuntime/队列。任务开始写入附件 note，长清单放 doc，避免挤占目标和上下文预算。详情与主会话卡片只展示上传元数据，不把上传成功标记成分析结论或确认事实。

@@ -19,6 +19,7 @@ export const inject = [
   'layout',
   'uiWorkspace',
   'sessions',
+  'fileUpload',
 ]
 
 function BudgetNumber({ label, value, min, max, disabled, save }: { label: string; value: number; min: number; max: number; disabled: boolean; save: (value: number) => Promise<boolean> }) {

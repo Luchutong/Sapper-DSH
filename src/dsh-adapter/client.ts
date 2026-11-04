@@ -3,6 +3,7 @@ import type { ConversationEventRegistry } from '@deepseek-ai/dsh-client-ui-conve
 import type { ComponentType } from 'react'
 import type { ConfigForm, ConfigForms } from '@deepseek-ai/dsh-client-ui-settings/client'
 import type { DirectoryListing } from '@deepseek-ai/dsh-host-directory-picker/types'
+import type { FileUploadService } from '@deepseek-ai/dsh-client-file-upload/client'
 
 /** Narrow client service contracts observed in DSH 0.2.1-rc.2.
  * Keep this browser-only seam separate from Node/Cordis host augmentations.
@@ -18,6 +19,7 @@ interface SlotOptions {
 }
 
 export interface BrowserContext {
+  fileUpload?: FileUploadService
   layout?: { selectPanel(id: 'sapper' | null): void }
   uiWorkspace?: {
     pickDirectory(): Promise<string | null>

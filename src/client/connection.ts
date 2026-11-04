@@ -60,6 +60,8 @@ export function connectPanel(ctx: BrowserContext) {
         >,
       launch: (input) =>
         invoke('launch', { input }) as ReturnType<WorkbenchPanelApi['launch']>,
+      prepare: (input) => invoke('prepare', { input }) as ReturnType<WorkbenchPanelApi['prepare']>,
+      importAttachment: (input) => invoke('importAttachment', { input }) as ReturnType<WorkbenchPanelApi['importAttachment']>,
       detail: (input) =>
         invoke('detail', { input }) as ReturnType<WorkbenchPanelApi['detail']>,
       taskAction: (input, action) => invoke('taskAction', { input, action }),

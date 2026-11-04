@@ -3,17 +3,18 @@
 将 [sapper-v2](https://github.com/N1nEmAn/sapper-v2) 的事实图与
 `reason → explore → verify` 循环移植为 DSH NEXT 桌面插件。
 
-**当前版本 `0.1.0-alpha.16`：左侧比赛工作台，一键创建题目目录、DSH 工作区与主会话；持久化队列默认并行两题，结束生成一次主助手简报。**
+**当前版本 `0.1.0-alpha.17`：新建题目支持多附件上传，保存到独立题目目录后再启动；持久化队列默认并行两题，结束生成一次主助手简报。**
+附件支持多选、移除、上传进度、取消和失败恢复；中文及同名文件原样保存，分析代理从本题 `attachments/` 读取。使用方法与验证见 [附件上传](docs/alpha17-validation.md)。
 本版修复 browse 目录选择、插件作用域下命令受理，以及重启后未完成题目的恢复。已有 alpha.13 创建记录可直接继续，见 [修复与验收](docs/alpha14-validation.md)。
 alpha.15 在成功工具输出出现 flag 时立即向主会话显示未验证候选，无需等待探索收尾或独立复核；后续进度仍保留该值，见 [flag 即时回显](docs/alpha15-validation.md)。
 alpha.16 修复工作台把普通分析和漏洞候选误标为“候选 flag”的显示问题，按 `kind` 分别标注；真正 flag 的即时回显保留。见 [repeater 日志复盘](docs/alpha16-validation.md)。
-目标运行时为 **DSH 0.2.1-rc.2**，Cordis 4.0.5 / Schemastery 3.18.5。
+仅支持 **DSH NEXT 0.2.1-rc.2**，Cordis 4.0.5 / Schemastery 3.18.5。
 
 当前可维护工作区事实图、意图、长文档和本地 flag；每轮注入有预算的 frontier、
 历史与相关证据指针，支持中英文召回、56 条离线 KB 及 `/sapper` 只读命令。
 完全权限下 Sapper 自身的确认门自动通过，仍保留工作区、归属和数据完整性约束。
 点击桌面左侧 **Sapper 比赛工作台** → **新建题目** → 首次选择比赛根目录 → 输入目标 → **创建并开始**。
-题名可选；模型、preset 与权限会明确显示，之后沿用最近选择，不自动提升权限。
+题名与附件可选；模型、preset 与权限会明确显示，之后沿用最近选择，不自动提升权限。
 无需预先准备工作区或主会话，创建后自动打开主会话并快速受理，输入可继续使用。
 工作台聚合求解、定向复核、WP 与纠错重跑；查看历史只读，浅色/深色及窄屏布局均支持。
 结果卡片即时回传，最终真实助手简报按执行去重。见 [工作台使用说明](docs/task-panel.md)。
@@ -90,7 +91,7 @@ flag 事实是权威记录，`flags/ledger.json` 是可重建索引。详细边�
 在 DSH NEXT 菜单“打开 DSH 终端”，执行后重启应用：
 
 ```powershell
-dsh plugin add "D:\BaiduSyncdisk\sapper移植\sapper-dsh-0.1.0-alpha.16.tgz"
+dsh plugin add "D:\BaiduSyncdisk\sapper移植\sapper-dsh-0.1.0-alpha.17.tgz"
 ```
 
 开发需要 Node.js 22+、pnpm 8.15.4 和 Python 3（仅 golden 测试使用）：

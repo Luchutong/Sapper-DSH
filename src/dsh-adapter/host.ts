@@ -57,7 +57,7 @@ export function registerRuntime(ctx: Context, getConfig: () => Config): void {
     start: (exec: ToolExecution) => { dispatching.add(exec.token); taskPanel.executionStarted(exec) }, finish: (exec: ToolExecution) => { dispatching.delete(exec.token); bindings.delete(exec.token); taskPanel.executionFinished(exec) },
   }
   const tools = [...createGraphTools(getConfig, () => alive, authorize, fullAccess), ...createRecallTools(getConfig, () => alive),
-    createDispatchTool(getConfig, () => alive, authorize, dispatcher, lifecycle), createTaskTool(getConfig, () => alive, authorize, dispatcher, lifecycle), createControlTool(taskPanel)]
+    createDispatchTool(getConfig, () => alive, authorize, dispatcher, lifecycle), createTaskTool(getConfig, () => alive, authorize, dispatcher, lifecycle, (exec) => taskPanel.native.attachmentContext(String(exec.callId), String(exec.agent?.id), exec.agent?.session.header.cwd ?? '')), createControlTool(taskPanel)]
   const syncCommand = registerSapperCommand(ctx, getConfig, () => alive, taskPanel)
   const kb = new KnowledgeBase()
   let unregister: (() => void) | undefined

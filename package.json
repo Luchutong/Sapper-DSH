@@ -1,6 +1,6 @@
 {
   "name": "sapper-dsh",
-  "version": "0.1.0-alpha.16",
+  "version": "0.1.0-alpha.17",
   "description": "Workspace fact graph, bounded context, bilingual recall and evidence-verified subagent orchestration for DSH NEXT.",
   "license": "MIT",
   "type": "module",
@@ -41,7 +41,8 @@
         "@deepseek-ai/dsh-client-ui-conversation",
         "@deepseek-ai/dsh-client-ui-layout",
         "@deepseek-ai/dsh-client-ui-workspace",
-        "@deepseek-ai/dsh-client-ui-session"
+        "@deepseek-ai/dsh-client-ui-session",
+        "@deepseek-ai/dsh-client-file-upload"
       ]
     }
   },
@@ -70,7 +71,9 @@
     "@deepseek-ai/dsh-subagent": "0.2.1-rc.2",
     "@deepseek-ai/dsh-tools": "0.2.1-rc.2",
     "@deepseek-ai/dsh-typert-protocol": "0.2.1-rc.2",
-    "@deepseek-ai/schemastery": "~3.18.5"
+    "@deepseek-ai/schemastery": "~3.18.5",
+    "@deepseek-ai/dsh-attachment": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-client-file-upload": "0.2.1-rc.2"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.5",
@@ -88,6 +91,7 @@
     "@deepseek-ai/dsh-api-workspace-controller": "0.2.1-rc.2",
     "@deepseek-ai/dsh-app-boot": "0.2.1-rc.2",
     "@deepseek-ai/dsh-attachment": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-attachment-local": "0.2.1-rc.2",
     "@deepseek-ai/dsh-brand": "0.2.1-rc.2",
     "@deepseek-ai/dsh-client-connection": "0.2.1-rc.2",
     "@deepseek-ai/dsh-client-file-upload": "0.2.1-rc.2",

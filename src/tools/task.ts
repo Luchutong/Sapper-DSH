@@ -17,6 +17,7 @@ export function createTaskTool(
     start(exec: ToolExecution): void
     finish(exec: ToolExecution): void
   },
+  seedContext?: (exec: ToolExecution) => { title: string; kind: 'note'; description: string; doc: string } | undefined,
 ) {
   const busy = new Set<string>()
   return defineTool({
@@ -61,6 +62,8 @@ export function createTaskTool(
           : args.action === 'start'
           ? await createTask(base, cwd, args.goal ?? '', creator, options)
           : await selectTask(base, cwd, args.task_id ?? 'legacy', options)
+        const context = args.action === 'start' ? seedContext?.(exec) : undefined
+        if (context) await store.addFact(context, creator, options)
         if ((await store.read()).project.status === 'completed') return json({ state: 'completed', stop_reason: 'goal-already-completed', task_id: store.root === base ? 'legacy' : path.basename(store.root) })
         if (args.action === 'verify' && (!args.run_id || !args.intent_id))
           throw new StoreError('独立复核需要 run_id 和 intent_id')

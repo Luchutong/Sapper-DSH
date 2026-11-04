@@ -2,6 +2,7 @@ import {
   addressSchema,
   launchSchema,
   preferencesSchema,
+  importAttachmentSchema,
 } from '../workbench/contracts.js'
 import type { WorkbenchApi } from '../workbench/contracts.js'
 import type { TaskResult } from './result.js'
@@ -71,6 +72,12 @@ export const PANEL_REMOTE = createTypertRemoteInfo(
           ),
         ],
         result,
+      },
+      'sapperPanel/prepare': {
+        service: 'sapperPanel', invocation: { kind: 'direct' }, parameters: [param('input', codec('Launch', () => launchSchema))], result,
+      },
+      'sapperPanel/importAttachment': {
+        service: 'sapperPanel', invocation: { kind: 'direct' }, parameters: [param('input', codec('ImportAttachment', () => importAttachmentSchema))], result,
       },
       'sapperPanel/detail': {
         service: 'sapperPanel',

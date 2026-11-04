@@ -61,6 +61,7 @@ export function ResultBody({
       <p style={{ whiteSpace: 'pre-wrap' }}>
         {result.summary.split('\n')[0]?.slice(0, 300)}
       </p>
+      {!!result.attachments?.length && <details><summary>题目附件 · {result.attachments.length} 个已保存</summary><ul>{result.attachments.map((f) => <li key={f.id}>{f.name} · {f.bytes.toLocaleString()} 字节<br />{f.path}</li>)}</ul></details>}
       {result.confirmed.map((f) => (
         <div
           key={f.id}

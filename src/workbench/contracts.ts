@@ -1,6 +1,20 @@
 import { z } from 'zod'
 import type { PanelState, PanelAction } from '../panel/rpc.js'
 import type { TaskResult } from '../panel/result.js'
+import type { FileAttachmentRef } from '@deepseek-ai/dsh-attachment/types'
+
+export const attachmentSchema = z.object({
+  id: z.string().uuid(), name: z.string().min(1).max(255), bytes: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+}).strict()
+export type AttachmentInput = z.infer<typeof attachmentSchema>
+export interface LaunchFile extends AttachmentInput {
+  path: string
+  source?: FileAttachmentRef
+  sha256?: string
+}
+export type PublicAttachment = Pick<LaunchFile, 'id' | 'name' | 'bytes' | 'path' | 'sha256'>
+export const importAttachmentSchema = z.object({ requestId: z.string().uuid(), attachmentId: z.string().uuid(), receiptId: z.string().uuid() }).strict()
+export type ImportAttachment = z.infer<typeof importAttachmentSchema>
 
 export const modelSchema = z
   .object({
@@ -28,6 +42,7 @@ export const launchSchema = z
     model: modelSchema.optional(),
     agentPreset: z.string().optional(),
     permissionPreset: z.string().optional(),
+    attachments: z.array(attachmentSchema).max(128).refine((files) => new Set(files.map((f) => f.id)).size === files.length, '附件标识不能重复').optional(),
   })
   .strict()
 export type LaunchInput = z.infer<typeof launchSchema>
@@ -41,6 +56,7 @@ export interface LaunchRecord {
   jobId?: string
   error?: string
   createdAt: string
+  files?: LaunchFile[]
 }
 export type JobState =
   | 'queued'
@@ -123,6 +139,7 @@ export interface Challenge {
   error?: string
 }
 export interface WorkbenchSnapshot {
+  uploadAvailable?: boolean
   preferences: Preferences
   durable: boolean
   available: boolean
@@ -153,11 +170,14 @@ export interface TaskDetail {
   files: Array<{ name: string; size: number; snapshot?: boolean }>
   hiddenNodes: number
   totalNodes: number
+  attachments?: PublicAttachment[]
 }
 export interface WorkbenchApi {
   overview(): Promise<WorkbenchSnapshot>
   preferences(input: Preferences): Promise<Preferences>
   launch(input: LaunchInput): Promise<LaunchRecord>
+  prepare(input: LaunchInput): Promise<LaunchRecord>
+  importAttachment(input: ImportAttachment): Promise<LaunchRecord>
   detail(input: TaskAddress): Promise<TaskDetail>
   taskAction(input: TaskAddress, action: PanelAction): Promise<unknown>
   file(

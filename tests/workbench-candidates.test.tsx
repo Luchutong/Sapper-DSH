@@ -24,7 +24,7 @@ it.each([
     detail: TaskDetail = { address: { workspaceId: 'workspace', taskId: 'task' }, state, result, evidence: [], files: [], hiddenNodes: 0, totalNodes: 0 },
     taskAction = vi.fn(async () => undefined),
     api: WorkbenchPanelApi = {
-      overview: async () => data, preferences: async (input) => input, launch: vi.fn(),
+      overview: async () => data, preferences: async (input) => input, launch: vi.fn(), prepare: vi.fn(), importAttachment: vi.fn(),
       detail: vi.fn(async () => detail), taskAction, file: vi.fn(), node: vi.fn(), seen: vi.fn(), retryBrief: vi.fn(),
       targets: async () => [], state: async () => state, action: vi.fn(),
     },

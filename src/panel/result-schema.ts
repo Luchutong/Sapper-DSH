@@ -8,6 +8,7 @@ const schema = z
     goal: z.string(),
     state: z.string(),
     summary: z.string(),
+    attachments: z.array(z.object({ id: z.string(), name: z.string(), path: z.string(), bytes: z.number().nonnegative(), sha256: z.string().optional() })).optional(),
     wp_path: z.string().optional(),
     session_id: z.string().optional(),
     run_id: z.string().optional(),

@@ -678,7 +678,7 @@ it(
     await expect(ctx.typertGateway.invoke({ namespace: 'sapperPanel', method: 'action', args: { sessionId: String(parent.id), input: { action: 'start', cwd: '/forged' } }, peer })).rejects.toThrow()
     if (process.env.SAPPER_BROWSER_PROBE === '1') {
       await ctx.plugin(CommandRuntime)
-      const panel = await mountNative(ctx, cwd)
+      const panel = await mountNative(ctx, cwd, true)
       const { DirectoryPicker } = await import('@deepseek-ai/dsh-host-directory-picker')
       const { DirectoryPickerController } = await import('@deepseek-ai/dsh-api-workspace-controller')
       const { readdir, realpath } = await import('node:fs/promises')
@@ -708,6 +708,7 @@ it(
           panelScenario.emptyReason = false
           panelScenario.writeup = true
         },
+        uploadRoutes.get(panel)!,
       )
     }
 
@@ -1154,7 +1155,8 @@ it('reports durable partial results after cancellation instead of losing already
   expect(ctx.agents.list()).toEqual([parent])
 })
 
-async function mountNative(ctx: Context, cwd: string) {
+const uploadRoutes = new WeakMap<TaskPanelService, (request: Request) => Promise<Response>>()
+async function mountNative(ctx: Context, cwd: string, withUploads = false) {
   const [
     { default: Storage },
     Json,
@@ -1204,10 +1206,16 @@ async function mountNative(ctx: Context, cwd: string) {
     maxTitleBytes: 512,
   })
   await ctx.plugin(Query, [])
-  // Upload intake is unrelated to these no-attachment fixtures. Native SessionController,
-  // WorkspaceRegistry, SessionQuery, Domain and JSONL persistence are not substituted.
-  ctx.provide('fileUploads', { registerAgentResolver: () => () => {} } as never)
-  ctx.provide('attachments', {
+  let route: ((request: Request) => Promise<Response>) | undefined
+  if (withUploads) {
+    const { default: Attachments } = await import('@deepseek-ai/dsh-attachment-local')
+    const { default: FileUploads } = await import('@deepseek-ai/dsh-client-file-upload')
+    ctx.provide('connection', { fetch: { register: (entry: { path: string; fetch(request: Request): Promise<Response> }) => { if (entry.path === '/api/session/uploadFileBinary') route = entry.fetch; return () => {} } } } as never)
+    await ctx.plugin(Attachments, { dshHome: path.join(cwd, 'profile') })
+    await ctx.plugin(FileUploads)
+  } else {
+    ctx.provide('fileUploads', { registerAgentResolver: () => () => {} } as never)
+    ctx.provide('attachments', {
     imageLimits: {
       maxImageBytes: 1048576,
       maxImagesPerMessage: 8,
@@ -1216,13 +1224,85 @@ async function mountNative(ctx: Context, cwd: string) {
       maxImageDimension: 8192,
       mediaTypes: ['image/png'],
     },
-  } as never)
+    } as never)
+  }
   await ctx.plugin(Controller, { nativeOpen: false })
   await waitForRuntime(() => expect(ctx.get('sessionController')).toBeDefined())
   const panel = ctx.get('sapperPanel') as TaskPanelService
   await waitForRuntime(() => expect(panel.workbench.durable).toBe(true))
+  if (withUploads) uploadRoutes.set(panel, route!)
   return panel
 }
+it('imports native streamed uploads before scheduling, preserves duplicate Chinese names and seeds the task attachment context', async () => {
+  const { ctx, cwd, model } = await setup({ emptyReason: true }, {}, true, 1, 'global', false),
+    panel = await mountNative(ctx, cwd, true), { randomUUID, createHash } = await import('node:crypto'),
+    bytes = [Buffer.from([0, 1, 255, 80, 75, 0, 128]), Buffer.from('second file 中文\0')],
+    input = { requestId: randomUUID(), rootDir: cwd, title: '', goal: '分析附件', attachments: bytes.map((b) => ({ id: randomUUID(), name: '题目.zip', bytes: b.length })) },
+    ready = await panel.prepare(input), events: import('../src/panel/result.js').TaskResult[] = []
+  ctx.on('session/event', (_session, event) => { const result = resultOfEvent(event); if (result?.job_id === input.requestId) events.push(result) })
+  expect(ready.jobId).toBeUndefined()
+  expect(model.requests).toHaveLength(0)
+  await expect(panel.launch(input)).rejects.toThrow('附件尚未上传完成')
+  for (let i = 0; i < bytes.length; i++) {
+    const uploaded = await ctx.get('fileUploads')!.uploadStream({ sessionId: SessionId(ready.sessionId!), name: '题目.zip', data: (async function* () { yield bytes[i]!.subarray(0, 2); yield bytes[i]!.subarray(2) })() })
+    const request = { requestId: input.requestId, attachmentId: input.attachments[i]!.id, receiptId: String(uploaded.receiptId) }
+    const [one, two] = await Promise.all([panel.importAttachment(request), panel.importAttachment(request)])
+    expect(one.files?.[i]?.sha256).toBe(createHash('sha256').update(bytes[i]!).digest('hex'))
+    expect(one.files?.[i]?.path).toBe(two.files?.[i]?.path)
+    expect(await readFile(path.join(one.cwd, one.files![i]!.path))).toEqual(bytes[i])
+  }
+  expect(model.requests).toHaveLength(0)
+  const launch = await panel.launch(input)
+  await panel.whenIdle(launch.cwd)
+  const store = new GraphStore((await resolveSelectedStore(launch.cwd, resolveConfig()))!, launch.cwd)
+  const fact = (await store.read()).facts.find((f) => f.title === '用户上传的题目附件')!
+  expect(JSON.parse(fact.doc!).files).toHaveLength(2)
+  expect(JSON.stringify(model.requests[0]?.messages)).toContain('用户上传的题目附件')
+  expect(events.find((e) => e.phase === 'accepted')?.attachments).toHaveLength(2)
+  expect((await panel.detail({ workspaceId: launch.workspaceId!, taskId: path.basename(store.root) })).attachments).toHaveLength(2)
+  expect(launch.files?.[0]?.path).not.toBe(launch.files?.[1]?.path)
+})
+
+it('recovers an accepted upload after a storage failure and cold restart without re-uploading or duplicating the native launch', async () => {
+  const first = await setup({ emptyReason: true }, {}, true, 1, 'global', false), panel = await mountNative(first.ctx, first.cwd, true),
+    { randomUUID } = await import('node:crypto'), bytes = Buffer.from('durable upload bytes'),
+    input = { requestId: randomUUID(), rootDir: first.cwd, title: '', goal: '恢复附件', attachments: [{ id: randomUUID(), name: 'sample.bin', bytes: bytes.length }] },
+    prepared = await panel.prepare(input), uploads = first.ctx.get('fileUploads')!, provider = first.ctx.get('attachments')!,
+    receipt = await uploads.uploadStream({ sessionId: SessionId(prepared.sessionId!), name: 'sample.bin', data: (async function* () { yield bytes })() })
+  const fail = vi.spyOn(provider, 'readFileStream').mockImplementationOnce(async function* () { yield bytes.subarray(0, 1); throw new Error('fixture storage interruption') })
+  await expect(panel.importAttachment({ requestId: input.requestId, attachmentId: input.attachments[0]!.id, receiptId: String(receipt.receiptId) })).rejects.toThrow('fixture storage interruption')
+  expect(panel.workbench.snapshot().launches[input.requestId]?.files?.[0]?.source).toEqual(receipt.file)
+  expect(first.model.requests).toHaveLength(0)
+  fail.mockRestore()
+  await first.ctx.fiber.dispose()
+  const second = await setup({ emptyReason: true }, {}, true, 1, 'global', false), restored = await mountNative(second.ctx, first.cwd, true)
+  const ready = await restored.prepare(input)
+  expect(ready.sessionId).toBe(prepared.sessionId)
+  expect(ready.workspaceId).toBe(prepared.workspaceId)
+  expect(ready.files?.[0]?.sha256).toMatch(/^[a-f0-9]{64}$/)
+  expect(await readFile(path.join(ready.cwd, ready.files![0]!.path))).toEqual(bytes)
+  expect(second.model.requests).toHaveLength(0)
+  const result = await restored.launch(input)
+  await restored.whenIdle(result.cwd)
+  expect(restored.workbench.snapshot().jobs[result.jobId!]?.state).toBe('completed')
+})
+
+it('refuses foreign upload receipts and preserves existing destination files without starting a model', async () => {
+  const { ctx, cwd, parent, model } = await setup({ emptyReason: true }, {}, true, 1, 'global', false), panel = await mountNative(ctx, cwd, true),
+    { randomUUID } = await import('node:crypto'), { mkdir } = await import('node:fs/promises'), bytes = Buffer.from('input'),
+    input = { requestId: randomUUID(), rootDir: cwd, title: '', goal: '附件边界测试', attachments: [{ id: randomUUID(), name: '../CON.txt', bytes: bytes.length }] },
+    prepared = await panel.prepare(input), uploads = ctx.get('fileUploads')!
+  const foreign = await uploads.uploadStream({ sessionId: parent.id, name: '../CON.txt', data: (async function* () { yield bytes })() })
+  await expect(panel.importAttachment({ requestId: input.requestId, attachmentId: input.attachments[0]!.id, receiptId: String(foreign.receiptId) })).rejects.toThrow('不属于本题会话')
+  const destination = path.join(prepared.cwd, prepared.files![0]!.path)
+  expect(path.relative(prepared.cwd, destination)).not.toMatch(/^\.\./)
+  await mkdir(path.dirname(destination), { recursive: true }); await writeFile(destination, 'user file')
+  const receipt = await uploads.uploadStream({ sessionId: SessionId(prepared.sessionId!), name: '../CON.txt', data: (async function* () { yield bytes })() })
+  await expect(panel.importAttachment({ requestId: input.requestId, attachmentId: input.attachments[0]!.id, receiptId: String(receipt.receiptId) })).rejects.toThrow('未覆盖')
+  expect(await readFile(destination, 'utf8')).toBe('user file')
+  expect(model.requests).toHaveLength(0)
+})
+
 it.each(['workspace', 'session', 'title', 'command'] as const)(
   'launches idempotently with native APIs, resumes %s failure and reads history without running',
   async (stage) => {
