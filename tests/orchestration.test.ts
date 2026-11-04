@@ -970,8 +970,14 @@ it.each(['CTF2{EARLY-OUTPUT-7C42}', 'NONSTANDARD-FLAG-7C42'])('publishes a flag 
     expect(model.requests.filter((r) => JSON.stringify(r.messages).includes('# Sapper verify'))).toHaveLength(0)
     const state = await service.state(String(parent.id))
     expect(state.job?.state).toBe('running')
-    const store = new GraphStore((await resolveSelectedStore(cwd, resolveConfig()))!, cwd), run = await store.readRun('r001')
-    expect(run.flag_observations?.[0]?.candidate.description).toBe(flag)
+    const store = new GraphStore((await resolveSelectedStore(cwd, resolveConfig()))!, cwd)
+    let run!: RunRecord
+    // The packaged writer and source-side reader have separate in-process
+    // queues. Wait for the managed writer's durable snapshot, respecting LOCK.
+    await waitForRuntime(async () => {
+      run = await store.readRun('r001')
+      expect(run.flag_observations?.[0]?.candidate.description).toBe(flag)
+    })
     expect(run.outcomes[0]?.candidate?.evidence).toHaveLength(1)
     expect(run.outcomes[0]?.verify_attempts).toBe(0)
     release()
