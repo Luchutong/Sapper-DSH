@@ -1,14 +1,25 @@
 import { useEffect, useState, useSyncExternalStore } from 'react'
-import type { BrowserContext, BrowserSettingsScope } from '../dsh-adapter/client.js'
+import type {
+  BrowserContext,
+  BrowserSettingsScope,
+} from '../dsh-adapter/client.js'
 import { GraphPreview } from './graph.js'
-import { TaskPanel } from './task-panel.js'
+import { Workbench } from './workbench.js'
+import { workbenchController } from './workbench-store.js'
 import { connectPanel } from './connection.js'
-import { TaskLauncher } from './launcher.js'
 import { resultDefinition, ResultNode } from './result.js'
 import { VERSION } from '../constants.js'
 
 export const name = 'sapper-dsh'
-export const inject = ['slots', 'configForms', 'remote', 'uiConversation']
+export const inject = [
+  'slots',
+  'configForms',
+  'remote',
+  'uiConversation',
+  'layout',
+  'uiWorkspace',
+  'sessions',
+]
 
 function BudgetNumber({ label, value, min, max, disabled, save }: { label: string; value: number; min: number; max: number; disabled: boolean; save: (value: number) => Promise<boolean> }) {
   const [draft, setDraft] = useState(String(value))
@@ -52,60 +63,211 @@ export function SapperSettings({ scope }: { scope: BrowserSettingsScope }) {
   }
 
   const orchestration = (state.value as { orchestration?: Record<string, unknown> } | undefined)?.orchestration ?? {}
-  return <section aria-label="Sapper 设置" style={{ padding: 16, maxWidth: 720, overflowWrap: 'anywhere', color: 'inherit' }}>
-    <h3>Sapper <small>{VERSION}</small></h3>
-    <p>工作区事实图与任务规划</p>
-    <label>
-      <input type="checkbox" checked={enabled}
-        disabled={state.status !== 'ready' || !state.writable || pending}
-        onChange={event => { void save(['enabled'], event.target.checked) }} />{' '}
-      启用 Sapper
-    </label>
-    <label style={{ display: 'block', marginTop: 12 }}>
-      图写入确认{' '}
-      <select aria-label="图写入确认" value={approval}
-        disabled={state.status !== 'ready' || !state.writable || pending}
-        onChange={event => { void save(['store', 'approval'], event.target.value) }}>
-        <option value="session">跟随会话权限（自动）</option>
-        <option value="always">受限模式下每次确认</option>
-      </select>
-    </label>
-    <p>完全权限会自动通过 Sapper 的确认门；工作区写入模式保留显式确认点。只读会话不写入，数据始终限于当前工作区。</p>
-    <p role="status">{state.status === 'ready'
-      ? (enabled ? '已启用：提供事实图存储工具与目标摘要。' : '已关闭：工具和上下文注入均不生效。')
-      : '正在等待 DSH 的 sapper 配置表单；不会自动写入默认值。'}</p>
-    {error && <p role="alert">{error}</p>}
-    <fieldset style={{ marginTop: 20, border: '1px solid #71809655', borderRadius: 8 }}><legend>复杂任务预算</legend>
-      <p>自动模式会在取得新工具证据时延长执行，并预留提交结论的步骤。调整设置会停止当前运行，请在启动前配置。</p>
-      <label>预算策略 <select aria-label="预算策略" value={String(orchestration.budgetMode ?? 'adaptive')} disabled={!state.writable || pending} onChange={e => { void save(['orchestration','budgetMode'], e.target.value) }}><option value="adaptive">自动延长（推荐）</option><option value="fixed">固定步数</option></select></label>
-      {([['maxChildSteps','初始步数',24,1,256],['maxChildStepsCeiling','自动延长上限',128,1,512],['maxOutputTokens','每轮输出 token 上限',16384,1,65536],['timeoutMin','子代理时限（分钟）',45,1,240],['runTimeoutMin','整轮时限（分钟）',90,1,720]] as const).map(([key,label,fallback,min,max]) => <label key={key} style={{ display: 'block', margin: '10px 0' }}>{label} <BudgetNumber label={label} min={min} max={max} value={Number(orchestration[key] ?? fallback)} disabled={!state.writable || pending} save={value => save(['orchestration',key], value)} /></label>)}
-    </fieldset>
-    <details>
-      <summary>开发进度</summary>
-      <p>任务面板可发起、继续与取消编排；完整图编辑器及其余高级设置仍在后续阶段。</p>
-      <GraphPreview />
-    </details>
-  </section>
+  return (
+    <section
+      aria-label="Sapper 设置"
+      style={{
+        padding: 16,
+        maxWidth: 720,
+        overflowWrap: 'anywhere',
+        color: 'inherit',
+      }}
+    >
+      <h3>
+        Sapper <small>{VERSION}</small>
+      </h3>
+      <p>工作区事实图与任务规划</p>
+      <label>
+        <input
+          type="checkbox"
+          checked={enabled}
+          disabled={state.status !== 'ready' || !state.writable || pending}
+          onChange={(event) => {
+            void save(['enabled'], event.target.checked)
+          }}
+        />{' '}
+        启用 Sapper
+      </label>
+      <label style={{ display: 'block', marginTop: 12 }}>
+        图写入确认{' '}
+        <select
+          aria-label="图写入确认"
+          value={approval}
+          disabled={state.status !== 'ready' || !state.writable || pending}
+          onChange={(event) => {
+            void save(['store', 'approval'], event.target.value)
+          }}
+        >
+          <option value="session">跟随会话权限（自动）</option>
+          <option value="always">受限模式下每次确认</option>
+        </select>
+      </label>
+      <p>
+        完全权限会自动通过 Sapper
+        的确认门；工作区写入模式保留显式确认点。只读会话不写入，数据始终限于当前工作区。
+      </p>
+      <p role="status">
+        {state.status === 'ready'
+          ? enabled
+            ? '已启用：提供事实图存储工具与目标摘要。'
+            : '已关闭：工具和上下文注入均不生效。'
+          : '正在等待 DSH 的 sapper 配置表单；不会自动写入默认值。'}
+      </p>
+      {error && <p role="alert">{error}</p>}
+      <fieldset
+        style={{
+          marginTop: 20,
+          border: '1px solid #71809655',
+          borderRadius: 8,
+        }}
+      >
+        <legend>复杂任务预算</legend>
+        <p>
+          自动模式会在取得新工具证据时延长执行，并预留提交结论的步骤。调整设置会停止当前运行，请在启动前配置。
+        </p>
+        <label>
+          预算策略{' '}
+          <select
+            aria-label="预算策略"
+            value={String(orchestration.budgetMode ?? 'adaptive')}
+            disabled={!state.writable || pending}
+            onChange={(e) => {
+              void save(['orchestration', 'budgetMode'], e.target.value)
+            }}
+          >
+            <option value="adaptive">自动延长（推荐）</option>
+            <option value="fixed">固定步数</option>
+          </select>
+        </label>
+        {(
+          [
+            ['maxChildSteps', '初始步数', 24, 1, 256],
+            ['maxChildStepsCeiling', '自动延长上限', 128, 1, 512],
+            ['maxOutputTokens', '每轮输出 token 上限', 16384, 1, 65536],
+            ['timeoutMin', '子代理时限（分钟）', 45, 1, 240],
+            ['runTimeoutMin', '整轮时限（分钟）', 90, 1, 720],
+          ] as const
+        ).map(([key, label, fallback, min, max]) => (
+          <label key={key} style={{ display: 'block', margin: '10px 0' }}>
+            {label}{' '}
+            <BudgetNumber
+              label={label}
+              min={min}
+              max={max}
+              value={Number(orchestration[key] ?? fallback)}
+              disabled={!state.writable || pending}
+              save={(value) => save(['orchestration', key], value)}
+            />
+          </label>
+        ))}
+      </fieldset>
+      <details>
+        <summary>开发进度</summary>
+        <p>
+          比赛工作台支持创建题目、宿主队列、独立复核和
+          WP，根目录及并发偏好独立保存。
+        </p>
+        <GraphPreview />
+      </details>
+    </section>
+  )
 }
 
 export function apply(ctx: BrowserContext): void {
   const scope = ctx.configForms.get('sapper')
   const connection = connectPanel(ctx)
-  const TaskView = ({ sessionId }: { sessionId?: string }) => {
+  const controller = workbenchController(ctx)
+  ctx.effect(() =>
+    connection.subscribe(() => {
+      const api = connection.getSnapshot().api
+      if (api) controller.connect(api)
+    }),
+  )
+  const first = connection.getSnapshot().api
+  if (first) controller.connect(first)
+  const TaskView = () => {
     const snapshot = useSyncExternalStore(connection.subscribe, connection.getSnapshot, connection.getSnapshot)
-    return snapshot.api ? <TaskPanel api={snapshot.api} {...(sessionId ? { sessionId } : {})} /> : <p role="status">{snapshot.error ?? '正在连接 Sapper 服务…'}</p>
+    return snapshot.api ? (
+      <Workbench api={snapshot.api} controller={controller} ctx={ctx} />
+    ) : (
+      <p role="status">{snapshot.error ?? '正在连接 Sapper 服务…'}</p>
+    )
   }
-  if (ctx.remote) {
-    ctx.effect(() => ctx.slots.inject('conversation.input.left', () => ctx.slots.register({ name: 'conversation.input.left', id: 'sapper-launch', label: 'Sapper 任务', order: 20 },
-      ({ sessionId }: { sessionId?: string }) => <TaskLauncher><TaskView {...(sessionId ? { sessionId } : {})} /></TaskLauncher>)))
-  }
+  ctx.effect(() =>
+    ctx.slots.inject('sidebar.panellist', () =>
+      ctx.slots.register(
+        {
+          name: 'sidebar.panellist',
+          id: 'sapper',
+          label: 'Sapper 比赛工作台',
+          order: -10,
+        },
+        () => <span aria-hidden="true">◈</span>,
+      ),
+    ),
+  )
+  ctx.effect(() =>
+    ctx.slots.inject('main', () =>
+      ctx.slots.register({ name: 'main', key: 'sapper' }, TaskView),
+    ),
+  )
+  ctx.effect(() =>
+    ctx.slots.inject('conversation.input.left', () =>
+      ctx.slots.register(
+        {
+          name: 'conversation.input.left',
+          id: 'sapper-launch',
+          label: 'Sapper 任务',
+          order: 20,
+        },
+        () => (
+          <button
+            type="button"
+            aria-label="打开 Sapper 比赛工作台"
+            onClick={controller.open}
+            style={{
+              border: '1px solid #8392a538',
+              borderRadius: 8,
+              padding: '6px 10px',
+              color: 'inherit',
+              background: 'transparent',
+            }}
+          >
+            Sapper 任务
+          </button>
+        ),
+      ),
+    ),
+  )
   if (ctx.uiConversation) {
     ctx.effect(() => ctx.uiConversation!.events.register(resultDefinition))
-    ctx.effect(() => ctx.slots.inject('conversation.chat.node', () => ctx.slots.register({ name: 'conversation.chat.node', key: 'sapper-result' }, ResultNode)))
+    ctx.effect(() =>
+      ctx.slots.inject('conversation.chat.node', () =>
+        ctx.slots.register(
+          { name: 'conversation.chat.node', key: 'sapper-result' },
+          (props: Parameters<typeof ResultNode>[0]) => (
+            <ResultNode
+              {...props}
+              open={() => {
+                void controller.reveal(props.node.data)
+              }}
+            />
+          ),
+        ),
+      ),
+    )
   }
-  const Panel = ({ view }: { view?: string }) => view === 'summary'
-    ? <p>工作区事实图与任务规划</p>
-    : <><TaskView /><SapperSettings scope={scope} /></>
+  const Panel = ({ view }: { view?: string }) =>
+    view === 'summary' ? (
+      <p>工作区事实图与任务规划</p>
+    ) : (
+      <>
+        <button onClick={controller.open} style={{ margin: 16 }}>
+          打开 Sapper 比赛工作台 ↗
+        </button>
+        <SapperSettings scope={scope} />
+      </>
+    )
   ctx.effect(() => ctx.configForms.whileServed(['sapper'], () => {
     const offCard = ctx.slots.inject('plugins.item', () => ctx.slots.register({
       name: 'plugins.item', id: 'sapper', label: 'Sapper', order: 100,

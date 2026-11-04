@@ -8,10 +8,34 @@ import { resolveStorePath } from '../store/paths.js'
 import { executionStore, json, output, type AuthorizeWrite } from './shared.js'
 import { StoreError } from '../store/validation.js'
 
-export function createTaskTool(getConfig: () => Config, alive: () => boolean, authorize: AuthorizeWrite, engine: Orchestrator, lifecycle: { start(exec: ToolExecution): void; finish(exec: ToolExecution): void }) {
+export function createTaskTool(
+  getConfig: () => Config,
+  alive: () => boolean,
+  authorize: AuthorizeWrite,
+  engine: Orchestrator,
+  lifecycle: {
+    start(exec: ToolExecution): void
+    finish(exec: ToolExecution): void
+  },
+) {
   const busy = new Set<string>()
-  return defineTool({ name: 'sapper_task', description: 'Start a user goal in any existing DSH workspace. Automatically creates an isolated task graph and task-context record, then runs independent evidence verification. No fixture or manual init needed. action=resume selects an existing task_id (legacy for the original graph) and continues ready work. action=continue starts a linked phase even after completion, inheriting historical evidence as observations; purpose=writeup prepares a local WP and does not stop on historical flags; solve re-examines/corrects a flag. Does not overwrite old graphs.',
-    parameters: { action: { type: 'string', enum: ['start', 'resume', 'continue'], required: true }, goal: { type: 'string' }, task_id: { type: 'string' }, purpose: { type: 'string', enum: ['solve', 'writeup'] } }, output,
+  return defineTool({
+    name: 'sapper_task',
+    description:
+      'Start a user goal in any existing DSH workspace. Automatically creates an isolated task graph and task-context record, then runs independent evidence verification. No fixture or manual init needed. action=resume selects an existing task_id (legacy for the original graph) and continues ready work. action=continue starts a linked phase even after completion, inheriting historical evidence as observations; purpose=writeup prepares a local WP and does not stop on historical flags; solve re-examines/corrects a flag. Does not overwrite old graphs.',
+    parameters: {
+      action: {
+        type: 'string',
+        enum: ['start', 'resume', 'continue', 'verify'],
+        required: true,
+      },
+      goal: { type: 'string' },
+      task_id: { type: 'string' },
+      purpose: { type: 'string', enum: ['solve', 'writeup'] },
+      run_id: { type: 'string' },
+      intent_id: { type: 'string' },
+    },
+    output,
     async execute(args, exec) {
       lifecycle.start(exec)
       let base: string | undefined
@@ -20,11 +44,17 @@ export function createTaskTool(getConfig: () => Config, alive: () => boolean, au
         const { store: selected, options, creator } = await executionStore(getConfig, exec, alive, authorize)
         const cwd = exec.agent?.session.header.cwd
         base = resolveStorePath(cwd, getConfig())
-        if (!base || !cwd || !exec.agent) throw new StoreError('需要当前 DSH 工作区会话')
-        if (busy.has(base) || engine.isActive(selected.root)) throw new StoreError('当前工作区已有任务运行')
-        busy.add(base); claimed = true
-        options.guard(); exec.signal.throwIfAborted()
-        const parentId = args.task_id ?? (selected.root === base ? 'legacy' : path.basename(selected.root))
+        if (!base || !cwd || !exec.agent)
+          throw new StoreError('需要当前 DSH 工作区会话')
+        if (busy.has(base) || engine.isActive(selected.root))
+          throw new StoreError('当前工作区已有任务运行')
+        busy.add(base)
+        claimed = true
+        options.guard()
+        exec.signal.throwIfAborted()
+        const parentId =
+          args.task_id ??
+          (selected.root === base ? 'legacy' : path.basename(selected.root))
         const previous = args.action === 'continue' ? await new GraphStore(taskRoot(base, parentId), cwd).read() : undefined
         const store = args.action === 'continue'
           ? await createTask(base, cwd, args.goal?.trim() || (typeof previous!.project.solve_goal === 'string' ? previous!.project.solve_goal : previous!.project.goal), creator, options, { task_id: parentId, purpose: args.purpose ?? 'solve' })
@@ -32,8 +62,24 @@ export function createTaskTool(getConfig: () => Config, alive: () => boolean, au
           ? await createTask(base, cwd, args.goal ?? '', creator, options)
           : await selectTask(base, cwd, args.task_id ?? 'legacy', options)
         if ((await store.read()).project.status === 'completed') return json({ state: 'completed', stop_reason: 'goal-already-completed', task_id: store.root === base ? 'legacy' : path.basename(store.root) })
-        return json({ ...await engine.dispatch('run', store, creator, exec.agent, options), task_id: store.root === base ? 'legacy' : path.basename(store.root) })
-      } finally { if (base && claimed) busy.delete(base); lifecycle.finish(exec) }
+        if (args.action === 'verify' && (!args.run_id || !args.intent_id))
+          throw new StoreError('独立复核需要 run_id 和 intent_id')
+        return json({
+          ...(await engine.dispatch(
+            args.action === 'verify' ? 'verify' : 'run',
+            store,
+            creator,
+            exec.agent,
+            options,
+            args.intent_id,
+            args.run_id,
+          )),
+          task_id: store.root === base ? 'legacy' : path.basename(store.root),
+        })
+      } finally {
+        if (base && claimed) busy.delete(base)
+        lifecycle.finish(exec)
+      }
     },
   })
 }

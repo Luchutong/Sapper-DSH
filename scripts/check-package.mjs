@@ -50,7 +50,7 @@ const require = createRequire(import.meta.url)
 const allowed = new Set(['react', 'react/jsx-runtime', 'react-dom'])
 let registration
 const code = await readFile(new URL('lib/client.js', root), 'utf8')
-vm.runInNewContext(code, { window: { __ModuleLoader__: { load: entry => { registration = entry } } } })
+vm.runInNewContext(code, { setInterval, clearInterval, setTimeout, clearTimeout, window: { __ModuleLoader__: { load: entry => { registration = entry } } } })
 assert.equal(registration.id, manifest.name)
 assert.equal(typeof registration.factory, 'function')
 const client = registration.factory(specifier => {
@@ -78,7 +78,7 @@ client.apply({
   },
 })
 assert.equal(writes, 0, 'opening the client must not write settings')
-assert.deepEqual(registrations.map(row => row.name), ['plugins.item', 'settings.section'])
+assert.deepEqual(registrations.map(row => row.name), ['sidebar.panellist','main','conversation.input.left','plugins.item', 'settings.section'])
 const kb = (await readdir(new URL('resources/kb/', root))).filter(file => file.endsWith('.json'))
 assert.equal(kb.length, 56)
 console.log('Package checks passed: host import, two-process store writes, lazy-CJS client, settings slots, no eager writes, 56 KB resources.')

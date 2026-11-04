@@ -2,7 +2,10 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { act, create } from 'react-test-renderer'
 import { describe, expect, it, vi } from 'vitest'
 import { apply, SapperSettings } from '../src/client/index.js'
-import type { BrowserContext, BrowserSettingsScope } from '../src/dsh-adapter/client.js'
+import type {
+  BrowserContext,
+  BrowserSettingsScope,
+} from '../src/dsh-adapter/client.js'
 
 function makeScope(accepted = true): BrowserSettingsScope {
   const state = { status: 'ready' as const, writable: true, value: { enabled: true }, base: {}, user: {}, revision: 0 }
@@ -28,8 +31,16 @@ describe('DSH 0.2 client entry', () => {
       },
     }
     apply(ctx)
-    expect(rows).toEqual(['plugins.item', 'settings.section'])
-    expect(renderToStaticMarkup(<SapperSettings scope={scope} />)).toContain('启用 Sapper')
+    expect(rows).toEqual([
+      'sidebar.panellist',
+      'main',
+      'conversation.input.left',
+      'plugins.item',
+      'settings.section',
+    ])
+    expect(renderToStaticMarkup(<SapperSettings scope={scope} />)).toContain(
+      '启用 Sapper',
+    )
     expect(scope.set).not.toHaveBeenCalled()
     expect(scope.mutate).not.toHaveBeenCalled()
     cleanup()
@@ -116,29 +127,104 @@ it('saves edited budgets on blur and restores the draft after a refused save', a
 it('projects live and reloaded Sapper result events into visible rows using the actual DSH history assembler and Chat builder', async () => {
   const { Context } = await import('@deepseek-ai/cordis')
   const { dshConversation } = await import('./fixtures/dsh-conversation.js')
-  const { resultDefinition, ResultNode } = await import('../src/client/result.js')
+  const { resultDefinition, ResultNode } = await import(
+    '../src/client/result.js'
+  )
   const { ConversationEventRegistry, ConversationNodeAssembler, chatViewDefinition } = await dshConversation()
-  const ctx = new Context(), events = new ConversationEventRegistry(ctx)
+  const ctx = new Context(),
+    events = new ConversationEventRegistry(ctx)
   try {
     events.register(resultDefinition)
-    const assembler = new ConversationNodeAssembler(events, { entries: () => [chatViewDefinition] })
+    const assembler = new ConversationNodeAssembler(events, {
+      entries: () => [chatViewDefinition],
+    })
     const result: import('../src/panel/result.js').TaskResult = { job_id: 'job1', task_id: 'task1', run_id: 'r001', state: 'failed', goal: 'Check evidence', summary: '本轮结束，目标仍待完成。', confirmed: [], candidates: [{ title: 'Candidate', description: 'RESULT-7C42', kind: 'note', status: 'unverified' }], errors: ['Budget reached'] }
-    const record = { event: { type: 'sapper/result', seq: 1, timestamp: Date.now(), data: result } } as never
+    const record = {
+      event: {
+        type: 'plugin:sapper-dsh/result',
+        ignorable: true,
+        seq: 1,
+        timestamp: Date.now(),
+        data: result,
+      },
+    } as never
     assembler.replaceWindow([], false)
     assembler.activateTarget('chat')
     const accepted = { event: { type: 'sapper/result', seq: 0, timestamp: Date.now(), data: { ...result, phase: 'accepted', summary: '任务已受理', candidates: [] } } } as never
-    assembler.append(accepted); assembler.flush()
+    assembler.append(accepted)
+    assembler.flush()
     const started = assembler.get('chat')!
     expect(started.order).toHaveLength(1)
     expect(renderToStaticMarkup(<ResultNode node={started.nodes.get(started.order[0]!) as never} />)).toContain('任务已受理')
-    assembler.append(record); assembler.flush()
+    assembler.append(record)
+    assembler.flush()
     const snapshot = assembler.get('chat')!
     expect(snapshot.order).toHaveLength(1)
     const node = snapshot.nodes.get(snapshot.order[0]!)!
     expect(node).toMatchObject({ kind: 'sapper-result', anchorSeq: 1, location: { kind: 'session' }, visibility: 'visible', data: result })
-    expect(renderToStaticMarkup(<ResultNode node={node as never} />)).toContain('候选 · 尚未确认')
-    assembler.replaceWindow([accepted, record], false); assembler.flush()
+    expect(renderToStaticMarkup(<ResultNode node={node as never} />)).toContain(
+      '候选 · 尚未确认',
+    )
+    assembler.replaceWindow([accepted, record], false)
+    assembler.flush()
     expect(assembler.get('chat')!.order).toEqual(snapshot.order)
-    expect(assembler.get('chat')!.nodes.get(snapshot.order[0]!)?.data).toEqual(result)
-  } finally { await ctx.fiber.dispose() }
+    expect(assembler.get('chat')!.nodes.get(snapshot.order[0]!)?.data).toEqual(
+      result,
+    )
+  } finally {
+    await ctx.fiber.dispose()
+  }
+})
+it('registers navigation and keyed content through the real DSH SlotCore and routes the composer button to that panel', async () => {
+  const { SlotCore } = await import('@deepseek-ai/dsh-client-ui-slots'),
+    core = new SlotCore(),
+    disposers: Array<() => void> = []
+  core.register(
+    {
+      name: 'root',
+      children: {
+        'sidebar.panellist': { kind: 'list', scope: 'root' },
+        main: { kind: 'keyed', scope: 'root' },
+        'conversation.input.left': { kind: 'list', scope: 'root' },
+        'plugins.item': { kind: 'list', scope: 'root' },
+        'settings.section': { kind: 'list', scope: 'root' },
+      },
+    } as never,
+    (() => null) as never,
+  )
+  const selectPanel = vi.fn(),
+    ctx: BrowserContext = {
+      layout: { selectPanel },
+      inject: (_services, setup) => setup(ctx),
+      effect: (setup) => {
+        disposers.push(setup())
+      },
+      configForms: {
+        get: () => makeScope(),
+        whileServed: (_ids, setup) => setup(new Set(['sapper'])),
+      },
+      slots: {
+        inject: (_name, setup) => setup(),
+        register: (options, component) =>
+          core.register(options as never, component as never),
+      },
+    }
+  try {
+    apply(ctx)
+    expect(core.entriesOfSlot('main')[0]?.options.key).toBe('sapper')
+    expect(core.entriesOfSlot('sidebar.panellist')[0]?.options.id).toBe(
+      'sapper',
+    )
+    const Button = core.entriesOfSlot('conversation.input.left')[0]!
+      .component as import('react').ComponentType
+    const renderer = create(<Button />)
+    await act(async () => {
+      renderer.root.findByType('button').props.onClick()
+    })
+    expect(selectPanel).toHaveBeenCalledExactlyOnceWith('sapper')
+    renderer.unmount()
+  } finally {
+    for (const dispose of disposers.reverse()) dispose()
+  }
+  expect(core.entriesOfSlot('main')).toHaveLength(0)
 })

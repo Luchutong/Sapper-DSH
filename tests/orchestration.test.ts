@@ -23,6 +23,7 @@ import type { RunRecord } from '../src/store/runs.js'
 import { GraphStore } from '../src/store/graph.js'
 import { TaskPanelService } from '../src/dsh-adapter/panel.js'
 import { resolveSelectedStore } from '../src/store/tasks.js'
+import { resultOfEvent } from '../src/dsh-adapter/result-event.js'
 import { checkedEvidence } from '../src/orchestration/types.js'
 import { dshComposer } from './fixtures/dsh-composer.js'
 import type { CommandClaim } from '@deepseek-ai/dsh-client-ui-conversation/client'
@@ -30,26 +31,111 @@ import type { CommandClaim } from '@deepseek-ai/dsh-client-ui-conversation/clien
 // Real SDK setup and durable multi-file writes are much slower on cold Windows CI disks.
 // These are harness deadlines, independent of the runtime budgets tested below.
 vi.setConfig({ testTimeout: 20000, hookTimeout: 20000 })
-const waitForRuntime: typeof vi.waitFor = callback => vi.waitFor(callback, { timeout: 10000 })
+const waitForRuntime: typeof vi.waitFor = (callback) =>
+  vi.waitFor(callback, { timeout: 10000 })
 const cleanup: Array<() => Promise<unknown>> = []
-afterEach(async () => { for (const f of cleanup.splice(0).reverse()) await f() })
-interface Scenario { writeup?: boolean; flag?: string; hangOther?: boolean; exploreReads?: number; verifyReads?: number; recipe?: string; noEvidence?: boolean; forged?: boolean; reject?: boolean; noVerifyEvidence?: boolean; beforeRead?: (signal: AbortSignal) => Promise<void>; attack?: boolean; proposals?: number; emptyReason?: boolean; hang?: boolean; completesGoal?: boolean; denyGoal?: boolean; maxTokens?: 'reason' | 'explore' | 'verify' }
+afterEach(async () => {
+  for (const f of cleanup.splice(0).reverse()) await f()
+})
+interface Scenario {
+  summaryAttack?: boolean
+  userRead?: boolean
+  userGate?: Promise<void>
+  writeup?: boolean
+  flag?: string
+  hangOther?: boolean
+  exploreReads?: number
+  verifyReads?: number
+  recipe?: string
+  noEvidence?: boolean
+  forged?: boolean
+  reject?: boolean
+  noVerifyEvidence?: boolean
+  beforeRead?: (signal: AbortSignal) => Promise<void>
+  attack?: boolean
+  proposals?: number
+  emptyReason?: boolean
+  hang?: boolean
+  completesGoal?: boolean
+  denyGoal?: boolean
+  maxTokens?: 'reason' | 'explore' | 'verify'
+}
 class FixtureModel extends LlmAdapter {
   requests: GenerateOptions[] = []
-  constructor(readonly scenario: Scenario) { super() }
+  async listModels() {
+    return [{ provider: 'fixture', id: 'fixture-model', name: 'Fixture model' }]
+  }
+  constructor(readonly scenario: Scenario) {
+    super()
+  }
   async *stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
     this.requests.push(options)
     const raw = JSON.stringify(options.messages)
+    if (this.scenario.userRead && raw.includes('USER_AFTER_BRIEF')) {
+      if (!raw.includes('user-read')) {
+        yield {
+          type: 'tool-call-delta',
+          index: 0,
+          id: ToolCallId('user-read'),
+          name: 'read',
+          argumentsDelta: JSON.stringify({ path: 'fixture.txt' }),
+        }
+        yield { type: 'finish', reason: { kind: 'tool-calls' } }
+      } else {
+        yield { type: 'text-delta', index: 0, text: 'User read completed' }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      }
+      return
+    }
+    if (
+      this.scenario.userGate &&
+      raw.includes('USER_BUSY') &&
+      !raw.includes('SAPPER_MAIN_BRIEF')
+    ) {
+      await this.scenario.userGate
+      yield { type: 'text-delta', index: 0, text: 'User request completed' }
+      yield { type: 'finish', reason: { kind: 'stop' } }
+      return
+    }
+    if (
+      raw.includes('SAPPER_MAIN_BRIEF') &&
+      !raw.includes('# Sapper reason') &&
+      !raw.includes('# Sapper explore') &&
+      !raw.includes('# Sapper verify')
+    ) {
+      if (this.scenario.summaryAttack) {
+        yield {
+          type: 'tool-call-delta',
+          index: 0,
+          id: ToolCallId('brief-attack'),
+          name: 'sapper_control',
+          argumentsDelta: JSON.stringify({
+            action: 'continue',
+            goal: 'FORBIDDEN BRIEF RUN',
+          }),
+        }
+        yield { type: 'finish', reason: { kind: 'tool-calls' } }
+        return
+      }
+      yield {
+        type: 'text-delta',
+        index: 0,
+        text: '本轮已结束。证据与 flag 验证状态已保存在任务详情中；可继续复核或编写 WP.md。',
+      }
+      yield { type: 'finish', reason: { kind: 'stop' } }
+      return
+    }
     const role = raw.includes('# Sapper verify') ? 'verify' : raw.includes('# Sapper explore') ? 'explore' : 'reason'
     const receipt = raw.match(/ev-[a-f0-9-]{36}/g)?.at(-1) ?? 'missing-receipt'
-    const tools = options.messages.filter(m => m.role === 'tool')
+    const tools = options.messages.filter((m) => m.role === 'tool')
     if (this.scenario.maxTokens === role) { yield { type: 'finish', reason: { kind: 'max-tokens' } }; return }
     if ((this.scenario.hang || (this.scenario.hangOther && raw.includes('Read local fixture 1'))) && role === 'explore') {
       await new Promise<void>((_, reject) => { const stop = () => reject(options.signal?.reason); options.signal?.addEventListener('abort', stop, { once: true }); if (options.signal?.aborted) stop() })
       return
     }
     const requiredReads = role === 'verify' ? this.scenario.verifyReads ?? 1 : this.scenario.exploreReads ?? 1
-    let name = 'structured_output', args: unknown
+    let name = 'structured_output',
+      args: unknown
     if (role === 'reason') args = { intents: this.scenario.emptyReason ? [] : Array.from({ length: this.scenario.proposals ?? 1 }, (_, n) => ({ title: `Check fixture ${n}`, description: `Read local fixture ${n}`, from: ['f001'], success_criteria: 'Fixture content contains VERIFIED-LOCAL-7C42', completes_goal: !!this.scenario.completesGoal })) }
     else if (!tools.length && this.scenario.writeup) { name = role === 'explore' ? 'pwsh' : 'read'; args = role === 'explore' ? { code: 'write-local-wp' } : { path: 'WP.md' } }
     else if (!tools.length && this.scenario.attack) { name = 'sapper_fact'; args = { action: 'create', description: 'BYPASS' } }
@@ -61,22 +147,65 @@ class FixtureModel extends LlmAdapter {
     yield { type: 'finish', reason: { kind: 'tool-calls' } }
   }
 }
-async function setup(scenario: Scenario = {}, input: ConfigInput = {}, commands = false, maxDepth = 1, topology: 'global' | 'preset' | 'preset-ptc' = 'global', bootstrap = true) {
+async function setup(
+  scenario: Scenario = {},
+  input: ConfigInput = {},
+  commands = false,
+  maxDepth = 1,
+  topology: 'global' | 'preset' | 'preset-ptc' = 'global',
+  bootstrap = true,
+  capacity = 8,
+) {
   const cwd = await mkdtemp(path.join(os.tmpdir(), 'sapper M3 中文 '))
   cleanup.push(() => rm(cwd, { recursive: true, force: true }))
-  await writeFile(path.join(cwd, 'fixture.txt'), (scenario.flag ?? 'VERIFIED-LOCAL-7C42') + '\n')
+  await writeFile(
+    path.join(cwd, 'fixture.txt'),
+    (scenario.flag ?? 'VERIFIED-LOCAL-7C42') + '\n',
+  )
   for (let i = 0; i < Math.max(scenario.exploreReads ?? 0, scenario.verifyReads ?? 0); i++) await writeFile(path.join(cwd, `fixture-${i}.txt`), `VERIFIED-LOCAL-7C42 observation ${i}\n`)
-  const ctx = new Context(); cleanup.push(() => ctx.fiber.dispose())
+  const ctx = new Context()
+  cleanup.push(() => ctx.fiber.dispose())
   await mountAgentLoopTestDependencies(ctx, { workingDirectory: true })
-  await ctx.plugin(SandboxPolicyService, { mode: 'danger-full-access', workspaceRoot: cwd })
-  const approval = vi.fn(async () => 'rejected'); ctx.provide('approval', { request: approval })
-  const subagentsFiber = await ctx.plugin(SubagentRuntime, { maxDepth, maxActiveSubagents: 8 })
+  await ctx.plugin(SandboxPolicyService, {
+    mode: 'danger-full-access',
+    workspaceRoot: cwd,
+  })
+  const approval = vi.fn(async () => 'rejected')
+  ctx.provide('approval', { request: approval })
+  const subagentsFiber = await ctx.plugin(SubagentRuntime, {
+    maxDepth,
+    maxActiveSubagents: capacity,
+  })
   await ctx.plugin(Spawn, { providerName: 'spawn' })
   const model = new FixtureModel(scenario)
   ctx.llm.registerAdapter(['fixture'], model)
-  const read = vi.fn(async (readArgs: unknown, exec: ToolRunContext) => { await scenario.beforeRead?.(exec.signal); return await readFile(path.join(cwd, (readArgs as { path: string }).path), 'utf8') })
+  const read = vi.fn(async (readArgs: unknown, exec: ToolRunContext) => {
+    await scenario.beforeRead?.(exec.signal)
+    return await readFile(
+      path.join(
+        exec.agent?.session.header.cwd ?? cwd,
+        (readArgs as { path: string }).path,
+      ),
+      'utf8',
+    )
+  })
   const readDefinition = defineTool({ name: 'read', description: 'Read local fixture', parameters: { path: { type: 'string', required: true } }, output: { schema: { type: 'string' }, render: (_a, v) => [{ type: 'text', text: v }] }, execute: read })
-  const wpDefinition = defineTool({ name: 'pwsh', description: 'Local fixture WP writer', parameters: { code: { type: 'string', required: true } }, output: { schema: { type: 'string' }, render: (_a, v) => [{ type: 'text', text: v }] }, execute: async () => { await writeFile(path.join(cwd, 'WP.md'), '# WP\nEvidence: VERIFIED-LOCAL-7C42\nReproduction: read the local fixture.\n'); return 'WP.md saved' } })
+  const wpDefinition = defineTool({
+    name: 'pwsh',
+    description: 'Local fixture WP writer',
+    parameters: { code: { type: 'string', required: true } },
+    output: {
+      schema: { type: 'string' },
+      render: (_a, v) => [{ type: 'text', text: v }],
+    },
+    execute: async (_args, exec) => {
+      await writeFile(
+        path.join(exec.agent?.session.header.cwd ?? cwd, 'WP.md'),
+        '# WP\nEvidence: VERIFIED-LOCAL-7C42\nReproduction: read the local fixture.\n',
+      )
+      return 'WP.md saved'
+    },
+  })
   if (topology === 'global') { ctx.tools.register(readDefinition); if ('writeup' in scenario) ctx.tools.register(wpDefinition) }
   else {
     await ctx.plugin(Loader)
@@ -89,10 +218,23 @@ async function setup(scenario: Scenario = {}, input: ConfigInput = {}, commands 
   }
   let config = resolveConfig({ ...input, orchestration: { maxExplore: 1, maxSteps: 1, ...input?.orchestration } })
   if (commands) await ctx.plugin(CommandRuntime)
-  registerRuntime(ctx, () => config)
-  const harness = await mountAgentLoopTestHarness(ctx)
-  const parent = topology === 'global' ? await harness.create(SessionId('m3-parent'), { provider: 'fixture', model: 'fixture-model' }, { cwd })
-    : (await ctx.agents.create({ sessionId: SessionId('m3-parent'), agentOptions: { provider: 'fixture', model: 'fixture-model' }, meta: { cwd, agentPreset: 'fixture' }, setup: async childCtx => { await ctx.agentPresets.mount(childCtx, 'fixture'); if (topology === 'preset-ptc') childCtx.tools.presentAs('native') } })).agent
+  if(process.env.SAPPER_PACKAGED_HOST==='1'){const built=await import(new URL('../lib/index.js',import.meta.url).href);built.apply(ctx,{get:()=>config})}else registerRuntime(ctx, () => config)
+  await mountAgentLoopTestHarness(ctx)
+  const parentHandle = await ctx.agents.create({
+    sessionId: SessionId('m3-parent'),
+    agentOptions: { provider: 'fixture', model: 'fixture-model' },
+    meta: { cwd, ...(topology !== 'global' ? { agentPreset: 'fixture' } : {}) },
+    ...(topology !== 'global'
+      ? {
+          setup: async (childCtx: Context) => {
+            await ctx.agentPresets.mount(childCtx, 'fixture')
+            if (topology === 'preset-ptc') childCtx.tools.presentAs('native')
+          },
+        }
+      : {}),
+  })
+  const parent = parentHandle.agent
+
   let count = 0
   const execute = async (name: string, args: unknown, signal = new AbortController().signal) => {
     const result = await ctx.tools.execute({ name, arguments: args, agent: parent, callId: ToolCallId('parent-' + ++count), signal })
@@ -105,7 +247,24 @@ async function setup(scenario: Scenario = {}, input: ConfigInput = {}, commands 
   }
   const dispatch = (mode = 'run', extra = {}, signal?: AbortSignal) => execute('sapper_dispatch', { mode, ...extra }, signal) as Promise<unknown> as Promise<RunRecord>
   const store = new GraphStore(path.join(cwd, '.sapper'), cwd)
-  return { ctx, cwd, model, approval, read, parent, execute, dispatch, store, disposeSubagents: () => subagentsFiber.dispose(), setConfig: (next: ConfigInput) => { config = resolveConfig(next); ctx.emit('loader/volatile-update', []) }, config }
+  return {
+    ctx,
+    cwd,
+    model,
+    approval,
+    read,
+    parent,
+    disposeParent: parentHandle.dispose,
+    execute,
+    dispatch,
+    store,
+    disposeSubagents: () => subagentsFiber.dispose(),
+    setConfig: (next: ConfigInput) => {
+      config = resolveConfig(next)
+      ctx.emit('loader/volatile-update', [])
+    },
+    config,
+  }
 }
 
 describe('M3 production AgentLoop + SubagentRuntime + ToolRuntime', () => {
@@ -292,7 +451,6 @@ describe('M3 completion and permission revocation', () => {
   })
 })
 
-
 it('runs /sapper run and reads /sapper runs through real CommandRuntime and ToolRuntime', async () => {
   const { ctx, parent, store, approval } = await setup({}, {}, true)
   const result = await ctx.commands.execute(parent, '/sapper run', [], new AbortController().signal)
@@ -313,7 +471,6 @@ it('respects the DSH delegation-depth cap instead of expanding it for a nested c
   expect((await store.read()).facts.filter(f => f.id !== 'goal')).toHaveLength(1)
 })
 
-
 it('inherits preset-scoped file tools into fresh explore/verify sessions', async () => {
   const { dispatch, ctx, parent, model, read } = await setup({}, {}, false, 1, 'preset')
   expect(ctx.tools.get('read')).toBeUndefined()
@@ -323,7 +480,6 @@ it('inherits preset-scoped file tools into fresh explore/verify sessions', async
   expect(read).toHaveBeenCalledTimes(2)
   for (const request of model.requests.filter(r => !JSON.stringify(r.messages).includes('# Sapper reason'))) expect(request.tools?.map(t => t.name)).toContain('read')
 })
-
 
 it('keeps preset PTC presentation intact while M3 children use native evidence and structured tools', async () => {
   const { dispatch, ctx, parent, model, read } = await setup({}, {}, false, 1, 'preset-ptc')
@@ -441,161 +597,126 @@ it('cancels panel background work and retains a ready intent for retry', async (
   expect(ctx.agents.list()).toEqual([parent])
 })
 
-it('drives the task panel through actual client and host Typert Gateways with strict wire schemas', async () => {
-  const { default: Registry } = await import('@deepseek-ai/dsh-typert-registry')
-  const { default: Gateway } = await import('@deepseek-ai/dsh-api-gateway')
-  const { RemoteAccessService } = await import('@deepseek-ai/dsh-api-remote-access')
-  const ClientGateway = await import('@deepseek-ai/dsh-api-gateway/client')
-  const { PANEL_REMOTE } = await import('../src/panel/rpc.js')
-  const panelScenario: Scenario = { completesGoal: true, writeup: false }
-  const { ctx, parent, cwd } = await setup(panelScenario, {}, false, 1, 'preset', false)
-  await ctx.plugin(Registry)
-  await ctx.plugin(RemoteAccessService)
-  await ctx.plugin(Gateway, {})
-  const peerCtx = ctx.extend(), controller = new AbortController()
-  const peer = { id: 'panel-owner' as import('@deepseek-ai/dsh-typert-protocol').PeerId, ctx: peerCtx, principal: { kind: 'owner' as const }, signal: controller.signal, interactions: 'none' as const, dispose: async () => {} }
-  const client = new Context(); cleanup.push(() => client.fiber.dispose())
-  await client.plugin(Registry)
-  client.provide('connection', {
+it(
+  'drives the task panel through actual client and host Typert Gateways with strict wire schemas',
+  async () => {
+    const { default: Registry } = await import(
+      '@deepseek-ai/dsh-typert-registry'
+    )
+    const { default: Gateway } = await import('@deepseek-ai/dsh-api-gateway')
+    const { RemoteAccessService } = await import(
+      '@deepseek-ai/dsh-api-remote-access'
+    )
+    const ClientGateway = await import('@deepseek-ai/dsh-api-gateway/client')
+    const { PANEL_REMOTE } = await import('../src/panel/rpc.js')
+    const panelScenario: Scenario = { completesGoal: true, writeup: false }
+    const { ctx, parent, cwd } = await setup(
+      panelScenario,
+      {},
+      false,
+      1,
+      'preset',
+      false,
+    )
+    await ctx.plugin(Registry)
+    await ctx.plugin(RemoteAccessService)
+    await ctx.plugin(Gateway, {})
+    const peerCtx = ctx.extend(),
+      controller = new AbortController()
+    const peer = { id: 'panel-owner' as import('@deepseek-ai/dsh-typert-protocol').PeerId, ctx: peerCtx, principal: { kind: 'owner' as const }, signal: controller.signal, interactions: 'none' as const, dispose: async () => {} }
+    const client = new Context()
+    cleanup.push(() => client.fiber.dispose())
+    await client.plugin(Registry)
+    client.provide('connection', {
     interactions: 'none', isLoopback: true, generation: { getSnapshot: () => undefined },
     rpc: { open: () => { throw new Error('No streams expected') }, call: async (_path: string, endpoint: string, payload: { args: Record<string, unknown> }) => {
       const [namespace, method] = endpoint.split('/')
       return { ok: true, value: await ctx.typertGateway.invoke({ namespace: namespace!, method: method!, args: payload.args, peer }) }
     } },
   } as never)
-  await client.plugin(ClientGateway)
-  const { connectPanel } = await import('../src/client/connection.js')
-  let connection!: ReturnType<typeof connectPanel>, wrongScope!: () => unknown
-  const consumer = await client.plugin({ name: 'sapper-scoped-consumer', inject: ['remote'], apply(scoped: Context) {
+    await client.plugin(ClientGateway)
+    const { connectPanel } = await import('../src/client/connection.js')
+    let connection!: ReturnType<typeof connectPanel>, wrongScope!: () => unknown
+    const consumer = await client.plugin({ name: 'sapper-scoped-consumer', inject: ['remote'], apply(scoped: Context) {
     wrongScope = () => PANEL_REMOTE.methods['sapperPanel/targets']!.invoke(scoped.remote, {})
     connection = connectPanel(scoped as unknown as import('../src/dsh-adapter/client.js').BrowserContext)
   } })
-  await waitForRuntime(() => expect(connection.getSnapshot().api, connection.getSnapshot().error).toBeDefined())
-  expect(wrongScope).toThrow(/without inject/)
-  const invoke = async (method: string, args: { sessionId?: string; input?: import('../src/panel/rpc.js').PanelAction }) => {
+    await waitForRuntime(() => expect(connection.getSnapshot().api, connection.getSnapshot().error).toBeDefined())
+    expect(wrongScope).toThrow(/without inject/)
+    const invoke = async (method: string, args: { sessionId?: string; input?: import('../src/panel/rpc.js').PanelAction }) => {
     const api = connection.getSnapshot().api!
     if (method === 'targets') return api.targets()
     if (method === 'state') return api.state(args.sessionId!)
     if (method === 'report') return api.report!(args.sessionId!)
     return api.action(args.sessionId!, args.input!)
   }
-  expect(await invoke('targets', {})).toEqual([{ id: String(parent.id), cwd }])
-  expect(await invoke('state', { sessionId: String(parent.id) })).toMatchObject({ tasks: [], runs: [] })
-  const panelResults: import('../src/panel/result.js').TaskResult[] = []
-  ctx.on('session/event', (session, event) => { if (session === parent.session && event.type === 'sapper/result' && event.data.phase === 'result') panelResults.push(event.data) })
-  await invoke('action', { sessionId: String(parent.id), input: { action: 'start', goal: 'Verify local fixture' } })
-  await (ctx.get('sapperPanel') as TaskPanelService).whenIdle(cwd)
-  expect(await invoke('state', { sessionId: String(parent.id) })).toMatchObject({ job: { state: 'completed', result: { stop_reason: 'goal-completed' } }, graph: { status: 'completed', verified: 1 } })
-  await expect(ctx.typertGateway.invoke({ namespace: 'sapperPanel', method: 'action', args: { sessionId: String(parent.id), input: { action: 'start', cwd: '/forged' } }, peer })).rejects.toThrow()
-  if (process.env.SAPPER_BROWSER_PROBE === '1') {
-    const { chromium } = await import('playwright-core')
-    const { createServer } = await import('node:http')
-    const { createRequire } = await import('node:module')
-    const { mkdir } = await import('node:fs/promises')
-    const require = createRequire(import.meta.url)
-    const files: Record<string, string> = {
-      '/react.js': path.join(path.dirname(require.resolve('react/package.json')), 'umd/react.development.js'),
-      '/react-dom.js': path.join(path.dirname(require.resolve('react-dom/package.json')), 'umd/react-dom.development.js'),
-      '/plugin.js': path.resolve('lib/client.js'),
-    }
-    const html = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>Sapper panel integration</title>
-      <style>:root{--dsw-alias-bg-base:#181a20;--dsw-alias-label-primary:#e5e7eb}body{font:15px system-ui,sans-serif;background:#181a20;color:#e5e7eb;margin:0;padding:30px}#app{max-width:950px;margin:auto}button,select{font:inherit;color:inherit;background:#2a303c;border:1px solid #657087;border-radius:6px;padding:7px 12px;cursor:pointer}button:disabled{opacity:.45;cursor:default}summary{padding:8px 0}p{line-height:1.6}textarea{font:inherit}h3{font-size:23px}</style>
-      <div id="app"></div><div id="results" style="max-width:950px;margin:auto;padding-bottom:100px"></div><div id="composer" style="position:fixed;bottom:0;left:0;right:0;height:48px;overflow:hidden;background:#303744;padding:8px;box-sizing:border-box;transform:translateZ(0)"></div><script src="/react.js"></script><script src="/react-dom.js"></script>
-      <script>window.__ModuleLoader__={load(entry){window.sapper=entry.factory(id=>id==='react'?React:id==='react-dom'?ReactDOM:{Fragment:React.Fragment,jsx:(type,props,key)=>React.createElement(type,{...props,key}),jsxs:(type,props,key)=>React.createElement(type,{...props,key})})}};</script><script src="/plugin.js"></script>
-      <script>
-      const remote={$mount:async contribution=>{for(const d of contribution.descriptors){remote[d.namespace]??={};remote[d.namespace][d.method]=async(...values)=>{const args=Object.fromEntries(d.parameters.map((p,i)=>[p.wire,values[i]]));return fetch('/rpc/'+d.namespace+'/'+d.method,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(args)}).then(r=>r.json())}}return()=>{}}};
-      const snapshot={status:'ready',writable:true,value:{enabled:true},base:{},user:{},revision:0};
-      const scope={getSnapshot:()=>snapshot,subscribe:()=>()=>{},set:async()=>true,mutate:async()=>true};
-      let ResultNode, definition;const resultRoot=ReactDOM.createRoot(document.getElementById('results'));
-      sapper.apply({remote,inject:(_services,setup)=>setup({remote,effect:setup=>setup()}),uiConversation:{events:{register:d=>{definition=d;return()=>{}}}},configForms:{get:()=>scope,whileServed:(ids,setup)=>setup(new Set(ids))},effect:setup=>setup(),slots:{inject:(_name,setup)=>setup(),register:(options,Component)=>{if(options.name==='settings.section')ReactDOM.createRoot(document.getElementById('app')).render(React.createElement(Component));if(options.name==='conversation.input.left')ReactDOM.createRoot(document.getElementById('composer')).render(React.createElement(Component,{sessionId:"${String(parent.id)}"}));if(options.name==='conversation.chat.node'&&options.key==='sapper-result')ResultNode=Component;return()=>{}}}});
-      async function results(){const data=await fetch('/results').then(r=>r.json());if(ResultNode&&definition)resultRoot.render(data.map((value,i)=>{const event={type:'sapper/result',data:value,seq:i+1};const match=definition.match['sapper/result'](event);const context={key:'sapper-result:'+match.id,id:match.id,state:definition.start({}, {event}),matches:[{event}]};return React.createElement(ResultNode,{key:context.key,node:definition.buildViewNode(context)})}));}setInterval(results,300);results();
-      </script></html>`
-    const server = createServer(async (req, res) => {
-      try {
-        if (req.url === '/results') { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(panelResults)); return }
-        if (files[req.url!]) { res.setHeader('Content-Type', 'text/javascript; charset=utf-8'); res.end(await readFile(files[req.url!]!)); return }
-        if (req.method === 'POST' && req.url?.startsWith('/rpc/')) {
-          let body = ''; for await (const chunk of req) body += chunk
-          const [, , namespace, method] = req.url.split('/')
-          try { const value = await ctx.typertGateway.invoke({ namespace: namespace!, method: method!, args: JSON.parse(body), peer }); res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ ok: true, value })) }
-          catch (e) { res.end(JSON.stringify({ ok: false, error: { message: (e as Error).message } })) }
-          return
-        }
-        res.setHeader('Content-Type', 'text/html; charset=utf-8'); res.end(html)
-      } catch (e) { res.statusCode = 500; res.end(String(e)) }
+    expect(await invoke('targets', {})).toEqual([
+      { id: String(parent.id), cwd },
+    ])
+    expect(await invoke('state', { sessionId: String(parent.id) })).toMatchObject({ tasks: [], runs: [] })
+    const panelResults: import('../src/panel/result.js').TaskResult[] = []
+    ctx.on('session/event', (session, event) => {
+      if (
+        session === parent.session &&
+        resultOfEvent(event)?.phase === 'result'
+      )
+        panelResults.push(resultOfEvent(event)!)
     })
-    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
-    const browser = await chromium.launch({ headless: true })
-    try {
-      const page = await browser.newPage({ viewport: { width: 1250, height: 1000 } }), errors: string[] = []
-      page.setDefaultTimeout(5000)
-      page.on('pageerror', e => { errors.push(e.message); void writeFile('dist/validation/panel-browser-errors.json', JSON.stringify(errors)) })
-      const port = (server.address() as import('node:net').AddressInfo).port
-      await page.goto('http://127.0.0.1:' + port)
-      await writeFile('dist/validation/panel-dom-before.html', await page.content())
-      await page.screenshot({ path: 'dist/validation/panel-before.png' })
-      await page.getByLabel('任务目标', { exact: true }).fill('Verify local fixture from an ordinary workspace')
-      await page.getByRole('button', { name: '发起任务', exact: true }).click()
-      await expect.poll(async () => (await serviceState()).tasks.length, { timeout: 10000 }).toBe(2)
-      await (ctx.get('sapperPanel') as TaskPanelService).whenIdle(cwd)
-      await expect.poll(async () => await page.locator('strong').filter({ hasText: 'Verify local fixture from an ordinary workspace' }).count(), { timeout: 10000 }).toBe(1)
-      await expect.poll(async () => await page.locator('span[role=status]').textContent(), { timeout: 10000 }).toBe('已结束')
-      await expect.poll(async () => await page.getByText('工作区任务（2）', { exact: true }).count(), { timeout: 10000 }).toBe(1)
-      expect(errors).toEqual([])
-      await mkdir('dist/validation', { recursive: true })
-      await page.screenshot({ path: 'dist/validation/panel-desktop.png', fullPage: true })
-      expect(await page.getByRole('option').filter({ hasText: cwd }).count()).toBe(1)
-      await page.getByRole('button', { name: '打开 Sapper 任务', exact: true }).click()
-      const dialog = page.getByRole('dialog', { name: 'Sapper 任务窗口' })
-      await dialog.waitFor({ state: 'visible' })
-      await dialog.getByRole('button', { name: '事实图', exact: true }).click()
-      await dialog.locator('svg').waitFor({ state: 'visible' })
-      const bounds = await dialog.boundingBox()
-      expect(bounds && bounds.y >= 0 && bounds.y + bounds.height <= 1000).toBe(true)
-      await page.screenshot({ path: 'dist/validation/panel-dialog.png' })
-      await dialog.getByRole('button', { name: '结果与候选', exact: true }).click()
-      await dialog.getByRole('article', { name: 'Sapper 任务结果' }).waitFor()
-      await dialog.getByRole('button', { name: '发送结果到主会话' }).click()
-      await expect.poll(async () => panelResults.length).toBe(3)
-      await expect.poll(async () => page.locator('#results article').count()).toBe(3)
-      expect(await page.locator('#results').textContent()).toContain('已独立复核')
-      panelScenario.writeup = true
-      await dialog.getByLabel('补充方向或后续要求').fill('Include the minimal reproduction')
-      await dialog.getByRole('button', { name: '编写 WP', exact: true }).click()
-      await expect.poll(async () => (await serviceState()).tasks.length, { timeout: 10000 }).toBe(3)
-      await (ctx.get('sapperPanel') as TaskPanelService).whenIdle(cwd)
-      expect(await readFile(path.join(cwd, 'WP.md'), 'utf8')).toContain('Reproduction:')
-      await expect.poll(async () => panelResults.length).toBe(4)
-      await expect.poll(async () => page.locator('#results article').count()).toBe(4)
-      await dialog.getByRole('button', { name: '重新运行 / 纠正 flag', exact: true }).waitFor({ state: 'visible' })
-      await page.keyboard.press('Escape')
-      await dialog.waitFor({ state: 'hidden' })
-      expect(await page.getByRole('button', { name: '打开 Sapper 任务' }).evaluate(el => el === document.activeElement)).toBe(true)
-      await page.locator('#results').scrollIntoViewIfNeeded()
-      await page.screenshot({ path: 'dist/validation/panel-results.png', fullPage: true })
-      expect(errors).toEqual([])
+    await invoke('action', { sessionId: String(parent.id), input: { action: 'start', goal: 'Verify local fixture' } })
+    await (ctx.get('sapperPanel') as TaskPanelService).whenIdle(cwd)
+    expect(await invoke('state', { sessionId: String(parent.id) })).toMatchObject({ job: { state: 'completed', result: { stop_reason: 'goal-completed' } }, graph: { status: 'completed', verified: 1 } })
+    await expect(ctx.typertGateway.invoke({ namespace: 'sapperPanel', method: 'action', args: { sessionId: String(parent.id), input: { action: 'start', cwd: '/forged' } }, peer })).rejects.toThrow()
+    if (process.env.SAPPER_BROWSER_PROBE === '1') {
+      await ctx.plugin(CommandRuntime)
+      const panel = await mountNative(ctx, cwd)
+      panelScenario.emptyReason = true
+      const { workbenchBrowser } = await import(
+        './fixtures/workbench-browser.js'
+      )
+      await workbenchBrowser(
+        panel,
+        cwd,
+        (namespace, method, args) =>
+          ctx.typertGateway.invoke({ namespace, method, args, peer }),
+        () => {
+          panelScenario.emptyReason = false
+          panelScenario.writeup = true
+        },
+      )
+    }
 
-      await writeFile('dist/validation/panel-browser.json', JSON.stringify({ errors, state: await serviceState() }, null, 2))
-      async function serviceState() { return (ctx.get('sapperPanel') as TaskPanelService).state(String(parent.id)) }
-    } finally { await browser.close(); await new Promise<void>(resolve => server.close(() => resolve())) }
-  }
-  await consumer.dispose()
-}, process.env.SAPPER_BROWSER_PROBE === '1' ? 45000 : 20000)
+    await consumer.dispose()
+  },
+  process.env.SAPPER_BROWSER_PROBE === '1' ? 45000 : 20000,
+)
 
 it('resumes a failed legacy workspace graph through the panel without recreating facts or rerunning reason', async () => {
   const scenario = { forged: true, completesGoal: true }
   const { ctx, cwd, parent, dispatch, store, model } = await setup(scenario)
   const first = await dispatch()
   expect(first.state).toBe('failed')
-  const saved = await store.readRun(first.id), before = model.requests.length
+  const saved = await store.readRun(first.id),
+    before = model.requests.length
   scenario.forged = false
   const service = ctx.get('sapperPanel') as TaskPanelService
-  await service.action(String(parent.id), { action: 'resume', task_id: 'legacy' })
+  await service.action(String(parent.id), {
+    action: 'resume',
+    task_id: 'legacy',
+  })
   await service.whenIdle(cwd)
   expect(await service.state(String(parent.id))).toMatchObject({ active: 'legacy', job: { state: 'completed' }, graph: { status: 'completed', verified: 1 } })
   expect(await store.readRun(first.id)).toEqual(saved)
   expect((await store.read()).facts.find(f => f.id === 'f001')?.description).toBe('A local fixture.txt is available')
-  expect(model.requests.slice(before).some(r => !JSON.stringify(r.messages).includes('# Sapper explore') && !JSON.stringify(r.messages).includes('# Sapper verify'))).toBe(false)
+  expect(
+    model.requests
+      .slice(before)
+      .filter((r) => !JSON.stringify(r.messages).includes('SAPPER_MAIN_BRIEF'))
+      .some(
+        (r) =>
+          !JSON.stringify(r.messages).includes('# Sapper explore') &&
+          !JSON.stringify(r.messages).includes('# Sapper verify'),
+      ),
+  ).toBe(false)
 })
 it('keeps read-only panel starts out of the filesystem and reports the actual policy refusal', async () => {
   const { ctx, cwd, parent, store } = await setup({}, {}, false, 1, 'preset', false)
@@ -716,14 +837,23 @@ it('resumes a saved candidate with a fresh verifier instead of repeating explora
   expect(second.outcomes[0]?.candidate?.explorer_session).toBe(candidate?.explorer_session)
   expect(await store.readRun(first.id)).toEqual(originalRun)
 })
-it('publishes confirmed results and incomplete candidates back to the originating main session without starting a parent turn', async () => {
+it('publishes result cards and produces a single real parent brief without replaying on report', async () => {
   const scenario: Scenario = { maxTokens: 'verify' }
-  const { ctx, cwd, parent } = await setup(scenario, {}, true, 1, 'preset', false)
+  const { ctx, cwd, parent } = await setup(
+    scenario,
+    {},
+    true,
+    1,
+    'preset',
+    false,
+  )
   const results: import('../src/panel/result.js').TaskResult[] = []
   const parentTurns: string[] = []
   ctx.on('session/event', (session, event) => {
     if (session !== parent.session) return
-    if (event.type === 'sapper/result' && (!event.data.phase || event.data.phase === 'result')) results.push(event.data)
+    const result = resultOfEvent(event)
+    if (result && (!result.phase || result.phase === 'result'))
+      results.push(result)
     if (event.type === 'turn/start') parentTurns.push(event.type)
   })
   const service = ctx.get('sapperPanel') as TaskPanelService
@@ -732,14 +862,22 @@ it('publishes confirmed results and incomplete candidates back to the originatin
   expect(results).toHaveLength(1)
   expect(results[0]).toMatchObject({ state: 'failed', confirmed: [], candidates: [{ status: 'unverified', description: expect.stringContaining('VERIFIED-LOCAL-7C42') }] })
   delete scenario.maxTokens
-  await ctx.commands.execute(parent, '/sapper run', [], new AbortController().signal)
+  await ctx.commands.execute(
+    parent,
+    '/sapper run',
+    [],
+    new AbortController().signal,
+  )
   await service.whenIdle(cwd)
   expect(results).toHaveLength(2)
   expect(results[1]).toMatchObject({ state: 'completed', confirmed: [{ id: 'f002' }], candidates: [] })
-  expect(parentTurns).toEqual([])
+  await service.briefs.whenIdle(String(parent.id))
+  expect(parentTurns).toHaveLength(2)
   const report = await ctx.commands.execute(parent, '/sapper result', [], new AbortController().signal)
   expect(report?.result.kind).toBe('success')
   expect(results).toHaveLength(3)
+  await parent.whenIdle()
+  expect(parentTurns).toHaveLength(2)
 })
 
 it('denies extra evidence calls after entering finalization even when a model ignores the finish notice', async () => {
@@ -753,22 +891,34 @@ it('denies extra evidence calls after entering finalization even when a model ig
 it('ends on the first evidence-backed flag, immediately reports it, drains competing exploration and never starts verification or another reason', async () => {
   const { ctx, cwd, parent, model } = await setup({ flag: 'CTF2{STOP-FIRST-7C42}', proposals: 2, hangOther: true }, { orchestration: { maxSteps: 8, maxExplore: 8, concurrency: 2 } }, true, 1, 'preset', false)
   const events: import('../src/panel/result.js').TaskResult[] = []
-  ctx.on('session/event', (session, event) => { if (session === parent.session && event.type === 'sapper/result') events.push(event.data) })
+  ctx.on('session/event', (session, event) => {
+    if (session === parent.session && resultOfEvent(event))
+      events.push(resultOfEvent(event)!)
+  })
   const service = ctx.get('sapperPanel') as TaskPanelService
-  service.submit(parent, { action: 'start', goal: 'Find flag and stop immediately' })
-  expect(events[0]).toMatchObject({ phase: 'accepted', state: 'running' })
+  service.submit(parent, {
+    action: 'start',
+    goal: 'Find flag and stop immediately',
+  })
+  expect(events[0]).toMatchObject({ phase: 'accepted', state: 'queued' })
   await service.whenIdle(cwd)
-  const state = await service.state(String(parent.id)), run = state.runs[0]!
+  const state = await service.state(String(parent.id)),
+    run = state.runs[0]!
   expect(state.job?.state).toBe('completed')
   expect(run).toMatchObject({ state: 'completed', stop_reason: 'flag-found' })
-  expect(run.children?.filter(c => c.role === 'verify')).toEqual([])
-  expect(run.children?.filter(c => c.role === 'reason')).toHaveLength(1)
+  expect(run.children?.filter((c) => c.role === 'verify')).toEqual([])
+  expect(run.children?.filter((c) => c.role === 'reason')).toHaveLength(1)
   expect(events.find(e => e.phase === 'flag-found')).toMatchObject({ candidates: [{ description: 'CTF2{STOP-FIRST-7C42}', status: 'unverified' }] })
   expect(events.at(-1)).toMatchObject({ phase: 'result', confirmed: [], candidates: [{ description: 'CTF2{STOP-FIRST-7C42}' }] })
   expect(state.graph?.verified).toBe(0)
   expect(ctx.agents.list()).toEqual([parent])
-  const store = new GraphStore((await resolveSelectedStore(cwd, resolveConfig()))!, cwd)
-  expect((await store.read()).intents.every(i => i.worker === null)).toBe(true)
+  const store = new GraphStore(
+    (await resolveSelectedStore(cwd, resolveConfig()))!,
+    cwd,
+  )
+  expect((await store.read()).intents.every((i) => i.worker === null)).toBe(
+    true,
+  )
   expect((await store.read()).hints).toEqual([])
   expect(model.requests.filter(r => JSON.stringify(r.messages).includes('# Sapper verify'))).toEqual([])
 })
@@ -795,17 +945,60 @@ it('accepts a main-session steering tool, drains the old route and automatically
 
 it('allows WP and correction phases after a completed goal, preserves original evidence and does not treat historical flags as new success', async () => {
   const scenario: Scenario = { completesGoal: true, writeup: false }
-  const { ctx, cwd, parent, execute } = await setup(scenario, {}, true, 1, 'preset', false)
+  const { ctx, cwd, parent, execute } = await setup(
+    scenario,
+    {},
+    true,
+    1,
+    'preset',
+    false,
+  )
   const service = ctx.get('sapperPanel') as TaskPanelService
-  service.submit(parent, { action: 'start', goal: 'Verify original evidence' }); await service.whenIdle(cwd)
+  service.submit(parent, { action: 'start', goal: 'Verify original evidence' })
+  await service.whenIdle(cwd)
   const first = new GraphStore((await resolveSelectedStore(cwd, resolveConfig()))!, cwd), original = await first.read()
   expect(original.project.status).toBe('completed')
   scenario.writeup = true
   await ctx.commands.execute(parent, '/sapper wp Include the reproduction steps', [], new AbortController().signal)
   await service.whenIdle(cwd)
-  const wp = new GraphStore((await resolveSelectedStore(cwd, resolveConfig()))!, cwd)
-  expect(await readFile(path.join(cwd, 'WP.md'), 'utf8')).toContain('Reproduction:')
-  expect((await wp.read()).project).toMatchObject({ purpose: 'writeup', stop_on_flag: false })
+  const wp = new GraphStore(
+    (await resolveSelectedStore(cwd, resolveConfig()))!,
+    cwd,
+  )
+  expect(await readFile(path.join(cwd, 'WP.md'), 'utf8')).toContain(
+    'Reproduction:',
+  )
+  expect((await wp.read()).project).toMatchObject({
+    purpose: 'writeup',
+    stop_on_flag: false,
+  })
+  const wpBytes = await readFile(path.join(cwd, 'WP.md'), 'utf8')
+  const address = {
+    workspaceId: 'session:' + String(parent.id),
+    taskId: path.basename(wp.root),
+    runId: 'r001',
+  }
+  expect(
+    (await service.detail(address)).files.find((f) => f.name === 'WP.md')
+      ?.snapshot,
+  ).toBe(true)
+  await writeFile(
+    path.join(cwd, 'WP.md'),
+    'Later updated WP; flag now independently verified',
+  )
+  expect((await service.file(address, 'WP.md')).text).toBe(wpBytes)
+  expect(
+    (
+      await service.detail({
+        workspaceId: 'session:' + String(parent.id),
+        taskId: path.basename(first.root),
+        runId: 'r001',
+      })
+    ).state.graph?.goal,
+  ).toBe('Verify original evidence')
+  expect((await service.state(String(parent.id))).active).toBe(
+    path.basename(wp.root),
+  )
   expect((await wp.read()).facts.find(f => f.title === '前序任务与证据线索')?.doc).toContain('VERIFIED-LOCAL-7C42')
   scenario.writeup = false
   await execute('sapper_control', { action: 'continue', purpose: 'solve' })
@@ -856,4 +1049,564 @@ it('reports durable partial results after cancellation instead of losing already
   const state = await service.state(String(parent.id))
   expect(state.job).toMatchObject({ state: 'cancelled', result: { phase: 'result', confirmed: [{ description: 'Local fixture contains VERIFIED-LOCAL-7C42' }] } })
   expect(ctx.agents.list()).toEqual([parent])
+})
+
+async function mountNative(ctx: Context, cwd: string) {
+  const [
+    { default: Storage },
+    Json,
+    Domain,
+    Persistence,
+    { default: Workspace },
+    { default: Registry },
+    { RemoteAccessService },
+    { default: DefaultModel },
+    { default: Titles },
+    { default: Query },
+    { default: Controller },
+    { default: Gateway },
+  ] = await Promise.all([
+    import('@deepseek-ai/dsh-storage'),
+    import('@deepseek-ai/dsh-storage-json'),
+    import('@deepseek-ai/dsh-storage-domain'),
+    import('@deepseek-ai/dsh-session-persistence-jsonl'),
+    import('@deepseek-ai/dsh-workspace'),
+    import('@deepseek-ai/dsh-typert-registry'),
+    import('@deepseek-ai/dsh-api-remote-access'),
+    import('@deepseek-ai/dsh-agent-default-model'),
+    import('@deepseek-ai/dsh-session-title'),
+    import('@deepseek-ai/dsh-session-query'),
+    import('@deepseek-ai/dsh-api-session-controller'),
+    import('@deepseek-ai/dsh-api-gateway'),
+  ])
+  await ctx.plugin(Storage)
+  await ctx.plugin(Json, { root: path.join(cwd, 'profile', 'domains') })
+  await ctx.plugin(Domain, { backend: 'json' })
+  await ctx.plugin(Persistence, {
+    root: path.join(cwd, 'profile', 'sessions'),
+    compression: 'none',
+  })
+  await ctx.plugin(await import('@deepseek-ai/dsh-session-checkpoint-policy'))
+  await ctx.plugin(Workspace)
+  if (!ctx.get('typert')) await ctx.plugin(Registry)
+  if (!ctx.get('remoteAccess')) await ctx.plugin(RemoteAccessService)
+  if (!ctx.get('typertGateway')) await ctx.plugin(Gateway, {})
+  await ctx.plugin(DefaultModel, {
+    provider: 'fixture',
+    model: 'fixture-model',
+  })
+  await ctx.plugin(Titles, {
+    fallbackMaxWords: 8,
+    fallbackMaxBytes: 160,
+    maxTitleBytes: 512,
+  })
+  await ctx.plugin(Query, [])
+  // Upload intake is unrelated to these no-attachment fixtures. Native SessionController,
+  // WorkspaceRegistry, SessionQuery, Domain and JSONL persistence are not substituted.
+  ctx.provide('fileUploads', { registerAgentResolver: () => () => {} } as never)
+  ctx.provide('attachments', {
+    imageLimits: {
+      maxImageBytes: 1048576,
+      maxImagesPerMessage: 8,
+      maxMessageImageBytes: 8388608,
+      maxImagePixels: 16777216,
+      maxImageDimension: 8192,
+      mediaTypes: ['image/png'],
+    },
+  } as never)
+  await ctx.plugin(Controller, { nativeOpen: false })
+  await waitForRuntime(() => expect(ctx.get('sessionController')).toBeDefined())
+  const panel = ctx.get('sapperPanel') as TaskPanelService
+  await waitForRuntime(() => expect(panel.workbench.durable).toBe(true))
+  return panel
+}
+it.each(['workspace', 'session', 'title', 'command'] as const)(
+  'launches idempotently with native APIs, resumes %s failure and reads history without running',
+  async (stage) => {
+    const { ctx, cwd, disposeParent, model } = await setup(
+      { emptyReason: true },
+      {},
+      true,
+      1,
+      'global',
+      false,
+    )
+    const panel = await mountNative(ctx, cwd)
+    await disposeParent()
+    expect(ctx.agents.roots()).toHaveLength(0)
+    const { randomUUID } = await import('node:crypto'),
+      { readdir } = await import('node:fs/promises')
+    const input = {
+      requestId: randomUUID(),
+      rootDir: cwd,
+      title: '中文 CON:? 题目',
+      goal: '检查空目录并如实保存结果',
+    }
+    const failed =
+      stage === 'workspace'
+        ? vi
+            .spyOn(ctx.workspaceRegistry, 'create')
+            .mockRejectedValueOnce(new Error('temporary failure'))
+        : stage === 'session'
+          ? vi
+              .spyOn(ctx.sessionController, 'create')
+              .mockRejectedValueOnce(new Error('temporary failure'))
+          : stage === 'title'
+            ? vi
+                .spyOn(ctx.sessionController, 'rename')
+                .mockRejectedValueOnce(new Error('temporary failure'))
+            : vi
+                .spyOn(panel, 'startNative')
+                .mockRejectedValueOnce(new Error('temporary failure'))
+    await expect(panel.launch(input)).rejects.toThrow('temporary failure')
+    const partial = panel.workbench.snapshot().launches[input.requestId]!
+    if (stage !== 'workspace') expect(partial.workspaceId).toBeDefined()
+    if (stage === 'title' || stage === 'command')
+      expect(partial.sessionId).toBeDefined()
+    expect(partial.jobId).toBeUndefined()
+    const [one, two] = await Promise.all([
+      panel.launch(input),
+      panel.launch(input),
+    ])
+    expect(one).toEqual(two)
+    if (partial.sessionId) expect(one.sessionId).toBe(partial.sessionId)
+    if (partial.workspaceId) expect(one.workspaceId).toBe(partial.workspaceId)
+    expect(failed).toHaveBeenCalledTimes(2)
+    expect(
+      (await readdir(cwd)).filter((n) => n.startsWith('中文 CON')),
+    ).toHaveLength(1)
+    await panel.whenIdle(one.cwd)
+    await panel.briefs.whenIdle(one.sessionId!)
+    const overview = await panel.overview()
+    expect(overview).toMatchObject({
+      durable: true,
+      available: true,
+      preferences: { parallelism: 2 },
+    })
+    const challenge = overview.challenges.find((c) => c.cwd === one.cwd)!
+    expect(challenge.phases).toHaveLength(1)
+    expect(
+      ctx.workspaceRegistry.get(one.workspaceId as never)?.sessionIds,
+    ).toContain(one.sessionId)
+    const address = {
+      workspaceId: one.workspaceId!,
+      taskId: challenge.taskId,
+      runId: 'r001',
+    }
+    const before = model.requests.length,
+      events = ctx.sessions
+        .get(SessionId(one.sessionId!))!
+        .snapshotEvents().length
+    expect((await panel.detail(address)).address).toEqual(address)
+    expect((await panel.node(address, 'f001')).description).toBeTruthy()
+    await panel.detail(address)
+    await panel.overview()
+    await panel.seen(challenge.id)
+    await panel.launch(input)
+    expect(model.requests).toHaveLength(before)
+    expect(
+      ctx.sessions.get(SessionId(one.sessionId!))!.snapshotEvents(),
+    ).toHaveLength(events)
+    await expect(panel.launch({ ...input, goal: 'different' })).rejects.toThrow(
+      '同一启动请求',
+    )
+    await expect(
+      panel.detail({ ...address, workspaceId: 'unknown' }),
+    ).rejects.toThrow('工作区不存在')
+    await expect(
+      panel.file(address, '../profile/domains/sapper_workbench.json'),
+    ).rejects.toThrow('可预览文件')
+  },
+)
+it('keeps two challenges running, queues the third without model requests, applies a lower limit only to later admission and cancels queued work', async () => {
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const { ctx, cwd, parent, model } = await setup(
+    {
+      beforeRead: async (signal) => {
+        await Promise.race([
+          gate,
+          new Promise<void>((_, reject) => {
+            signal.addEventListener('abort', () => reject(signal.reason), {
+              once: true,
+            })
+          }),
+        ])
+      },
+    },
+    {},
+    true,
+    1,
+    'global',
+    false,
+  )
+  const harness = {
+    create: async (
+      id: SessionId,
+      agentOptions: import('@deepseek-ai/dsh-agent').AgentOptions,
+      meta: { cwd: string },
+    ) => (await ctx.agents.create({ sessionId: id, agentOptions, meta })).agent,
+  }
+  const { mkdir } = await import('node:fs/promises')
+  const parents = [parent]
+  for (let i = 1; i < 4; i++) {
+    const dir = path.join(cwd, '题目' + i)
+    await mkdir(dir)
+    await writeFile(path.join(dir, 'fixture.txt'), 'VERIFIED-LOCAL-7C42\n')
+    parents.push(
+      await harness.create(
+        SessionId('queue-' + i),
+        { provider: 'fixture', model: 'fixture-model' },
+        { cwd: dir },
+      ),
+    )
+  }
+  const panel = ctx.get('sapperPanel') as TaskPanelService
+  const accepted = parents.map((p, i) =>
+    panel.submit(p, { action: 'start', goal: 'queue test ' + i }),
+  )
+  await waitForRuntime(() =>
+    expect(
+      Object.values(panel.workbench.snapshot().jobs).filter(
+        (j) => j.state === 'running',
+      ),
+    ).toHaveLength(2),
+  )
+  await waitForRuntime(() =>
+    expect(
+      model.requests.filter((r) =>
+        JSON.stringify(r.messages).includes('# Sapper explore'),
+      ),
+    ).toHaveLength(2),
+  )
+  expect(
+    Object.values(panel.workbench.snapshot().jobs).find(
+      (j) => j.id === accepted[2]!.job_id,
+    )?.state,
+  ).toBe('queued')
+  const count = model.requests.length
+  await panel.preferences({ rootDir: '', parallelism: 1 })
+  expect(
+    Object.values(panel.workbench.snapshot().jobs).filter(
+      (j) => j.state === 'running',
+    ),
+  ).toHaveLength(2)
+  expect(model.requests.length).toBe(count)
+  panel.submit(parents[2]!, { action: 'cancel' })
+  await panel.whenIdle(parents[2]!.session.header.cwd!)
+  expect(panel.workbench.snapshot().jobs[accepted[2]!.job_id!]?.state).toBe(
+    'cancelled',
+  )
+  await panel.preferences({ rootDir: '', parallelism: 3 })
+  await waitForRuntime(() =>
+    expect(
+      Object.values(panel.workbench.snapshot().jobs).filter(
+        (j) => j.state === 'running',
+      ),
+    ).toHaveLength(3),
+  )
+  release()
+  await Promise.all(
+    parents
+      .filter((_, i) => i !== 2)
+      .map((p) => panel.whenIdle(p.session.header.cwd!)),
+  )
+  expect(
+    model.requests.some((r) =>
+      JSON.stringify(r.messages).includes('queue test 2'),
+    ),
+  ).toBe(false)
+})
+it('performs only the selected candidate verification despite another ready route and leaves the old run immutable', async () => {
+  const { ctx, cwd, parent, store, dispatch, model } = await setup(
+    { flag: 'flag{alpha13-local}', proposals: 2 },
+    { orchestration: { maxParallel: 2, maxExplore: 2, maxSteps: 2 } },
+    true,
+  )
+  const first = await dispatch(),
+    snapshot = await store.readRun(first.id),
+    outcome = first.outcomes.find((o) => o.candidate)!
+  const panel = ctx.get('sapperPanel') as TaskPanelService,
+    before = model.requests.length
+  panel.submit(parent, {
+    action: 'verify',
+    task_id: 'legacy',
+    run_id: first.id,
+    intent_id: outcome.intent_id,
+  })
+  await panel.whenIdle(cwd)
+  const second = (await store.listRuns()).at(-1)!
+  expect(second.children?.map((c) => c.role)).toEqual(['verify'])
+  expect(second.outcomes).toHaveLength(1)
+  expect(second.outcomes[0]?.state).toBe('confirmed')
+  expect(await store.readRun(first.id)).toEqual(snapshot)
+  expect(
+    model.requests
+      .slice(before)
+      .filter((r) => !JSON.stringify(r.messages).includes('SAPPER_MAIN_BRIEF'))
+      .every((r) => JSON.stringify(r.messages).includes('# Sapper verify')),
+  ).toBe(true)
+})
+it('waits for native DSH child capacity without spending model budget, and admits a waiting exploration after release', async () => {
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const { ctx, cwd, parent, model, read } = await setup(
+    {
+      proposals: 2,
+      beforeRead: async (signal) =>
+        Promise.race([
+          gate,
+          new Promise<void>((_, reject) => {
+            signal.addEventListener('abort', () => reject(signal.reason), {
+              once: true,
+            })
+          }),
+        ]),
+    },
+    { orchestration: { maxParallel: 2, maxExplore: 2, maxSteps: 2 } },
+    true,
+    1,
+    'global',
+    false,
+    1,
+  )
+  const panel = ctx.get('sapperPanel') as TaskPanelService
+  panel.submit(parent, { action: 'start', goal: 'Capacity admission fixture' })
+  try {
+    await waitForRuntime(() => expect(read).toHaveBeenCalledTimes(1))
+    const count = model.requests.length
+    await new Promise((resolve) => setTimeout(resolve, 250))
+    expect(model.requests).toHaveLength(count)
+  } finally {
+    release()
+  }
+  await panel.whenIdle(cwd)
+  expect(
+    Object.values(panel.workbench.snapshot().jobs).every(
+      (j) => j.state === 'completed',
+    ),
+  ).toBe(true)
+  expect(
+    (await panel.state(String(parent.id))).runs[0]?.outcomes.filter(
+      (o) => o.state === 'confirmed',
+    ),
+  ).toHaveLength(2)
+})
+it('queues the automatic brief behind a busy parent and generates one text-only turn after it becomes idle', async () => {
+  const { createUserMessage } = await import('@deepseek-ai/dsh-llm')
+  let release!: () => void
+  const userGate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const { ctx, cwd, parent } = await setup(
+      { userGate },
+      {},
+      true,
+      1,
+      'global',
+      false,
+    ),
+    panel = ctx.get('sapperPanel') as TaskPanelService
+  parent.followup(
+    createUserMessage({
+      content: [{ type: 'text', text: 'USER_BUSY' }],
+      source: { kind: 'user' },
+    }),
+  )
+  await waitForRuntime(() => expect(parent.status).toBe('running'))
+  panel.submit(parent, {
+    action: 'start',
+    goal: 'Background work while parent busy',
+  })
+  await panel.whenIdle(cwd)
+  const briefs = Object.values(panel.workbench.snapshot().briefs)
+  expect(briefs).toHaveLength(1)
+  expect(briefs[0]?.state).toBe('queued')
+  release()
+  await parent.whenIdle()
+  await panel.briefs.whenIdle(String(parent.id))
+  expect(Object.values(panel.workbench.snapshot().briefs)[0]?.state).toBe(
+    'completed',
+  )
+  const count = parent.session
+    .snapshotEvents()
+    .filter((e) => e.type === 'turn/start').length
+  await panel.overview()
+  await panel.state(String(parent.id))
+  expect(
+    parent.session.snapshotEvents().filter((e) => e.type === 'turn/start'),
+  ).toHaveLength(count)
+})
+it('denies an automatic brief attempting to restart orchestration, keeps its result card, then permits tools in ordinary user dialogue', async () => {
+  const { createUserMessage } = await import('@deepseek-ai/dsh-llm'),
+    scenario: Scenario = { summaryAttack: true }
+  const { ctx, cwd, parent, read } = await setup(
+      scenario,
+      {},
+      true,
+      1,
+      'global',
+      false,
+    ),
+    panel = ctx.get('sapperPanel') as TaskPanelService
+  panel.submit(parent, { action: 'start', goal: 'Brief isolation fixture' })
+  await panel.whenIdle(cwd)
+  await panel.briefs.whenIdle(String(parent.id))
+  expect(Object.values(panel.workbench.snapshot().jobs)).toHaveLength(1)
+  expect(Object.values(panel.workbench.snapshot().briefs)[0]?.state).toBe(
+    'failed',
+  )
+  expect(
+    parent.session
+      .snapshotEvents()
+      .some((e) => resultOfEvent(e)?.phase === 'result'),
+  ).toBe(true)
+  const before = read.mock.calls.length
+  scenario.summaryAttack = false
+  scenario.userRead = true
+  parent.followup(
+    createUserMessage({
+      content: [
+        { type: 'text', text: 'USER_AFTER_BRIEF: please read fixture.txt' },
+      ],
+      source: { kind: 'user' },
+    }),
+  )
+  await parent.whenIdle()
+  expect(read.mock.calls.length).toBe(before + 1)
+  scenario.userRead = false
+  await panel.retryBrief(Object.values(panel.workbench.snapshot().jobs)[0]!.id)
+  await panel.briefs.whenIdle(String(parent.id))
+  expect(Object.values(panel.workbench.snapshot().briefs)[0]?.state).toBe(
+    'completed',
+  )
+})
+it('prioritizes a real user queued immediately after followup without losing or duplicating the automatic brief', async () => {
+  const { createUserMessage } = await import('@deepseek-ai/dsh-llm')
+  const { ctx, cwd, parent, model } = await setup(
+      { userGate: Promise.resolve() },
+      {},
+      true,
+      1,
+      'global',
+      false,
+    ),
+    panel = ctx.get('sapperPanel') as TaskPanelService
+  let inserted = false
+  ctx.on('agent/inbox/inserted', ({ agent, message }) => {
+    if (
+      agent === parent &&
+      message.source.kind === 'sapper-dsh' &&
+      message.source.form === 'brief' &&
+      !inserted
+    ) {
+      inserted = true
+      parent.followup(
+        createUserMessage({
+          content: [
+            { type: 'text', text: 'USER_BUSY: real user has priority' },
+          ],
+          source: { kind: 'user' },
+        }),
+      )
+    }
+  })
+  panel.submit(parent, { action: 'start', goal: 'User priority fixture' })
+  await panel.whenIdle(cwd)
+  await panel.briefs.whenIdle(String(parent.id))
+  const parentRequests = model.requests.filter(
+    (r) =>
+      !JSON.stringify(r.messages).includes('# Sapper reason') &&
+      !JSON.stringify(r.messages).includes('# Sapper explore') &&
+      !JSON.stringify(r.messages).includes('# Sapper verify'),
+  )
+  expect(parentRequests).toHaveLength(2)
+  expect(JSON.stringify(parentRequests[0]?.messages)).not.toContain(
+    'SAPPER_MAIN_BRIEF',
+  )
+  expect(JSON.stringify(parentRequests[1]?.messages)).toContain(
+    'SAPPER_MAIN_BRIEF',
+  )
+  expect(Object.values(panel.workbench.snapshot().briefs)[0]?.state).toBe(
+    'completed',
+  )
+})
+it('restores queued native challenges after a host restart, marks prior runners interrupted and never replays them', async () => {
+  const first = await setup({ hang: true }, {}, true, 1, 'global', false),
+    panel = await mountNative(first.ctx, first.cwd),
+    { randomUUID } = await import('node:crypto')
+  const launches: import('../src/workbench/contracts.js').LaunchRecord[] = []
+  for (let i = 0; i < 3; i++)
+    launches.push(
+      await panel.launch({
+        requestId: randomUUID(),
+        rootDir: first.cwd,
+        title: '重启题目' + i,
+        goal: 'Recover queued challenge ' + i,
+      }),
+    )
+  await waitForRuntime(() =>
+    expect(
+      Object.values(panel.workbench.snapshot().jobs).filter(
+        (j) => j.state === 'running',
+      ),
+    ).toHaveLength(2),
+  )
+  await waitForRuntime(() =>
+    expect(
+      first.model.requests.filter((r) =>
+        JSON.stringify(r.messages).includes('# Sapper explore'),
+      ),
+    ).toHaveLength(2),
+  )
+  expect(panel.workbench.snapshot().jobs[launches[2]!.jobId!]?.state).toBe(
+    'queued',
+  )
+  await first.ctx.fiber.dispose()
+  const second = await setup(
+      { emptyReason: true },
+      {enabled:false},
+      true,
+      1,
+      'global',
+      false,
+    ),
+    restored = await mountNative(second.ctx, first.cwd)
+  expect(restored.workbench.snapshot().jobs[launches[2]!.jobId!]?.state).toBe('queued')
+  expect(second.model.requests).toHaveLength(0)
+  second.setConfig({enabled:true})
+  const resolved = await second.ctx.sessionController.resolveAgent(
+    SessionId(launches[2]!.sessionId!),
+  )
+  expect(resolved).not.toHaveProperty('error')
+  await waitForRuntime(() =>
+    expect(restored.workbench.snapshot().jobs[launches[2]!.jobId!]?.state).toBe(
+      'completed',
+    ),
+  )
+  expect(restored.workbench.snapshot().jobs[launches[0]!.jobId!]?.state).toBe(
+    'interrupted',
+  )
+  expect(restored.workbench.snapshot().jobs[launches[1]!.jobId!]?.state).toBe(
+    'interrupted',
+  )
+  expect(
+    second.model.requests.filter((r) =>
+      JSON.stringify(r.messages).includes('# Sapper reason'),
+    ),
+  ).toHaveLength(1)
+  await restored.briefs.whenIdle(launches[2]!.sessionId!)
+  expect(Object.values(restored.workbench.snapshot().briefs)).toHaveLength(1)
+})
+
+it.each(['failed','completed'] as const)('does not replay a %s automatic brief left in a restored inbox',async state=>{
+  const {createUserMessage}=await import('@deepseek-ai/dsh-llm'),{ctx,parent,model}=await setup({}, {},true,1,'global',false),panel=ctx.get('sapperPanel') as TaskPanelService
+  const message=createUserMessage({content:[{type:'text',text:'SAPPER_MAIN_BRIEF old automatic message'}],source:{kind:'sapper-dsh',form:'brief',sections:[]}})
+  await panel.workbench.change(d=>{d.briefs.old={jobId:'old',sessionId:String(parent.id),messageId:String(message.id),state}})
+  parent.followup(message);await parent.whenIdle()
+  expect(model.requests).toHaveLength(0);expect(panel.workbench.snapshot().briefs.old?.state).toBe(state)
 })

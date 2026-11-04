@@ -1,3 +1,4 @@
+import { setTimeout as waitCapacity } from 'node:timers/promises'
 import { randomUUID, createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { readFile } from 'node:fs/promises'
@@ -20,7 +21,12 @@ import { renderGraphContext } from '../render/snapshot.js'
 import { UNTRUSTED_NOTICE } from '../render/context.js'
 import { isMutation } from '../tools/graph.js'
 import { normalize } from '../recall/index.js'
-import { SCHEMAS, parseProposals, parseCandidate, parseVerification } from './types.js'
+import {
+  SCHEMAS,
+  parseProposals,
+  parseCandidate,
+  parseVerification,
+} from './types.js'
 import type { DispatchMode, CapturedCall } from './types.js'
 import { ChildBudget } from './budget.js'
 
@@ -43,7 +49,17 @@ const readTools = new Set(['sapper_status', 'sapper_fact', 'sapper_intent', 'sap
 export class Orchestrator {
   private children = new Map<string, Child>()
   private active = new Map<string, AbortController>()
-  constructor(private ctx: Context, private getConfig: () => Config, private alive: () => boolean, private progress?: (parent: Agent, root: string, run: RunRecord, stage: string) => Promise<void>) {
+  constructor(
+    private ctx: Context,
+    private getConfig: () => Config,
+    private alive: () => boolean,
+    private progress?: (
+      parent: Agent,
+      root: string,
+      run: RunRecord,
+      stage: string,
+    ) => Promise<void>,
+  ) {
     ctx.on('agent/created', async ({ agent }) => {
       const child = this.children.get(String(agent.id))
       if (!child) return
@@ -62,7 +78,7 @@ export class Orchestrator {
       if (child.role !== 'reason' && !external.length) throw new StopRunError(`SAPPER_M3_TOOL_UNAVAILABLE: ${child.role} 未获得白名单中的外部取证工具；可见工具: ${tools.join(', ')}。请检查 DSH preset 与 orchestration.${child.role === 'explore' ? 'exploreTools' : 'verifyTools'}，增加 token 预算无法补齐工具。`)
       return undefined
     })
-    ctx.tools.guard(exec => this.denial(exec))
+    ctx.tools.guard((exec) => this.denial(exec))
     ctx.on('tools/result', (exec, result) => {
       const child = this.children.get(String(exec.agent?.id))
       if (!child || result.isError || !this.external(child, exec.name)) return
@@ -104,9 +120,15 @@ export class Orchestrator {
     })
     ctx.effect(() => () => { for (const controller of this.active.values()) controller.abort(new StoreError('Sapper 已卸载')); for (const child of this.children.values()) child.controller.abort(new StoreError('Sapper 已卸载')) })
   }
-  isChild(agent: Agent): boolean { return this.children.has(String(agent.id)) }
-  isActive(root: string): boolean { return this.active.has(root) }
-  cancel(root: string): void { this.active.get(root)?.abort(new StoreError('用户取消任务')) }
+  isChild(agent: Agent): boolean {
+    return this.children.has(String(agent.id))
+  }
+  isActive(root: string): boolean {
+    return this.active.has(root)
+  }
+  cancel(root: string): void {
+    this.active.get(root)?.abort(new StoreError('用户取消任务'))
+  }
   private external(child: Child, name: string): boolean {
     return child.role !== 'reason' && !name.startsWith('sapper_') && name !== 'structured_output' &&
       !!this.ctx.tools.get(name, child.parent) &&
@@ -132,35 +154,75 @@ export class Orchestrator {
     if (provider.inheritsParentContext || !provider.prepareContinuable || !provider.capabilities.outputSchema || !provider.capabilities.agentOptions || !provider.capabilities.depthLimit) throw new StoreError('M3 需要独立上下文、结构化输出、模型选择与深度限制的本地 spawn 提供者')
     return service
   }
-  private async child(role: Child['role'], data: unknown, parent: Agent, config: Config, signal: AbortSignal, guard: () => void, onReady: Child['onReady']) {
-    guard(); signal.throwIfAborted()
-    const service = this.preflight(), session = randomUUID() as SessionId
-    const controller = new AbortController(), onAbort = () => controller.abort(signal.reason)
+  private async child(
+    role: Child['role'],
+    data: unknown,
+    parent: Agent,
+    config: Config,
+    signal: AbortSignal,
+    guard: () => void,
+    onReady: Child['onReady'],
+  ) {
+    guard()
+    signal.throwIfAborted()
+    const service = this.preflight(),
+      session = randomUUID() as SessionId
+    const controller = new AbortController(),
+      onAbort = () => controller.abort(signal.reason)
     signal.addEventListener('abort', onAbort, { once: true })
     if (signal.aborted) onAbort()
     const child: Child = { role, controller, config, guard, calls: new Map(), budget: new ChildBudget(config.orchestration, config.orchestration.budgetMode === 'adaptive' && role !== 'reason'), progress: new Set(), onReady, parent }
     this.children.set(session, child)
-    const timer = setTimeout(() => controller.abort(new StopRunError('子代理超时')), config.orchestration.timeoutMin * 60000)
-    const poll = setInterval(() => { try { guard() } catch (error) { controller.abort(error) } }, 500)
-    let activation: Awaited<ReturnType<typeof service.startActivation>> | undefined
-    const stop = () => { void activation?.dispose().catch(() => {}) }
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const poll = setInterval(() => {
+      try {
+        guard()
+      } catch (error) {
+        controller.abort(error)
+      }
+    }, 500)
+    let activation:
+      | Awaited<ReturnType<typeof service.startActivation>>
+      | undefined
+    const stop = () => {
+      void activation?.dispose().catch(() => {})
+    }
     try {
       const root = path.dirname(require.resolve('sapper-dsh/package.json'))
-      const prompt = await readFile(path.join(root, 'resources', 'prompts', role + '.md'), 'utf8')
+      const prompt = await readFile(
+        path.join(root, 'resources', 'prompts', role + '.md'),
+        'utf8',
+      )
       const selected = config.orchestration.models[role], agentOptions: AgentOptions = { maxTokens: config.orchestration.maxOutputTokens }
       if (selected !== 'inherit') {
         const colon = selected.indexOf(':')
         if (colon >= 0) { agentOptions.provider = selected.slice(0, colon); agentOptions.model = selected.slice(colon + 1) }
         else agentOptions.model = selected
       }
-      guard(); controller.signal.throwIfAborted()
-      activation = await service.startActivation({ provider: 'spawn', childId: session, label: `Sapper ${role}`, delivery: 'caller', signal: controller.signal,
+      guard()
+      controller.signal.throwIfAborted()
+      for (;;) {
+        try {
+          activation = await service.startActivation({ provider: 'spawn', childId: session, label: `Sapper ${role}`, delivery: 'caller', signal: controller.signal,
         request: { parent, cwd: parent.session.header.cwd!, prompt: [{ type: 'text', text: prompt + '\n\n' + UNTRUSTED_NOTICE + '\n' + JSON.stringify(data) }],
           outputSchema: SCHEMAS[role], agentOptions, maxDepth: service.resolveMaxDepth() ?? 1 } })
+          break
+        } catch (error) {
+          if ((error as { code?: string }).code !== 'ACTIVATION_LIMIT_REACHED')
+            throw error
+          await waitCapacity(200, undefined, { signal: controller.signal })
+          guard()
+        }
+      }
+      timer = setTimeout(
+        () => controller.abort(new StopRunError('子代理超时')),
+        config.orchestration.timeoutMin * 60000,
+      )
       controller.signal.addEventListener('abort', stop, { once: true })
       if (controller.signal.aborted) stop()
       const result = await activation.result
-      controller.signal.throwIfAborted(); guard()
+      controller.signal.throwIfAborted()
+      guard()
       if (result.stopReason !== 'completed' || result.structured === undefined) throw new StopRunError(`子代理 ${role} 未完成结构化结果：${result.stopReason}（maxOutputTokens=${config.orchestration.maxOutputTokens}）；本次运行停止，不重复 reason 消耗预算`)
       if (child.capabilities) child.capabilities.state = 'completed'
       return { value: result.structured, session, calls: child.calls }
@@ -169,21 +231,34 @@ export class Orchestrator {
       try { await activation?.dispose() } finally { controller.signal.removeEventListener('abort', stop); clearTimeout(timer); clearInterval(poll); signal.removeEventListener('abort', onAbort); this.children.delete(session) }
     }
   }
-  async dispatch(mode: DispatchMode, store: GraphStore, actor: string, parent: Agent, options: WriteOptions, intentId?: string, sourceRunId?: string): Promise<RunRecord> {
+  async dispatch(
+    mode: DispatchMode,
+    store: GraphStore,
+    actor: string,
+    parent: Agent,
+    options: WriteOptions,
+    intentId?: string,
+    sourceRunId?: string,
+  ): Promise<RunRecord> {
     validateConfig(this.getConfig())
     if (this.isChild(parent)) throw new StoreError('M3 子代理不能递归编排')
-    this.preflight(); options.guard?.(); options.signal?.throwIfAborted()
-    if (this.active.has(store.root)) throw new StoreError('当前工作区已有 M3 运行，请先等待其结束或取消')
+    this.preflight()
+    options.guard?.()
+    options.signal?.throwIfAborted()
+    if (this.active.has(store.root))
+      throw new StoreError('当前工作区已有 M3 运行，请先等待其结束或取消')
     const controller = new AbortController(), signal = AbortSignal.any([controller.signal, ...(options.signal ? [options.signal] : [])])
     this.active.set(store.root, controller)
-    const config = structuredClone(this.getConfig()), runOptions = { ...options, signal }
+    const config = structuredClone(this.getConfig()),
+      runOptions = { ...options, signal }
     const deadline = setTimeout(() => controller.abort(new StopRunError('运行时长上限已到，已保留可恢复的结果')), config.orchestration.runTimeoutMin * 60000)
     let record: RunRecord | undefined
     const guard = () => { options.guard?.(); signal.throwIfAborted(); if (!this.alive() || !this.getConfig().enabled || JSON.stringify(config) !== JSON.stringify(this.getConfig())) throw new StoreError('Sapper 已关闭或配置已改变') }
     try {
       guard()
       record = await store.beginRun(mode, actor, runOptions)
-      const run = record, managed = { ...runOptions, managedRun: run.id }
+      const run = record,
+        managed = { ...runOptions, managedRun: run.id }
       const stopOnFlag = (await store.read()).project.stop_on_flag !== false
       let foundFlag = false
       const pipelines = new Set<AbortController>()
@@ -232,12 +307,16 @@ export class Orchestrator {
       const attempt = async (nodeId: string, existing?: RunOutcome) => {
         guard()
         if (foundFlag) return
-        const pipeline = new AbortController(); pipelines.add(pipeline)
+        const pipeline = new AbortController()
+        pipelines.add(pipeline)
         const pipelineSignal = AbortSignal.any([signal, pipeline.signal])
         await store.intentAction('claim', nodeId, actor, undefined, managed)
         const outcome: RunOutcome = existing ? structuredClone(existing) : { intent_id: nodeId, state: 'pending-verification', verify_attempts: 0 }
-        outcome.state = 'pending-verification'; delete outcome.fact_id; delete outcome.error
-        run.outcomes.push(outcome); run.steps++
+        outcome.state = 'pending-verification'
+        delete outcome.fact_id
+        delete outcome.error
+        run.outcomes.push(outcome)
+        run.steps++
         await store.saveRun(run, runOptions)
         try {
           if (!existing) {
@@ -264,12 +343,19 @@ export class Orchestrator {
             }
             return
           }
-          outcome.state = 'failed'; outcome.error = (error as Error).message
+          outcome.state = 'failed'
+          outcome.error = (error as Error).message
           // Cleanup may record a cancellation, but still rechecks current file permissions/config.
           const { signal: _cancelled, ...cleanup } = options
-          try { await store.failManaged(nodeId, actor, run, outcome.error, cleanup) } catch { /* Revoked writes leave a visible claimed intent for explicit recovery. */ }
+          try {
+            await store.failManaged(nodeId, actor, run, outcome.error, cleanup)
+          } catch {
+            /* Revoked writes leave a visible claimed intent for explicit recovery. */
+          }
           if (signal.aborted || mustStop(error)) throw error
-        } finally { pipelines.delete(pipeline) }
+        } finally {
+          pipelines.delete(pipeline)
+        }
       }
       if (mode === 'reason') await reason()
       else if (mode === 'verify') {
@@ -308,15 +394,27 @@ export class Orchestrator {
         }
         run.stop_reason ??= (await store.read()).project.status === 'completed' ? 'goal-completed' : 'budget-exhausted'
       }
-      guard(); run.state = !foundFlag && run.outcomes.some(o => o.state === 'failed') ? 'failed' : 'completed'
+      guard()
+      run.state =
+        !foundFlag && run.outcomes.some((o) => o.state === 'failed')
+          ? 'failed'
+          : 'completed'
       await store.saveRun(run, runOptions)
       return run
     } catch (error) {
       if (!record) throw error
-      record.state = signal.aborted ? 'cancelled' : 'failed'; record.stop_reason = (error as Error).message
+      record.state = signal.aborted ? 'cancelled' : 'failed'
+      record.stop_reason = (error as Error).message
       const { signal: _cancelled, ...cleanup } = options
-      try { await store.saveRun(record, cleanup) } catch { /* Never override revoked write authority for bookkeeping. */ }
+      try {
+        await store.saveRun(record, cleanup)
+      } catch {
+        /* Never override revoked write authority for bookkeeping. */
+      }
       return record
-    } finally { clearTimeout(deadline); this.active.delete(store.root) }
+    } finally {
+      clearTimeout(deadline)
+      this.active.delete(store.root)
+    }
   }
 }

@@ -92,3 +92,15 @@ CI 和打包阶段均执行；各版本的桌面验收分别记录。
 TaskPanelService 接收引擎的阶段通知，使用同一个 job_id 更新持久化主会话卡片。steer 先取消并等待原 ToolRuntime 执行体及子会话排空，再自动发起 linked continue；cancel 会删除排队方向。普通聊天通过 sapper_control 进入同一服务，仍受工具策略和根会话归属限制。
 
 求解运行收到经过成功工具回执检查的 flag 候选后，调度器设置 flag-found 并取消其余流水线，释放未完成意图，保存候选并正常结束本轮；不自动提升 confirmed。completed 项目之后的 WP/纠错以新任务图延续，parent_task/purpose 链接历史，历史数据作为 note 继承。writeup 明确关闭 flag 早停，solve 维持早停。旧图和已确认事实保持可追溯。
+
+## alpha.13 比赛工作台
+
+客户端通过原生 sidebar.panellist（id=sapper）和 main（key=sapper）注册全局工作台，输入框和设置页入口跳转到同一处。根服务保持连接、轮询任务目录和持有相关 Session 引用，详情组件只负责展示；切换页面不会结束后台工作。
+
+NativeWorkbench 将 requestId 对应的目录、原生 Workspace、Session 和 job 标识逐步保存到独立 storageDomain sapper_workbench。每一步可继续，内容不删除；目录使用安全题名、时间、随机后缀与请求标识。TaskPanelService 持有宿主队列与运行取消信号，通过 CommandRuntime 快速登记用户目标，再经 ToolRuntime 执行。独立域存储队列与界面偏好，编排 Config 的权限撤销/变更检查保持原语义。
+
+所有详情查询按 workspaceId/taskId/runId 读取 GraphStore，不调用 selectTask、submit、report 或 dispatch。执行接口独立暴露 taskAction；定向 verify 只传入被选中的来源 run 和 intent。求解、WP 和纠错阶段通过 parent_task 聚合为题目，旧记录中的 flag 可信状态按当次运行读取。
+
+Briefs 在结果持久化后调用 Agent.followup，忙碌或真实用户待处理时延后。简报 job ID 和消息 ID 在独立域去重；agent/pre-step 识别该自动轮，tools.guard 禁用其工具，turn/end 记录完成/失败。后台执行使用宿主持有的不可伪造 AbortSignal 与自动简报区分；正常用户轮不继承约束。失败提供显式重试，重启不重放已完成内容。
+
+alpha.13 的可见结果记录使用 SDK `appendPluginRecord` 写 `plugin:sapper-dsh/result`（ignorable），冷恢复会保留并跳过未知记录；客户端校验 payload 并保持旧已加载 `sapper/result` 卡片兼容。旧版必需自定义事件可能被 DSH JSONL 冷恢复拒绝，不自动修改用户日志。新 WP 同时存入阶段的 `artifacts/rNNN/WP.md` 与 snapshot.json，文件预览优先读取所选运行的快照。

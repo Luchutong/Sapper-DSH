@@ -1,45 +1,70 @@
-# 任务面板与普通工作区
+# Sapper 比赛工作台
 
-适用版本：0.1.0-alpha.12，DSH 0.2.1-rc.2。
+适用版本：0.1.0-alpha.13，DSH 0.2.1-rc.2。
 
-## 日常使用
+## 开始使用
 
-1. 在 DSH 打开任意已有目录的普通对话，选择可用模型和会话权限。
-2. 点击输入框左下角、权限选择附近的 **Sapper 任务** 按钮，打开独立任务窗口；插件设置页也有同一任务面板，自动列出打开的工作区会话。
-3. 输入明确目标，点击 **发起任务**。插件自动建立任务图、登记用户目标与目录上下文，并启动 reason → explore → verify。
-4. 在 **运行进度** 查看子代理阶段、步数与自动延长记录；在 **事实图** 查看输入事实、意图和结果之间的关系；在 **结果与候选** 查看结论及未完成原因。关闭面板不会取消后台任务；**取消任务**会停止并回收子会话。
-5. 预算结束或可重试失败后点击 **继续当前任务**。任务历史里的 **打开任务**可切换并继续未完成任务；已完成任务可查看，并通过 **编写 WP** 或 **重新运行 / 纠正 flag** 启动关联的后续阶段。
+1. 点击桌面左侧 **Sapper 比赛工作台**，无需先打开工作区或会话。输入框附近和插件设置页的按钮也跳转到这里。
+2. 点击 **新建题目**，首次使用 **选择文件夹** 指定比赛根目录；之后会记住。只需填写任务目标，题名可选。提交前可检查或调整有效模型、Agent preset 和权限，默认沿用最近明确选择；不会自动提升权限。
+3. 点击 **创建并开始**。自动建立安全命名的独立题目目录、DSH 原生工作区和命名主会话，登记目标并受理后台任务，然后打开主会话。输入框可继续编辑。
+4. 默认两题同时执行，其余 FIFO 排队；工作台右上角可调为 1–8。降低并行数不取消已运行题目；排队期间没有子代理或模型请求。DSH 自身的子代理容量限制仍生效。
+5. 发现带实际工具证据的 flag 后停止本轮并回传。候选与独立复核分别标注；正常元数据写入不重复确认，执行工具仍服从所选权限。
 
-也可直接输入 `/sapper start 检查本项目的构建并记录结果`。启动命令立即返回后台任务编号，输入框随即恢复编辑；不会等模型整轮执行结束。已有图用 `/sapper run` 后台继续。原 `sapper_task` / `sapper_dispatch` 工具仍保持等待执行结果的语义。
+创建请求有持久化 requestId。失败不会删除已经创建的目录、文件、工作区或会话；点击 **继续创建** 或列表中的 **创建未完成** 复用同一请求。重复点击和断线重试不会再建一份。要更换失败请求的目标或目录，点击 **另建题目**。题目目录含时间和随机后缀，同名、中文、Windows 保留名称均有处理。
 
-运行中可用 `/sapper job` 查看当前后台任务、阶段、已验证事实与失败原因，`/sapper runs` 查看运行记录；`/sapper cancel` 立即请求取消，随后状态从 `cancelling` 变为 `cancelled`。清理结束前不能重复发起任务。普通聊天与状态查询可继续使用。
+## 查看与干预
 
-命令启动的任务与窗口共用后台管理器。按钮始终显示在输入框附近，点击即可查看当前任务；窗口通过 portal 放在页面顶层，避免被输入框容器裁切。运行时仍可编辑下一条目标，发起按钮在当前任务结束前保持禁用，避免误建重复任务。
+左栏按题目聚合求解、独立复核和 WP，提供目标搜索与运行中/排队/已结束筛选。右侧固定标题和状态，分为：
 
-不需要创建专用测试工作区、预置 sample.txt、手工 init、源事实或意图。选择当前已打开会话是为了沿用它的目录、模型、工具和权限。没有打开会话时，先打开 DSH 的普通对话即可。
+- **概览**：目标、候选/已复核 flag、单个候选的独立复核、方向输入和执行操作。
+- **执行记录**：阶段、历史运行、路线结果与活动；预算、子会话和原始错误折叠显示。
+- **证据**：探索和独立复核使用的不同子会话、工具回执与摘要。
+- **事实图**：按依赖分层；适应视口、缩放、拖动、重置、键盘选择节点与完整标题；明确显示未纳入视图的节点数。
+- **文件**：打开本题 WP.md 与 evidence/ 中的文本文件。新生成 WP 同时归档在该阶段 `artifacts/rNNN/WP.md`，历史查看优先呈现当次字节快照，列表明确区分快照与当前文件；单个归档上限 4 MiB，失败不会删除原文件。预览最多 64,000 字符，只呈现文本，不执行 HTML 或脚本。
 
-## 存储与兼容
+点击题目、切换阶段或执行记录、打开文件均不启动模型，不切换宿主当前执行图，不回传重复结果。执行接口按 `workspaceId + taskId + runId` 定位，同为 r001 的不同阶段不会混用。
 
-新任务保存到当前目录的 `.sapper/tasks/t-<UUID>/`，每个任务仍使用 Python 兼容的 project/facts/intents/hints/runs 文件。`.sapper/tasks/index.json` 原子登记任务列表和当前任务。图工具、上下文注入、命令和编排都读取所选任务。
+运行中点击 **停止任务** 或填写 **调整探索方向**。停止会等待真实工具体和子代理清理；方向调整保留证据，清理后建立关联阶段。结束后可：
 
-旧 `.sapper/project.json` 不迁移、不覆盖，在面板显示为原任务（ID `legacy`）。旧失败运行和 ready 意图可以直接继续，运行历史保留。若旧图是不完整的 M0 预览或无法读取，面板显示诊断，新任务的启动与状态监控不受未选中的旧图影响。新建任务不污染旧任务的事实、计数器和目标。
+- **独立复核**：只验证选定运行的某个候选，不启动其他 ready 路线。
+- **继续当前阶段**：显式继续该阶段可恢复工作；已完成阶段不会被重复求解。
+- **编写 WP**：建立关联的 writeup 阶段，写入并独立读取 WP.md；历史生成记录保留生成时的 flag 验证状态。
+- 填写纠错要求后 **按要求重新运行**：建立关联 solve 阶段，重查错误 flag 或探索新方向，原阶段和证据保留。
 
-自动登记的“任务上下文”只是用户要求和实际会话目录，属于 observed，不是目标已成立的证据；confirmed 仍需 explore 和另一个 verify 子会话分别成功调用外部工具。
+已有工作区仍可用 `/sapper start <目标>`、`/sapper run`、`/sapper job`、`/sapper cancel`、`/sapper steer <方向>`、`/sapper wp [要求]`、`/sapper retry [要求]` 与 `/sapper continue <目标>`。普通对话可通过 sapper_control 干预，重复启动会被后台管理器拒绝。原 sapper_task / sapper_dispatch 兼容入口仍等待执行结果；日常启动优先使用工作台或快速受理命令。
 
-面板打开、刷新、状态查询都只读。启动操作经 DSH ToolRuntime 执行，完全权限自动通过 Sapper 自身确认，受限模式保留原政策，只读模式返回失败原因。面板 RPC 仅供本机 owner 使用，操作绑定实际会话，不接受客户端提交存储路径或权限。
+## 主会话结果
 
-## 本次测试与边界
+受理、进展和核心 flag 即时显示为可见卡片，长 WP/证据在详情和文件中查看。任务保存最终结果后调用 **Agent.followup()** 唤醒主助手，生成一次真实文本简报；主会话忙碌时延后，不中断用户。真实用户消息优先处理。
 
-包含真实 DSH AgentLoop、SubagentRuntime、ToolRuntime、主客端 Typert Gateway 测试；本地确定性模型用于验证流程和接口，不代表在线模型的任务判断质量。桌面安装后的实际模型效果仍需在真实任务中观察。
+自动简报轮次由宿主禁用所有工具并限制为一次模型请求，避免自动重启编排。约束只属于该轮，不影响后续普通用户对话，也不会误拦截用户明确提交的后台任务。简报按执行 job ID 持久化去重，刷新、阶段更新、打开历史不会重复生成。失败保留卡片和证据，可在概览点击 **重试简报**。手动 `/sapper result` 仍可按需补发卡片，不触发第二次自动简报。
 
-浏览器探针使用构建后的 lazy-CJS 客户端、React、真实宿主 Gateway 和子代理流程，检查输入目标、点击启动、自动创建第二个任务、独立复核和页面错误；截图保存在本地 `dist/validation/panel-desktop.png`。可在安装 Playwright Chromium 后运行：
+## 持久化与恢复
+
+题目事实图仍为 Python 兼容的 `.sapper/tasks/t-UUID/`，`.sapper/tasks/index.json` 记录阶段及关联关系；旧 `.sapper/project.json` 作为 legacy 保留。
+
+宿主独立 storageDomain `sapper_workbench` 保存根目录、并行数、模型/preset/权限偏好、创建步骤、队列、结果和简报去重。UI 和队列偏好不属于编排 Config，调整它们不会使正在运行的配置指纹失效。页面切换不卸载后台管理器；客户端根服务持有相关会话引用。重启恢复排队项，执行中项目显示 **已中断**，须显式继续/恢复；完成任务和旧简报不重放。
+
+RPC 只向 DSH 本机 owner 开放。查询只能定位已登记工作区及其图；文件预览受目录边界、符号链接和白名单约束。创建目录由用户显式选择的比赛根目录限定；图和外部工具继续执行原有权限、归属、证据与完整性约束。
+
+## 验证
+
+自动化覆盖真实 DSH SlotCore、LayoutController、主客端 Typert Gateway、WorkspaceRegistry、SessionController、CommandRuntime、AgentLoop、SubagentRuntime、ToolRuntime、storageDomain/JSON 与 JSONL 会话存储。上传通道在无附件测试中使用简单替身；模型使用确定性适配器，不代表线上模型判断质量。
 
 ```sh
+corepack pnpm check
+# 安装 Playwright Chromium 后；先构建完成，再启动探针，避免读取中间产物
 corepack pnpm build
-SAPPER_BROWSER_PROBE=1 corepack pnpm exec vitest run tests/orchestration.test.ts -t 'Typert Gateways'
+SAPPER_BROWSER_PROBE=1 corepack pnpm exec vitest run tests/orchestration.test.ts -t 'actual client and host Typert'
 ```
 
-当前事实图为只读交互视图，可选择节点和横向滚动；图编辑器、其余高级设置与普通聊天自动触发仍未开放。子代理预算及工具可见性继续由当前 DSH preset 和 Sapper 配置约束，失败不会写入伪造 confirmed 事实。
+最终 lazy-CJS 客户端的浅色/深色及 1024/1280/1440 宽度截图与报告保存在 `dist/validation/workbench-*`。自动化检查原生左侧插槽入口、创建目录与主会话、输入可编辑、只读历史、图缩放及本题 WP 文件预览。Windows 隔离安装与四项 CI 结果见 [alpha.13 验收](alpha13-validation.md)。test4 原始记录只读。
+
+交互结构参考 [Vibe Kanban 的工作区分栏](https://github.com/BloopAI/vibe-kanban/blob/main/packages/web-core/src/pages/workspaces/WorkspacesLayout.tsx) 和 [OpenHands 的文件与详情组织](https://github.com/OpenHands/OpenHands/blob/main/.agents/skills/verify-openhands/references/feature-map/F08-workspace-files-and-changes.md)，未引入其代码或运行依赖。
+
+## 历史版本经验
+
+以下保留各版本的问题与修复过程；旧窗口和设置页内任务面板已由上述工作台替代。
 
 ## alpha.9 首次命令启动阻塞的经验
 

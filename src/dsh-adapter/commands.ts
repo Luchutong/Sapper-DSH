@@ -1,6 +1,9 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { CommandDefinitionId } from '@deepseek-ai/dsh-commands/brand'
-import type { CommandInvocation, CommandResult } from '@deepseek-ai/dsh-commands'
+import type {
+  CommandInvocation,
+  CommandResult,
+} from '@deepseek-ai/dsh-commands'
 import type { Config } from '../settings.js'
 import { GraphStore } from '../store/graph.js'
 import { resolveSelectedStore } from '../store/tasks.js'
@@ -14,24 +17,45 @@ import { UNTRUSTED_NOTICE } from '../render/context.js'
 import type { TaskPanelService } from './panel.js'
 import { randomUUID } from 'node:crypto'
 
-const USAGE = '/sapper [status | graph | frontier | recall <query> | flag | kb <query|kb001> | start <goal> | run | runs | job | result | steer <方向> | continue <目标> | retry [纠错要求] | wp [要求] | cancel]'
-export function registerSapperCommand(ctx: Context, getConfig: () => Config, alive: () => boolean, jobs: Pick<TaskPanelService, 'submit' | 'state' | 'report'>): () => void {
+const USAGE =
+  '/sapper [status | graph | frontier | recall <query> | flag | kb <query|kb001> | start <goal> | run | runs | job | result | steer <方向> | continue <目标> | retry [纠错要求] | wp [要求] | verify <task_id> <run_id> <intent_id> | cancel]'
+export function registerSapperCommand(
+  ctx: Context,
+  getConfig: () => Config,
+  alive: () => boolean,
+  jobs: Pick<TaskPanelService, 'submit' | 'state' | 'report'>,
+): () => void {
   let sync = () => {}
   const kb = new KnowledgeBase()
-  const handler = async (invocation: CommandInvocation): Promise<CommandResult> => {
+  const handler = async (
+    invocation: CommandInvocation,
+  ): Promise<CommandResult> => {
     try {
       invocation.signal.throwIfAborted()
       const config = getConfig()
       if (!alive() || !config.enabled) throw new StoreError('Sapper 已关闭')
       const input = invocation.rawInput.trim()
       const [command = 'status', ...tail] = input.split(/\s+/u).filter(Boolean)
-      const query = tail.join(' ')
+      const query = input.slice(command.length).trim()
       const cwd = invocation.agent.session.header.cwd
       if (['steer', 'continue', 'retry', 'wp'].includes(command)) {
         if ((command === 'steer' || command === 'continue') && !query) return { kind: 'error', text: USAGE }
         const goal = command === 'wp' ? `根据前序任务证据编写本地 WP（解题报告），保存为 WP.md；不重新访问外部目标。${query}` : query
         const accepted = jobs.submit(invocation.agent, { action: command === 'steer' ? 'steer' : 'continue', ...(goal ? { goal } : {}), purpose: command === 'wp' ? 'writeup' : 'solve' })
         return { kind: 'success', text: `已受理（${accepted.job_id}）。${command === 'steer' ? '停止原路线后自动按新方向继续。' : '已保留前序任务，正在启动后续阶段。'}` }
+      }
+      if (command === 'verify') {
+        if (tail.length !== 3) return { kind: 'error', text: USAGE }
+        const accepted = jobs.submit(invocation.agent, {
+          action: 'verify',
+          task_id: tail[0]!,
+          run_id: tail[1]!,
+          intent_id: tail[2]!,
+        })
+        return {
+          kind: 'success',
+          text: `独立复核已受理（${accepted.job_id}），只复核选定候选。`,
+        }
       }
       if (command === 'start' || command === 'run' || command === 'cancel') {
         if (command === 'start' ? !query : tail.length) return { kind: 'error', text: USAGE }
@@ -70,13 +94,19 @@ export function registerSapperCommand(ctx: Context, getConfig: () => Config, ali
       if (!await store.initialized()) return { kind: 'success', text: 'Sapper: uninitialized；请在授权任务中调用 sapper_init。' }
       const graph = await store.read()
       invocation.signal.throwIfAborted()
-      if (!alive() || !getConfig().enabled) throw new StoreError('Sapper 已关闭')
+      if (!alive() || !getConfig().enabled)
+        throw new StoreError('Sapper 已关闭')
       if (command === 'graph') return { kind: 'success', text: renderGraphView(graph, config.context.maxChars) }
       const data = command === 'recall' ? { matches: recallGraph(graph, query, config.context.recallTopK), warnings: graph.warnings }
         : command === 'flag' ? { entries: store.flagEntries(graph.facts), warnings: graph.warnings }
           : graphStatus(graph, { fullAccess: hasFullAccess(ctx, invocation), actor: String(invocation.agent.id) }, command === 'frontier')
-      return { kind: 'success', text: UNTRUSTED_NOTICE + '\n' + JSON.stringify(data, null, 2) }
-    } catch (error) { return { kind: 'error', text: (error as Error).message } }
+      return {
+        kind: 'success',
+        text: UNTRUSTED_NOTICE + '\n' + JSON.stringify(data, null, 2),
+      }
+    } catch (error) {
+      return { kind: 'error', text: (error as Error).message }
+    }
   }
   ctx.inject(['commands'], child => {
     let dispose: (() => void) | undefined

@@ -9,7 +9,7 @@ import type { ConfigForm, ConfigForms } from '@deepseek-ai/dsh-client-ui-setting
 export type BrowserSettingsScope = Pick<ConfigForm<unknown>, 'getSnapshot' | 'subscribe' | 'set' | 'mutate'>
 
 interface SlotOptions {
-  name: 'plugins.item' | 'settings.section' | 'conversation.composer.dock' | 'conversation.input.left' | 'conversation.chat.node'
+  name: 'plugins.item' | 'settings.section' | 'conversation.composer.dock' | 'conversation.input.left' | 'conversation.chat.node' | 'sidebar.panellist' | 'main'
   id?: string
   key?: string
   label?: string
@@ -17,6 +17,9 @@ interface SlotOptions {
 }
 
 export interface BrowserContext {
+  layout?: { selectPanel(id: 'sapper' | null): void }
+  uiWorkspace?: { pickDirectory(): Promise<string | null>; openSession(id: string): void }
+  sessions?: { retain(id: string, options: { source: 'sapperTask' }): { ready: Promise<unknown>; release(): void } }
   remote?: TypertClientRemote
   uiConversation?: { events: Pick<ConversationEventRegistry, 'register'> }
   inject(services: string[], setup: (ctx: BrowserContext) => void): unknown
