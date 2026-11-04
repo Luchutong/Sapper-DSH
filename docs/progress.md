@@ -127,4 +127,4 @@ alpha.10 本地验证：135 项测试（12 文件）、类型、双端构建、�
 
 alpha.11 验证：144 项测试（13 文件，其中 42 项真实 SDK 编排/面板测试）、类型、双端构建、冻结锁文件离线安装和官方兼容/包检查通过。另对最终构建运行 4 项宿主回归，包含真实 scoped Gateway、构建客户端浏览器窗口/结果流程、超过旧 12 步复核、复用候选及主会话结果回传。同版本 SDK 实际历史组装器与 Chat builder 覆盖实时与历史结果展示。确定性模型测试不代替在线桌面模型验收。
 
-产物 `sapper-dsh-0.1.0-alpha.11.tgz`，SHA256 `8e8c6a9686817319005bde22ba8ef72d2100074d58bb7e0c9535c116d82e3ae9`，已复制到 Windows `D:\BaiduSyncdisk\sapper移植`。DSH 0.2.1-rc.2 隔离 profile 升级退出 0，无兼容豁免；已安装宿主 SHA256 与本地构建相同（`d1bab8d72b58e2735e407f3bf8f7d2158afcdad2a2842cefce4ebf12f14bb907`）。没有修改日常 desktop profile。
+产物 `sapper-dsh-0.1.0-alpha.11.tgz`，SHA256 `9e41b8e5c6a4e1f7b735fb4858b8b90688170f5568bd72264934ef52bcab146d`，已复制到 Windows `D:\BaiduSyncdisk\sapper移植`。DSH 0.2.1-rc.2 隔离 profile 升级退出 0，无兼容豁免；已安装宿主 SHA256 与本地构建相同（`052f65c3b4a76200251a7ad995764636c6011bf7474f80a7e46d4ffd40c18388`）。没有修改日常 desktop profile。

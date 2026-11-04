@@ -478,7 +478,7 @@ it('drives the task panel through actual client and host Typert Gateways with st
   ctx.on('session/event', (session, event) => { if (session === parent.session && event.type === 'sapper/result') panelResults.push(event.data) })
   await invoke('action', { sessionId: String(parent.id), input: { action: 'start', goal: 'Verify local fixture' } })
   await (ctx.get('sapperPanel') as TaskPanelService).whenIdle(cwd)
-  expect(await invoke('state', { sessionId: String(parent.id) })).toMatchObject({ job: { state: 'completed' }, graph: { status: 'completed', verified: 1 } })
+  expect(await invoke('state', { sessionId: String(parent.id) })).toMatchObject({ job: { state: 'completed', result: { stop_reason: 'goal-completed' } }, graph: { status: 'completed', verified: 1 } })
   await expect(ctx.typertGateway.invoke({ namespace: 'sapperPanel', method: 'action', args: { sessionId: String(parent.id), input: { action: 'start', cwd: '/forged' } }, peer })).rejects.toThrow()
   if (process.env.SAPPER_BROWSER_PROBE === '1') {
     const { chromium } = await import('playwright-core')

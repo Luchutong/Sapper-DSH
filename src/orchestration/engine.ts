@@ -274,7 +274,7 @@ export class Orchestrator {
           const rejected = results.find(r => r.status === 'rejected')
           if (rejected?.status === 'rejected') throw rejected.reason
         }
-        run.stop_reason ??= 'budget-exhausted'
+        run.stop_reason ??= (await store.read()).project.status === 'completed' ? 'goal-completed' : 'budget-exhausted'
       }
       guard(); run.state = run.outcomes.some(o => o.state === 'failed') ? 'failed' : 'completed'
       await store.saveRun(run, runOptions)
