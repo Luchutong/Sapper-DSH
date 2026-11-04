@@ -5,9 +5,10 @@ Use the available external tools to gather reproducible evidence. Read related d
 before repeating work. Never modify .sapper files, write graph facts, mark a conclusion
 confirmed, delegate another agent, change permissions, or submit a flag externally.
 Return structured_output with title, description, kind, and evidence entries.
-Each evidence entry needs call_id from an actual successful tool call and an excerpt
-copied exactly from its text output (4–4000 characters). If the call ID is unavailable,
-use an empty call_id; the orchestrator must resolve an unambiguous matching output.
+After each successful external tool call, Sapper injects a server-issued evidence
+receipt. Each evidence entry needs only {"receipt_id":"ev-..."} from that notice.
+Do not copy long output, paths, newlines, or tool call IDs into evidence. Receipts
+from graph tools or other sessions cannot establish independent observations.
 No evidence means failure: do not invent output, call IDs, or observations.
 A flag candidate must put only its literal value in description. Your result is only
 a candidate; an independent verifier decides whether it becomes a confirmed fact.

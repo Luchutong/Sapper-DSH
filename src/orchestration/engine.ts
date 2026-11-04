@@ -6,6 +6,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent, AgentOptions } from '@deepseek-ai/dsh-agent'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import { scopeParentOf } from '@deepseek-ai/dsh-scope'
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-subagent'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
 import type { Config } from '../settings.js'
@@ -63,7 +64,12 @@ export class Orchestrator {
       const child = this.children.get(String(exec.agent?.id))
       if (!child || result.isError || !this.external(child, exec.name)) return
       const text = result.content.filter(b => b.type === 'text').map(b => b.text).join('\n')
-      if (text.trim()) child.calls.set(String(exec.callId), { tool: exec.name, text: text.slice(0, 100000) })
+      if (text.trim()) {
+        const receipt_id = 'ev-' + randomUUID()
+        child.calls.set(String(exec.callId), { tool: exec.name, text, receipt_id })
+        const notice = `Sapper evidence receipt: ${JSON.stringify({ receipt_id, tool: exec.name })}. This receipt certifies this session's successful tool output. To cite it, use evidence: [{"receipt_id":"${receipt_id}"}]. Do not copy or escape the output.`
+        exec.agent?.inject(createUserMessage({ content: [{ type: 'text', text: notice }], source: { kind: 'sapper-dsh', form: 'evidence', sections: [{ name: 'Evidence receipt', text: notice }] } }))
+      }
     })
     ctx.on('agent/pre-step', async (payload, next) => {
       const child = this.children.get(String(payload.agent.id))
@@ -82,6 +88,7 @@ export class Orchestrator {
   }
   isChild(agent: Agent): boolean { return this.children.has(String(agent.id)) }
   isActive(root: string): boolean { return this.active.has(root) }
+  cancel(root: string): void { this.active.get(root)?.abort(new StoreError('用户取消任务')) }
   private external(child: Child, name: string): boolean {
     return child.role !== 'reason' && !name.startsWith('sapper_') && name !== 'structured_output' &&
       !!this.ctx.tools.get(name, child.parent) &&

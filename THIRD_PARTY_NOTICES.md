@@ -17,5 +17,12 @@ The reference and runner are excluded from the npm package. Python is needed
 only to run development compatibility tests; desktop users do not need it.
 
 DSH SDK packages, React and build dependencies retain their respective licenses.
-They are either host-provided peers or development dependencies and are not
-vendored into this repository.
+Except for the bundled helpers listed below, they are host-provided peers or
+development dependencies.
+
+The alpha.8 host/client bundles include Zod 4.4.3 (MIT, copyright 2025 Colin
+McDonnell); its complete license is included at `resources/licenses/zod-MIT.txt`.
+The browser bundle also includes the pure Remote-info helper from
+`@deepseek-ai/dsh-typert-protocol` 0.2.1-rc.2 (MIT, copyright 2026 DeepSeek);
+its license is at `resources/licenses/dsh-typert-protocol-MIT.txt`. Other SDK
+runtime modules remain host-provided peers.

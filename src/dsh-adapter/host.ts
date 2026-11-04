@@ -7,7 +7,7 @@ import type { ToolExecution } from '@deepseek-ai/dsh-tools'
 import type {} from './message.js'
 import type { Config } from '../settings.js'
 import { PLUGIN_NAME } from '../constants.js'
-import { resolveStorePath } from '../store/paths.js'
+import { resolveSelectedStore } from '../store/tasks.js'
 import { readProjectSummary } from '../store/project.js'
 import { renderProjectContext } from '../render/context.js'
 import { createGraphTools, isMutation, requiresExplicitApproval } from '../tools/graph.js'
@@ -21,6 +21,8 @@ import { renderGraphContext } from '../render/snapshot.js'
 import { registerSapperCommand } from './commands.js'
 import { Orchestrator } from '../orchestration/engine.js'
 import { createDispatchTool } from '../tools/dispatch.js'
+import { createTaskTool } from '../tools/task.js'
+import { registerTaskPanel } from './panel.js'
 
 function isOwnSnapshot(message: unknown): boolean {
   const source = (message as UserMessage).source
@@ -29,7 +31,7 @@ function isOwnSnapshot(message: unknown): boolean {
 
 export function registerRuntime(ctx: Context, getConfig: () => Config): void {
   let alive = true
-  const bindings = new Map<symbol, { config: string; cwd: string | undefined; permission?: string }>()
+  const bindings = new Map<symbol, { config: string; cwd: string | undefined; root?: string | undefined; permission?: string }>()
   ctx.effect(() => () => { alive = false; bindings.clear() })
   const ensureBinding = (exec: ToolExecution) => {
     if (!alive || !getConfig().enabled) throw new StoreError('Sapper 已关闭或卸载')
@@ -41,6 +43,7 @@ export function registerRuntime(ctx: Context, getConfig: () => Config): void {
   }
   const authorize = (exec: ToolExecution, root: string) => {
     const binding = ensureBinding(exec)
+    if (binding.root !== root) throw new StoreError('当前任务在调用期间已切换；请重新发起写入')
     const permission = writePermission(ctx, exec, root)
     if (binding.permission !== permission.fingerprint) throw new StoreError('DSH 会话文件权限已变化，原写入已取消')
     return permission.fullAccess
@@ -48,9 +51,12 @@ export function registerRuntime(ctx: Context, getConfig: () => Config): void {
   const fullAccess = (exec: Pick<ToolExecution, 'agent'>) => hasFullAccess(ctx, exec)
   const dispatcher = new Orchestrator(ctx, getConfig, () => alive)
   const dispatching = new Set<symbol>()
-  const tools = [...createGraphTools(getConfig, () => alive, authorize, fullAccess), ...createRecallTools(getConfig, () => alive), createDispatchTool(getConfig, () => alive, authorize, dispatcher, {
-    start: exec => { dispatching.add(exec.token) }, finish: exec => { dispatching.delete(exec.token); bindings.delete(exec.token) },
-  })]
+  const taskPanel = registerTaskPanel(ctx, getConfig, () => alive)
+  const lifecycle = {
+    start: (exec: ToolExecution) => { dispatching.add(exec.token); taskPanel.executionStarted(exec) }, finish: (exec: ToolExecution) => { dispatching.delete(exec.token); bindings.delete(exec.token); taskPanel.executionFinished(exec) },
+  }
+  const tools = [...createGraphTools(getConfig, () => alive, authorize, fullAccess), ...createRecallTools(getConfig, () => alive),
+    createDispatchTool(getConfig, () => alive, authorize, dispatcher, lifecycle), createTaskTool(getConfig, () => alive, authorize, dispatcher, lifecycle)]
   const syncCommand = registerSapperCommand(ctx, getConfig, () => alive)
   const kb = new KnowledgeBase()
   let unregister: (() => void) | undefined
@@ -73,7 +79,7 @@ export function registerRuntime(ctx: Context, getConfig: () => Config): void {
     try {
       ensureBinding(exec)
       if (isMutation(exec.name, exec.arguments)) {
-        const root = resolveStorePath(exec.agent?.session.header.cwd, getConfig())
+        const root = bindings.get(exec.token)?.root
         if (!root) throw new StoreError('图写入需要绝对工作区路径')
         authorize(exec, root)
       }
@@ -84,13 +90,14 @@ export function registerRuntime(ctx: Context, getConfig: () => Config): void {
     const roleDenial = dispatcher.denial(exec)
     if (roleDenial) return { kind: 'deny', reason: roleDenial }
     if (!tools.some(tool => tool.name === exec.name)) return next()
-    const binding: { config: string; cwd: string | undefined; permission?: string } = {
+    const binding: { config: string; cwd: string | undefined; root?: string | undefined; permission?: string } = {
       config: JSON.stringify(getConfig()), cwd: exec.agent?.session.header.cwd,
     }
+    binding.root = await resolveSelectedStore(binding.cwd, getConfig())
     bindings.set(exec.token, binding)
     if (isMutation(exec.name, exec.arguments)) {
       try {
-        const root = resolveStorePath(binding.cwd, getConfig())
+        const root = binding.root
         if (!root) throw new StoreError('图写入需要绝对工作区路径')
         binding.permission = writePermission(ctx, exec, root).fingerprint
       } catch (error) { return { kind: 'deny', reason: (error as Error).message } }
@@ -98,7 +105,7 @@ export function registerRuntime(ctx: Context, getConfig: () => Config): void {
     const decision = await next()
     if (decision.kind !== 'allow' || !isMutation(exec.name, exec.arguments)) return decision
     try {
-      const root = resolveStorePath(binding.cwd, getConfig())
+      const root = binding.root
       if (!root || !binding.cwd) throw new StoreError('图写入需要绝对工作区路径')
       const fullAccess = authorize(exec, root)
       if (requiresExplicitApproval(exec.name, exec.arguments)) {
@@ -109,7 +116,7 @@ export function registerRuntime(ctx: Context, getConfig: () => Config): void {
         }
       }
     } catch (error) { return { kind: 'deny', reason: (error as Error).message } }
-    const dispatchApproval = exec.name === 'sapper_dispatch' && getConfig().orchestration.requireApproval
+    const dispatchApproval = (exec.name === 'sapper_dispatch' || exec.name === 'sapper_task') && getConfig().orchestration.requireApproval
     if (hasFullAccess(ctx, exec) || (getConfig().store.approval !== 'always' && !requiresExplicitApproval(exec.name, exec.arguments) && !dispatchApproval)) return decision
     return { kind: 'ask', reason: `Sapper workspace write: ${exec.name}`,
       displayReason: { en: 'Allow Sapper to modify the current workspace graph?', zh: '允许 Sapper 修改当前工作区的事实图？' } }
@@ -124,7 +131,7 @@ export function registerRuntime(ctx: Context, getConfig: () => Config): void {
     const config = getConfig()
     if (!config.enabled || !config.context.inject || messages.length === 0) return { ...decision, messages }
     try {
-      const root = resolveStorePath(payload.agent.session.header.cwd, config)
+      const root = await resolveSelectedStore(payload.agent.session.header.cwd, config)
       if (!root) return { ...decision, messages }
       const cwd = payload.agent.session.header.cwd
       const store = new GraphStore(root, cwd)

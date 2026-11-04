@@ -1,8 +1,10 @@
 # 项目进度
 
-更新：2026-11-04（Asia/Shanghai）。当前 alpha.7，DSH 0.2.1-rc.2。
+**当前交付 alpha.8：任务面板、普通工作区自动建图、独立证据回执。M2 用户验收已通过；alpha.7 的真实 M3 验收失败已作为本版回归依据。最新说明见文末与 [任务面板](task-panel.md)。**
 
-**M0/M1 已验收；本次桌面反馈确认 M2 通过。alpha.6 的 M3 因工具作用域与 token 耗尽失败，alpha.7 修复后待重跑。**
+更新：2026-11-04（Asia/Shanghai）。当前 alpha.8，DSH 0.2.1-rc.2。
+
+**M0/M1 已验收；本次桌面反馈确认 M2 通过。alpha.6 的 M3 因工具作用域与 token 耗尽失败，alpha.7 工具传递已恢复，但桌面证据转义仍失败；alpha.8 修复并加入任务面板。**
 [阶段跟踪 issue #1](https://github.com/Luchutong/Sapper-DSH/issues/1)。
 
 | 阶段 | 状态 | 交付 |
@@ -12,8 +14,9 @@
 | alpha.4 权限修复 | 用户反馈正常 | 普通图维护连续自动执行 |
 | alpha.5 完全权限修复 / M2 | alpha.6 桌面反馈通过 | 完全权限确认门、frontier/历史/预算、recall/离线 KB、只读命令 |
 | alpha.6 / M3 | 桌面验收遇阻 | 真实子代理、证据门、运行记录、预算/并发/模型/取消/恢复 |
-| alpha.7 / M3 修复 | 工程修复，桌面待重跑 | preset 工具继承、native 呈现、缺能力/预算耗尽停止、工具清单 |
-| M4 | 未开始 | 完整设置页、诊断 RPC、图预览 |
+| alpha.7 / M3 修复 | 工具可用，证据门禁仍遇阻 | preset 工具继承、native 呈现、缺能力/预算耗尽停止、工具清单 |
+| alpha.8 / M3 优化与面板 | 工程回归通过 | 回执证据、普通工作区任务隔离、发起/继续/取消面板与 RPC |
+| M4 完整设置/图编辑 | 部分开始 | 完整高级表单与图编辑器仍待实现 |
 | M5 | 未开始 | 干净环境、迁移与最终发行验收 |
 
 ## 本次桌面反馈与修复
@@ -87,3 +90,15 @@ TS/Python 写者须顺序交接，Python 不提供本插件 M3 门禁。
 本机交付：`D:\BaiduSyncdisk\sapper移植\sapper-dsh-0.1.0-alpha.7.tgz`，附 SHA256 文件。
 SHA256：`8ee81d62be82236a7911f44ddbaea8fedcb75e984e51d56ea4aecd1378ac0c41`。
 仓库 dist 与 Windows 同步目录一致，旧 alpha.6 包保留。
+
+## alpha.8：证据回执与任务面板
+
+用户 alpha.7 实测证明外部 pwsh 工具已经可用，但引用中的再次转义导致 exact-excerpt 拒绝真实输出，M3 仍未通过桌面验收。本版以每个子会话的服务端证据回执替代模型复制长输出，保存原始调用标识、工具、摘要与输出 SHA256；verify 必须获得自己独立调用的回执。
+
+新增普通工作区任务面板（会话输入区与插件设置页），发起/继续/取消和任务记录；新目标自动建独立任务图，旧 legacy 图可继续，不要求专用 workspace 或手工造图。RPC 经主客端 Typert 与 ToolRuntime，沿用真实会话权限。
+
+回归新增 Windows 路径/CRLF 输出、回执隔离、普通目录从零启动、多个任务隔离、旧失败图继续、面板后台取消、只读拒绝、真实主客端 Gateway 与 UI 操作。详见 [任务面板](task-panel.md)。原始用户测试记录保留本地，不将确定性模型测试表述为真实模型验收通过。
+
+alpha.8 最终工程验证：131 项测试（12 文件）通过；34 项真实 M3/面板编排测试覆盖回执、隔离、旧图继续、权限及取消，主客端 Typert Gateways 均实际参与。构建产物浏览器探针通过、pageerror 为零，并确认第二个任务在面板显示完成；冻结锁文件离线安装、包内依赖/兼容检查通过。Windows 隔离 profile 完成 alpha.7 → alpha.8 安装，退出码 0，无版本豁免；安装后 host SHA256 与本地 lib 完全一致。
+
+交付包：`sapper-dsh-0.1.0-alpha.8.tgz`，SHA256 `19e326e01833aa569d4c0b968a75dd1d870251a18e1a5e7762444df5d78d65e8`。副本位于 Windows `D:\BaiduSyncdisk\sapper移植`。现有 desktop profile 和用户验收事实图未修改。

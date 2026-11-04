@@ -1,7 +1,7 @@
 import type { FactKind } from './types.js'
 import { object, text, StoreError } from './validation.js'
 
-export interface Evidence { call_id: string; tool: string; excerpt: string }
+export interface Evidence { call_id: string; tool: string; excerpt: string; receipt_id?: string; sha256?: string }
 export interface Candidate {
   title: string; description: string; kind: FactKind; evidence: Evidence[]; explorer_session: string
 }

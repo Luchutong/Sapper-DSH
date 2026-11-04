@@ -3,7 +3,7 @@ import { CommandDefinitionId } from '@deepseek-ai/dsh-commands/brand'
 import type { CommandInvocation, CommandResult } from '@deepseek-ai/dsh-commands'
 import type { Config } from '../settings.js'
 import { GraphStore } from '../store/graph.js'
-import { resolveStorePath } from '../store/paths.js'
+import { resolveSelectedStore } from '../store/tasks.js'
 import { StoreError } from '../store/validation.js'
 import { KnowledgeBase, kbBrief } from '../kb/index.js'
 import { recallGraph } from '../recall/index.js'
@@ -13,7 +13,7 @@ import { hasFullAccess } from './permissions.js'
 import { UNTRUSTED_NOTICE } from '../render/context.js'
 import { randomUUID } from 'node:crypto'
 
-const USAGE = '/sapper [status | graph | frontier | recall <query> | flag | kb <query|kb001> | run | runs]'
+const USAGE = '/sapper [status | graph | frontier | recall <query> | flag | kb <query|kb001> | start <goal> | run | runs]'
 export function registerSapperCommand(ctx: Context, getConfig: () => Config, alive: () => boolean): () => void {
   let sync = () => {}
   const kb = new KnowledgeBase()
@@ -26,6 +26,11 @@ export function registerSapperCommand(ctx: Context, getConfig: () => Config, ali
       const [command = 'status', ...tail] = input.split(/\s+/u).filter(Boolean)
       const query = tail.join(' ')
       const cwd = invocation.agent.session.header.cwd
+      if (command === 'start') {
+        if (!query) return { kind: 'error', text: USAGE }
+        const result = await ctx.tools.execute({ name: 'sapper_task', arguments: { action: 'start', goal: query }, agent: invocation.agent, callId: randomUUID() as never, signal: invocation.signal })
+        return result.isError ? { kind: 'error', text: result.error.message } : { kind: 'success', text: JSON.stringify(result.value, null, 2) }
+      }
       if (command === 'run' || command === 'runs') {
         if (tail.length) return { kind: 'error', text: USAGE }
         const result = await ctx.tools.execute({ name: 'sapper_dispatch', arguments: { mode: command === 'run' ? 'run' : 'status' }, agent: invocation.agent, callId: randomUUID() as never, signal: invocation.signal })
@@ -41,7 +46,7 @@ export function registerSapperCommand(ctx: Context, getConfig: () => Config, ali
       }
       if (!['status', 'graph', 'frontier', 'recall', 'flag'].includes(command) || (tail.length && command !== 'recall')) return { kind: 'error', text: USAGE }
       if (command === 'recall' && !query) return { kind: 'error', text: USAGE }
-      const root = resolveStorePath(cwd, config)
+      const root = await resolveSelectedStore(cwd, config)
       if (!root || !cwd) throw new StoreError('请先选择带绝对路径的工作区')
       const store = new GraphStore(root, cwd)
       await store.checkReadable()

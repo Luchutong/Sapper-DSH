@@ -16,7 +16,7 @@ export function createRecallTools(getConfig: () => Config, alive: () => boolean 
         scope: { type: 'string', enum: ['all', 'fact', 'intent'] },
       }, output, isConcurrencySafe: () => true,
       async execute(args, exec) {
-        const { store } = executionStore(getConfig, exec, alive)
+        const { store } = await executionStore(getConfig, exec, alive)
         const graph = await store.read()
         exec.signal.throwIfAborted()
         return json({ matches: recallGraph(graph, args.query, args.limit ?? getConfig().context.recallTopK, args.scope ?? 'all'), warnings: graph.warnings, integrity: graph.integrity })

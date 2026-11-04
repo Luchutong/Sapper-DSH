@@ -19,7 +19,7 @@ export function createStatusTool(getConfig: () => Config, alive?: () => boolean,
       const base = { plugin: PLUGIN_NAME, version: VERSION, sdk: SDK_VERSION, milestone: 'M3-orchestration', enabled: config.enabled, store_approval: config.store.approval }
       if (!config.enabled) return json({ ...base, state: 'disabled', goal: '', message: 'Sapper 已关闭' })
       if (!resolveStorePath(exec.agent?.session.header.cwd, config)) return json({ ...base, state: 'unscoped', goal: '', message: '需要带绝对工作区路径的 DSH 会话' })
-      const { store } = executionStore(getConfig, exec, alive)
+      const { store } = await executionStore(getConfig, exec, alive)
       await store.checkReadable()
       if (!await store.initialized()) return json({ ...base, state: 'uninitialized', goal: '', message: '请调用 sapper_init 创建事实图；状态查询不会自动创建目录' })
       const graph = await store.read()

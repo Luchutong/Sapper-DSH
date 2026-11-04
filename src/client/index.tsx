@@ -1,10 +1,12 @@
 import { useState, useSyncExternalStore } from 'react'
 import type { BrowserContext, BrowserSettingsScope } from '../dsh-adapter/client.js'
 import { GraphPreview } from './graph.js'
+import { TaskPanel } from './task-panel.js'
+import { PANEL_REMOTE, type PanelApi } from '../panel/rpc.js'
 import { VERSION } from '../constants.js'
 
 export const name = 'sapper-dsh'
-export const inject = ['slots', 'configForms']
+export const inject = ['slots', 'configForms', 'remote']
 
 export function SapperSettings({ scope }: { scope: BrowserSettingsScope }) {
   const state = useSyncExternalStore(
@@ -60,7 +62,7 @@ export function SapperSettings({ scope }: { scope: BrowserSettingsScope }) {
     {error && <p role="alert">{error}</p>}
     <details>
       <summary>开发进度</summary>
-      <p>常规、上下文、编排、知识库和诊断的完整表单计划在 M4 完成。</p>
+      <p>任务面板可发起、继续与取消编排；完整图编辑器及其余高级设置仍在后续阶段。</p>
       <GraphPreview />
     </details>
   </section>
@@ -68,9 +70,27 @@ export function SapperSettings({ scope }: { scope: BrowserSettingsScope }) {
 
 export function apply(ctx: BrowserContext): void {
   const scope = ctx.configForms.get('sapper')
+  const remote = ctx.remote
+  let ready: Promise<unknown> = Promise.resolve()
+  let api: PanelApi | undefined
+  if (remote) {
+    ready = remote.$mount(PANEL_REMOTE)
+    ctx.effect(() => { let disposed = false, off: (() => void) | undefined; void ready.then(value => { off = value as () => void; if (disposed) off() }).catch(() => {}); return () => { disposed = true; off?.() } })
+    const invoke = async (method: string, input: object) => {
+      await ready
+      const result = await PANEL_REMOTE.methods['sapperPanel/' + method]!.invoke(remote, input)
+      if (!('ok' in result)) throw new Error('任务面板收到意外的流式结果')
+      if (!result.ok) throw new Error(result.error.message)
+      return result.value
+    }
+    api = { targets: () => invoke('targets', {}) as ReturnType<PanelApi['targets']>, state: sessionId => invoke('state', { sessionId }) as ReturnType<PanelApi['state']>, action: (sessionId, input) => invoke('action', { sessionId, input }) }
+    const panelApi = api
+    ctx.effect(() => ctx.slots.inject('conversation.composer.dock', () => ctx.slots.register({ name: 'conversation.composer.dock', id: 'sapper-task', label: 'Sapper 任务', order: 90 },
+      ({ sessionId }) => <details style={{ width: '100%' }}><summary style={{ cursor: 'pointer' }}>Sapper 任务</summary><TaskPanel api={panelApi} {...(sessionId ? { sessionId } : {})} /></details>)))
+  }
   const Panel = ({ view }: { view?: string }) => view === 'summary'
     ? <p>工作区事实图与任务规划</p>
-    : <SapperSettings scope={scope} />
+    : <>{api && <TaskPanel api={api} />}<SapperSettings scope={scope} /></>
   ctx.effect(() => ctx.configForms.whileServed(['sapper'], () => {
     const offCard = ctx.slots.inject('plugins.item', () => ctx.slots.register({
       name: 'plugins.item', id: 'sapper', label: 'Sapper', order: 100,

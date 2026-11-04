@@ -3,18 +3,21 @@
 将 [sapper-v2](https://github.com/N1nEmAn/sapper-v2) 的事实图与
 `reason → explore → verify` 循环移植为 DSH NEXT 桌面插件。
 
-**当前版本 `0.1.0-alpha.7`：M0/M1 已验收，M2 获用户反馈通过；本版修复 M3 桌面工具作用域阻塞，待重跑验收。**
+**当前版本 `0.1.0-alpha.8`：M0/M1 已验收，M2 获用户反馈通过；本版修复 M3 证据转义问题，加入任务面板和普通工作区自动建图。**
 目标运行时为 **DSH 0.2.1-rc.2**，Cordis 4.0.5 / Schemastery 3.18.5。
 
 当前可维护工作区事实图、意图、长文档和本地 flag；每轮注入有预算的 frontier、
 历史与相关证据指针，支持中英文召回、56 条离线 KB 及 `/sapper` 只读命令。
 完全权限下 Sapper 自身的确认门自动通过，仍保留工作区、归属和数据完整性约束。
-本轮桌面回归见 [M2/M3 统一验收指南](docs/m2-m3-validation.md)。
+直接在 DSH 打开任意已有目录的对话，展开输入框附近的 **Sapper 任务**，输入目标后点击
+**发起任务**；也可进入插件设置页的 Sapper 面板。无需新建专用工作区、手工 init 或构造事实。
+面板提供进度、任务历史、继续、取消和失败原因。见 [任务面板](docs/task-panel.md)。
 
 ## 工具
 
 | 工具 | 当前操作 |
 | --- | --- |
+| sapper_task | start / resume；按用户目标自动建独立图并运行，保留旧图 |
 | sapper_init | create / recover；初始化不覆盖已有文件，recover 重放待完成事务 |
 | sapper_status | summary / frontier / graph；项目状态、数量、就绪/阻塞分组与完整性诊断 |
 | sapper_fact | create / get / list；可在创建结果事实时原子结案 source_intent |
@@ -42,6 +45,7 @@ requires_confirmation 或设置为 always，也不额外 ask；确认来源记�
 
 ## 子代理编排
 
+面板发起任务或 `/sapper start <目标>` 会自动准备存储并开始运行。已有图也可
 显式调用 `sapper_dispatch {"mode":"run"}` 或 `/sapper run`，开始后连续推进就绪意图，
 必要时 reason 提出新任务，explore 收集候选证据，verify 独立复核后才原子写入
 `verification_status=confirmed` 的事实。`/sapper runs` 只读查看运行摘要。
@@ -63,8 +67,9 @@ requires_confirmation 或设置为 always，也不额外 ask；确认来源记�
 flag 事实是权威记录，`flags/ledger.json` 是可重建索引。详细边界与格式见
 [存储说明](docs/m1-storage.md)。
 
-当前只开放 workspace 模式；global 和 autoInit 仍为预留配置。请显式调用
-`sapper_init` 建图；状态查询、页面打开和上下文探针不会自动创建项目。
+当前支持任意普通 DSH workspace；global 仍未开放。面板明确发起新任务时自动创建
+`.sapper/tasks/<任务ID>/`，通过目录索引选择当前图，同目录下的新任务相互隔离。
+已有 `.sapper/project.json` 在面板显示为原任务；可以直接继续。状态查询和页面打开不写入。
 旧 M0 最小 project.json fixture 只能供目标摘要探针读取，写入前请在新测试目录
 初始化完整图。插件不会静默覆盖或补写旧测试文件。
 
@@ -73,7 +78,7 @@ flag 事实是权威记录，`flags/ledger.json` 是可重建索引。详细边�
 在 DSH NEXT 菜单“打开 DSH 终端”，执行后重启应用：
 
 ```powershell
-dsh plugin add "D:\BaiduSyncdisk\sapper移植\sapper-dsh-0.1.0-alpha.7.tgz"
+dsh plugin add "D:\BaiduSyncdisk\sapper移植\sapper-dsh-0.1.0-alpha.8.tgz"
 ```
 
 开发需要 Node.js 22+、pnpm 8.15.4 和 Python 3（仅 golden 测试使用）：

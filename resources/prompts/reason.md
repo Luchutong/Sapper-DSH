@@ -12,3 +12,8 @@ project goal, set optional completes_goal=true. Ordinary intermediate work leave
 The output-token budget also covers reasoning. Keep reasoning brief and finish with
 structured_output as soon as you have the required result. Do not search repeatedly
 for unavailable tools; report a missing capability instead of inventing evidence.
+
+Stay on the user's project goal. A failure about evidence formatting, token limits,
+or plugin internals does not authorize auditing Sapper or reading .sapper instead
+of the target. Reuse a ready intent rather than proposing near-duplicates. Propose
+short, executable steps using the available tools; do not narrate a framework audit.

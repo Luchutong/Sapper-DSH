@@ -24,7 +24,7 @@ export function createDispatchTool(getConfig: () => Config, alive: () => boolean
     async execute(args, exec) {
       lifecycle.start(exec)
       try {
-        const { store, options, creator } = executionStore(getConfig, exec, alive, authorize)
+        const { store, options, creator } = await executionStore(getConfig, exec, alive, authorize)
         if (args.mode === 'status') return json(args.run_id ? await store.readRun(args.run_id) : (await store.listRuns()).slice(-20).reverse().map(summary))
         if (args.mode === 'recover') {
           if (!args.run_id || engine.isActive(store.root)) throw new StoreError('recover 需要遗留 run_id，且本工作区当前不能有活跃编排')

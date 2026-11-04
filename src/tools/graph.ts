@@ -30,7 +30,7 @@ export function createGraphTools(getConfig: () => Config, alive: () => boolean =
         goal: { type: 'string', description: 'Nonempty project goal; defaults to Sapper settings.goal.' },
       }, output,
       async execute(args, exec) {
-        const { store, options } = storeFor(exec)
+        const { store, options } = await storeFor(exec)
         return json(args.action === 'recover' ? await store.recover(options) : await store.init(args.origin ?? '', args.goal ?? getConfig().goal, options))
       },
     }),
@@ -45,7 +45,7 @@ export function createGraphTools(getConfig: () => Config, alive: () => boolean =
         source_intent: { type: 'string', description: 'Optional intent to conclude; current session must own any claim. Required confirmation must exist, or is recorded automatically under the standing DSH full-access grant.' },
       }, output, isConcurrencySafe: args => args.action !== 'create',
       async execute(args, exec) {
-        const { store, creator, options } = storeFor(exec)
+        const { store, creator, options } = await storeFor(exec)
         if (args.action === 'get') return json(await store.readNode('fact', required(args.id, 'id')))
         if (args.action === 'list') {
           const graph = await store.read()
@@ -66,7 +66,7 @@ export function createGraphTools(getConfig: () => Config, alive: () => boolean =
         requires_confirmation: { type: 'boolean', description: 'Default false for autonomous work. True adds a decision gate: workspace-write needs approved confirm; full access is a standing grant and records confirmation automatically on confirm/claim/conclusion. Do not ask again for this gate in full access.' },
       }, output, isConcurrencySafe: args => args.action === 'get' || args.action === 'list',
       async execute(args, exec) {
-        const { store, creator, options } = storeFor(exec)
+        const { store, creator, options } = await storeFor(exec)
         if (args.action === 'get') return json(await store.readNode('intent', required(args.id, 'id')))
         if (args.action === 'list') {
           const graph = await store.read()
@@ -87,7 +87,7 @@ export function createGraphTools(getConfig: () => Config, alive: () => boolean =
         expected_doc: { oneOf: [{ type: 'string' }, { type: 'null' }] },
       }, output, isConcurrencySafe: args => args.action === 'get',
       async execute(args, exec) {
-        const { store, options } = storeFor(exec)
+        const { store, options } = await storeFor(exec)
         if (args.action === 'set') return json(await store.updateDoc(args.id, required(args.doc, 'doc'), required(args.expected_doc, 'expected_doc'), options))
         const graph = await store.read()
         const node = graph.facts.find(f => f.id === args.id) ?? graph.intents.find(i => i.id === args.id)
@@ -104,7 +104,7 @@ export function createGraphTools(getConfig: () => Config, alive: () => boolean =
         source_fact: { type: 'string' }, challenge: { type: 'string' }, note: { type: 'string' },
       }, output, isConcurrencySafe: args => args.action === 'list',
       async execute(args, exec) {
-        const { store, creator, options } = storeFor(exec)
+        const { store, creator, options } = await storeFor(exec)
         if (args.action === 'list') {
           const graph = await store.read()
           return json({ entries: store.flagEntries(graph.facts), warnings: graph.warnings, integrity: graph.integrity })
@@ -119,7 +119,7 @@ export function createGraphTools(getConfig: () => Config, alive: () => boolean =
 
 export function isMutation(name: string, args: unknown): boolean {
   if (name === 'sapper_dispatch') return !(args && typeof args === 'object' && 'mode' in args && args.mode === 'status')
-  if (name === 'sapper_init') return true
+  if (name === 'sapper_init' || name === 'sapper_task') return true
   const action = args && typeof args === 'object' && 'action' in args ? args.action : undefined
   if (name === 'sapper_fact' || name === 'sapper_intent') return action !== 'get' && action !== 'list'
   if (name === 'sapper_doc') return action !== 'get'

@@ -1,4 +1,5 @@
 import { defineConfig } from 'tsdown'
+import ts from 'typescript'
 
 export default defineConfig([
   {
@@ -11,6 +12,11 @@ export default defineConfig([
     clean: false,
     fixedExtension: false,
     external: [/^@deepseek-ai\//, /^node:/],
+    // Rolldown can parse TC39 decorators but does not lower them for Node 22/24.
+    plugins: [{ name: 'sapper-remote-decorators', transform(source, id) {
+      if (!id.replaceAll('\\', '/').endsWith('/src/dsh-adapter/panel.ts')) return
+      return { code: ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext, verbatimModuleSyntax: true } }).outputText, map: null }
+    } }],
   },
   {
     entry: { client: 'src/client/index.tsx' },
@@ -22,5 +28,6 @@ export default defineConfig([
     clean: false,
     fixedExtension: false,
     external: ['react', 'react/jsx-runtime'],
+    noExternal: ['@deepseek-ai/dsh-typert-protocol/remote-info'],
   },
 ])

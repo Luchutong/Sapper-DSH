@@ -55,3 +55,26 @@ describe('DSH 0.2 client entry', () => {
     renderer.unmount()
   })
 })
+
+it('submits a goal from the task panel, shows failures, and resumes or cancels without manual graph tools', async () => {
+  const { TaskPanel } = await import('../src/client/task-panel.js')
+  const data: import('../src/panel/rpc.js').PanelState = { cwd: '/ordinary project', active: 'legacy', tasks: [], runs: [] }
+  const api = { targets: vi.fn(async () => [{ id: 'session-1', cwd: '/ordinary project' }]), state: vi.fn(async () => ({ ...data })), action: vi.fn(async (_session: string, input: import('../src/panel/rpc.js').PanelAction) => {
+    if (input.action === 'start') Object.assign(data, { job: { state: 'running', started_at: 'now' } })
+    if (input.action === 'cancel') Object.assign(data, { job: { state: 'cancelled', started_at: 'now' }, graph: { goal: 'Check files', status: 'active', facts: 1, verified: 0, ready: 1, integrity: [] } })
+  }) }
+  let renderer!: ReturnType<typeof create>
+  await act(async () => { renderer = create(<TaskPanel api={api} />) })
+  await act(async () => { renderer.root.findByType('textarea').props.onChange({ target: { value: 'Check files' } }) })
+  await act(async () => { renderer.root.findByType('form').props.onSubmit({ preventDefault() {} }) })
+  expect(api.action).toHaveBeenCalledWith('session-1', { action: 'start', goal: 'Check files' })
+  expect(renderer.root.findByType('textarea').props.disabled).toBe(true)
+  const button = (label: string) => renderer.root.findAllByType('button').find(b => b.children.join('') === label)!
+  await act(async () => { button('取消任务').props.onClick() })
+  expect(api.action).toHaveBeenLastCalledWith('session-1', { action: 'cancel' })
+  expect(button('继续当前任务')).toBeDefined()
+  api.action.mockRejectedValueOnce(new Error('只读会话不能写入'))
+  await act(async () => { button('继续当前任务').props.onClick() })
+  expect(renderer.root.findByProps({ role: 'alert' }).children.join('')).toContain('只读会话')
+  await act(async () => { renderer.unmount() })
+})

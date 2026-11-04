@@ -21,6 +21,9 @@ import { resolveConfig } from '../src/settings.js'
 import type { ConfigInput } from '../src/settings.js'
 import type { RunRecord } from '../src/store/runs.js'
 import { GraphStore } from '../src/store/graph.js'
+import { TaskPanelService } from '../src/dsh-adapter/panel.js'
+import { resolveSelectedStore } from '../src/store/tasks.js'
+import { checkedEvidence } from '../src/orchestration/types.js'
 
 const cleanup: Array<() => Promise<unknown>> = []
 afterEach(async () => { for (const f of cleanup.splice(0).reverse()) await f() })
@@ -32,6 +35,7 @@ class FixtureModel extends LlmAdapter {
     this.requests.push(options)
     const raw = JSON.stringify(options.messages)
     const role = raw.includes('# Sapper verify') ? 'verify' : raw.includes('# Sapper explore') ? 'explore' : 'reason'
+    const receipt = raw.match(/ev-[a-f0-9-]{36}/g)?.at(-1) ?? 'missing-receipt'
     const tools = options.messages.filter(m => m.role === 'tool')
     if (this.scenario.maxTokens === role) { yield { type: 'finish', reason: { kind: 'max-tokens' } }; return }
     if (this.scenario.hang && role === 'explore') {
@@ -42,14 +46,14 @@ class FixtureModel extends LlmAdapter {
     if (role === 'reason') args = { intents: this.scenario.emptyReason ? [] : Array.from({ length: this.scenario.proposals ?? 1 }, (_, n) => ({ title: `Check fixture ${n}`, description: `Read local fixture ${n}`, from: ['f001'], success_criteria: 'Fixture content contains VERIFIED-LOCAL-7C42', completes_goal: !!this.scenario.completesGoal })) }
     else if (!tools.length && this.scenario.attack) { name = 'sapper_fact'; args = { action: 'create', description: 'BYPASS' } }
     else if (tools.length < (this.scenario.attack ? 2 : 1) && !(role === 'explore' && (this.scenario.noEvidence || this.scenario.forged))) { name = 'read'; args = { path: 'fixture.txt' } }
-    else if (role === 'explore') args = { title: 'Fixture observation', description: 'Local fixture contains VERIFIED-LOCAL-7C42', kind: 'note', evidence: this.scenario.noEvidence ? [] : [{ call_id: this.scenario.forged ? 'invented' : '', excerpt: this.scenario.forged ? 'FAKE-OUTPUT' : 'VERIFIED-LOCAL-7C42' }] }
-    else args = { goal_achieved: !!this.scenario.completesGoal && !this.scenario.denyGoal, verified: !this.scenario.reject, issues: this.scenario.reject ? 'REPRODUCTION-MISMATCH' : '', evidence: this.scenario.noVerifyEvidence || this.scenario.reject ? [] : [{ call_id: '', excerpt: 'VERIFIED-LOCAL-7C42' }] }
+    else if (role === 'explore') args = { title: 'Fixture observation', description: 'Local fixture contains VERIFIED-LOCAL-7C42', kind: 'note', evidence: this.scenario.noEvidence ? [] : [{ receipt_id: this.scenario.forged ? 'invented' : receipt }] }
+    else args = { goal_achieved: !!this.scenario.completesGoal && !this.scenario.denyGoal, verified: !this.scenario.reject, issues: this.scenario.reject ? 'REPRODUCTION-MISMATCH' : '', evidence: this.scenario.noVerifyEvidence || this.scenario.reject ? [] : [{ receipt_id: receipt }] }
     yield { type: 'reasoning-delta', index: 1, text: role === 'explore' ? 'EXPLORER-PRIVATE-TRACE' : 'fixture reasoning' }
     yield { type: 'tool-call-delta', index: 0, id: ToolCallId('fixture-' + this.requests.length), name, argumentsDelta: JSON.stringify(args) }
     yield { type: 'finish', reason: { kind: 'tool-calls' } }
   }
 }
-async function setup(scenario: Scenario = {}, input: ConfigInput = {}, commands = false, maxDepth = 1, topology: 'global' | 'preset' | 'preset-ptc' = 'global') {
+async function setup(scenario: Scenario = {}, input: ConfigInput = {}, commands = false, maxDepth = 1, topology: 'global' | 'preset' | 'preset-ptc' = 'global', bootstrap = true) {
   const cwd = await mkdtemp(path.join(os.tmpdir(), 'sapper M3 中文 '))
   cleanup.push(() => rm(cwd, { recursive: true, force: true }))
   await writeFile(path.join(cwd, 'fixture.txt'), 'VERIFIED-LOCAL-7C42\n')
@@ -85,8 +89,10 @@ async function setup(scenario: Scenario = {}, input: ConfigInput = {}, commands 
     if (result.isError) throw new Error(result.error.message)
     return result.value
   }
+  if (bootstrap) {
   await execute('sapper_init', { goal: 'Verify local fixture' })
   await execute('sapper_fact', { action: 'create', title: 'Fixture input', description: 'A local fixture.txt is available', doc: 'UNRELATED-GRAPH-DOC' })
+  }
   const dispatch = (mode = 'run', extra = {}, signal?: AbortSignal) => execute('sapper_dispatch', { mode, ...extra }, signal) as Promise<unknown> as Promise<RunRecord>
   const store = new GraphStore(path.join(cwd, '.sapper'), cwd)
   return { ctx, cwd, model, approval, read, parent, execute, dispatch, store, disposeSubagents: () => subagentsFiber.dispose(), setConfig: (next: ConfigInput) => { config = resolveConfig(next); ctx.emit('loader/volatile-update', []) }, config }
@@ -357,4 +363,181 @@ it('does not restore a preset tool explicitly denied in the parent session', asy
   expect(run.stop_reason).toContain('SAPPER_M3_TOOL_UNAVAILABLE')
   expect(read).not.toHaveBeenCalled()
   expect(model.requests).toHaveLength(1)
+})
+
+// Desktop regression: CRLF and Windows paths never pass through model-authored excerpts.
+it('uses server receipts for multiline Windows output and independently verifies it', async () => {
+  const { cwd, dispatch, store } = await setup()
+  await writeFile(path.join(cwd, 'fixture.txt'), 'Path: C:\\Users\\航\\sample.txt\r\nVERIFIED-LOCAL-7C42\r\nSHA256: ABCDEF1234\r\n')
+  const run = await dispatch()
+  expect(run.state, JSON.stringify(run)).toBe('completed')
+  const saved = await store.readRun(run.id), outcome = saved.outcomes[0]!
+  expect(outcome.candidate!.evidence[0]).toMatchObject({ receipt_id: expect.stringMatching(/^ev-/), tool: 'read', sha256: expect.stringMatching(/^[a-f0-9]{64}$/) })
+  expect(outcome.candidate!.evidence[0]!.excerpt).toContain('\r\n')
+  expect(outcome.verification!.evidence[0]!.receipt_id).not.toBe(outcome.candidate!.evidence[0]!.receipt_id)
+  expect(() => checkedEvidence([{ receipt_id: outcome.candidate!.evidence[0]!.receipt_id }], new Map())).toThrow('本子会话')
+})
+it('starts from a normal existing workspace via the panel, isolates later tasks and resumes the original graph', async () => {
+  const { ctx, parent, cwd, config, store } = await setup({ completesGoal: true }, {}, false, 1, 'preset', false)
+  const service = ctx.get('sapperPanel') as TaskPanelService
+  expect(await service.targets()).toEqual([{ id: String(parent.id), cwd }])
+  expect(await service.state(String(parent.id))).toMatchObject({ active: 'legacy', tasks: [], runs: [] })
+  expect(await store.initialized()).toBe(false)
+  await service.action(String(parent.id), { action: 'start', goal: 'Verify local fixture' })
+  await service.whenIdle(cwd)
+  const first = await service.state(String(parent.id))
+  expect(first.job, JSON.stringify(first)).toMatchObject({ state: 'completed' })
+  expect(first.graph).toMatchObject({ status: 'completed', verified: 1, integrity: [] })
+  const root = await resolveSelectedStore(cwd, config)
+  const original = await new GraphStore(root!, cwd).read()
+  expect(original.facts.find(f => f.id === 'f001')?.description).toContain(cwd)
+  expect(original.facts.find(f => f.id === 'f001')?.verification_status).toBeUndefined()
+  await service.action(String(parent.id), { action: 'start', goal: 'Second independent task' })
+  await service.whenIdle(cwd)
+  const second = await service.state(String(parent.id))
+  expect(second.active).not.toBe(first.active)
+  expect(second.tasks).toHaveLength(2)
+  expect(await new GraphStore(root!, cwd).read()).toEqual(original)
+  expect(await store.initialized()).toBe(false)
+  // Completed tasks remain readable; continuing one reports completion instead of overwriting it.
+  await service.action(String(parent.id), { action: 'resume', task_id: first.active })
+  await service.whenIdle(cwd)
+  expect((await service.state(String(parent.id))).active).toBe(first.active)
+})
+it('cancels panel background work and retains a ready intent for retry', async () => {
+  let entered!: () => void
+  const started = new Promise<void>(resolve => { entered = resolve })
+  const { ctx, parent, cwd } = await setup({ beforeRead: async signal => {
+    entered(); await new Promise<void>((_, reject) => { signal.addEventListener('abort', () => reject(signal.reason), { once: true }) })
+  } }, {}, false, 1, 'preset', false)
+  const service = ctx.get('sapperPanel') as TaskPanelService
+  await service.action(String(parent.id), { action: 'start', goal: 'Verify local fixture' })
+  await started
+  await service.action(String(parent.id), { action: 'cancel' })
+  await service.whenIdle(cwd)
+  expect(await service.state(String(parent.id))).toMatchObject({ job: { state: 'cancelled' }, graph: { verified: 0, ready: 1 }, runs: [{ state: 'cancelled' }] })
+  expect(ctx.agents.list()).toEqual([parent])
+})
+
+it('drives the task panel through actual client and host Typert Gateways with strict wire schemas', async () => {
+  const { default: Registry } = await import('@deepseek-ai/dsh-typert-registry')
+  const { default: Gateway } = await import('@deepseek-ai/dsh-api-gateway')
+  const { RemoteAccessService } = await import('@deepseek-ai/dsh-api-remote-access')
+  const ClientGateway = await import('@deepseek-ai/dsh-api-gateway/client')
+  const { PANEL_REMOTE } = await import('../src/panel/rpc.js')
+  const { ctx, parent, cwd } = await setup({ completesGoal: true }, {}, false, 1, 'preset', false)
+  await ctx.plugin(Registry)
+  await ctx.plugin(RemoteAccessService)
+  await ctx.plugin(Gateway, {})
+  const peerCtx = ctx.extend(), controller = new AbortController()
+  const peer = { id: 'panel-owner' as import('@deepseek-ai/dsh-typert-protocol').PeerId, ctx: peerCtx, principal: { kind: 'owner' as const }, signal: controller.signal, interactions: 'none' as const, dispose: async () => {} }
+  const client = new Context(); cleanup.push(() => client.fiber.dispose())
+  await client.plugin(Registry)
+  client.provide('connection', {
+    interactions: 'none', isLoopback: true, generation: { getSnapshot: () => undefined },
+    rpc: { open: () => { throw new Error('No streams expected') }, call: async (_path: string, endpoint: string, payload: { args: Record<string, unknown> }) => {
+      const [namespace, method] = endpoint.split('/')
+      return { ok: true, value: await ctx.typertGateway.invoke({ namespace: namespace!, method: method!, args: payload.args, peer }) }
+    } },
+  } as never)
+  await client.plugin(ClientGateway)
+  const off = await client.remote.$mount(PANEL_REMOTE)
+  const invoke = async (method: string, args: object) => {
+    const result = await PANEL_REMOTE.methods['sapperPanel/' + method]!.invoke(client.remote, args)
+    if (!('ok' in result) || !result.ok) throw new Error(JSON.stringify(result))
+    return result.value
+  }
+  expect(await invoke('targets', {})).toEqual([{ id: String(parent.id), cwd }])
+  expect(await invoke('state', { sessionId: String(parent.id) })).toMatchObject({ tasks: [], runs: [] })
+  await invoke('action', { sessionId: String(parent.id), input: { action: 'start', goal: 'Verify local fixture' } })
+  await (ctx.get('sapperPanel') as TaskPanelService).whenIdle(cwd)
+  expect(await invoke('state', { sessionId: String(parent.id) })).toMatchObject({ job: { state: 'completed' }, graph: { status: 'completed', verified: 1 } })
+  await expect(ctx.typertGateway.invoke({ namespace: 'sapperPanel', method: 'action', args: { sessionId: String(parent.id), input: { action: 'start', cwd: '/forged' } }, peer })).rejects.toThrow()
+  if (process.env.SAPPER_BROWSER_PROBE === '1') {
+    const { chromium } = await import('playwright-core')
+    const { createServer } = await import('node:http')
+    const { createRequire } = await import('node:module')
+    const { mkdir } = await import('node:fs/promises')
+    const require = createRequire(import.meta.url)
+    const files: Record<string, string> = {
+      '/react.js': path.join(path.dirname(require.resolve('react/package.json')), 'umd/react.development.js'),
+      '/react-dom.js': path.join(path.dirname(require.resolve('react-dom/package.json')), 'umd/react-dom.development.js'),
+      '/plugin.js': path.resolve('lib/client.js'),
+    }
+    const html = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>Sapper panel integration</title>
+      <style>body{font:15px system-ui,sans-serif;background:#181a20;color:#e5e7eb;margin:0;padding:30px}#app{max-width:950px;margin:auto}button,select{font:inherit;color:inherit;background:#2a303c;border:1px solid #657087;border-radius:6px;padding:7px 12px;cursor:pointer}button:disabled{opacity:.45;cursor:default}summary{padding:8px 0}p{line-height:1.6}textarea{font:inherit}h3{font-size:23px}</style>
+      <div id="app"></div><script src="/react.js"></script><script src="/react-dom.js"></script>
+      <script>window.__ModuleLoader__={load(entry){window.sapper=entry.factory(id=>id==='react'?React:{Fragment:React.Fragment,jsx:(type,props,key)=>React.createElement(type,{...props,key}),jsxs:(type,props,key)=>React.createElement(type,{...props,key})})}};</script><script src="/plugin.js"></script>
+      <script>
+      const remote={$mount:async contribution=>{for(const d of contribution.descriptors){remote[d.namespace]??={};remote[d.namespace][d.method]=async(...values)=>{const args=Object.fromEntries(d.parameters.map((p,i)=>[p.wire,values[i]]));return fetch('/rpc/'+d.namespace+'/'+d.method,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(args)}).then(r=>r.json())}}return()=>{}}};
+      const snapshot={status:'ready',writable:true,value:{enabled:true},base:{},user:{},revision:0};
+      const scope={getSnapshot:()=>snapshot,subscribe:()=>()=>{},set:async()=>true,mutate:async()=>true};
+      sapper.apply({remote,configForms:{get:()=>scope,whileServed:(ids,setup)=>setup(new Set(ids))},effect:setup=>setup(),slots:{inject:(_name,setup)=>setup(),register:(options,Component)=>{if(options.name==='settings.section')ReactDOM.createRoot(document.getElementById('app')).render(React.createElement(Component));return()=>{}}}});
+      </script></html>`
+    const server = createServer(async (req, res) => {
+      try {
+        if (files[req.url!]) { res.setHeader('Content-Type', 'text/javascript; charset=utf-8'); res.end(await readFile(files[req.url!]!)); return }
+        if (req.method === 'POST' && req.url?.startsWith('/rpc/')) {
+          let body = ''; for await (const chunk of req) body += chunk
+          const [, , namespace, method] = req.url.split('/')
+          try { const value = await ctx.typertGateway.invoke({ namespace: namespace!, method: method!, args: JSON.parse(body), peer }); res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ ok: true, value })) }
+          catch (e) { res.end(JSON.stringify({ ok: false, error: { message: (e as Error).message } })) }
+          return
+        }
+        res.setHeader('Content-Type', 'text/html; charset=utf-8'); res.end(html)
+      } catch (e) { res.statusCode = 500; res.end(String(e)) }
+    })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    const browser = await chromium.launch({ headless: true })
+    try {
+      const page = await browser.newPage({ viewport: { width: 1250, height: 1000 } }), errors: string[] = []
+      page.setDefaultTimeout(5000)
+      page.on('pageerror', e => { errors.push(e.message); void writeFile('dist/validation/panel-browser-errors.json', JSON.stringify(errors)) })
+      const port = (server.address() as import('node:net').AddressInfo).port
+      await page.goto('http://127.0.0.1:' + port)
+      await writeFile('dist/validation/panel-dom-before.html', await page.content())
+      await page.screenshot({ path: 'dist/validation/panel-before.png' })
+      await page.getByLabel('任务目标', { exact: true }).fill('Verify local fixture from an ordinary workspace')
+      await page.getByRole('button', { name: '发起任务', exact: true }).click()
+      await expect.poll(async () => (await serviceState()).tasks.length, { timeout: 10000 }).toBe(2)
+      await (ctx.get('sapperPanel') as TaskPanelService).whenIdle(cwd)
+      await expect.poll(async () => await page.locator('strong').filter({ hasText: 'Verify local fixture from an ordinary workspace' }).count(), { timeout: 10000 }).toBe(1)
+      await expect.poll(async () => await page.locator('span[role=status]').textContent(), { timeout: 10000 }).toBe('已结束')
+      await expect.poll(async () => await page.getByText('工作区任务（2）', { exact: true }).count(), { timeout: 10000 }).toBe(1)
+      expect(errors).toEqual([])
+      await mkdir('dist/validation', { recursive: true })
+      await page.screenshot({ path: 'dist/validation/panel-desktop.png', fullPage: true })
+      await writeFile('dist/validation/panel-browser.json', JSON.stringify({ errors, state: await serviceState() }, null, 2))
+      async function serviceState() { return (ctx.get('sapperPanel') as TaskPanelService).state(String(parent.id)) }
+    } finally { await browser.close(); await new Promise<void>(resolve => server.close(() => resolve())) }
+  }
+  await off()
+}, process.env.SAPPER_BROWSER_PROBE === '1' ? 30000 : 5000)
+
+it('resumes a failed legacy workspace graph through the panel without recreating facts or rerunning reason', async () => {
+  const scenario = { forged: true, completesGoal: true }
+  const { ctx, cwd, parent, dispatch, store, model } = await setup(scenario)
+  const first = await dispatch()
+  expect(first.state).toBe('failed')
+  const saved = await store.readRun(first.id), before = model.requests.length
+  scenario.forged = false
+  const service = ctx.get('sapperPanel') as TaskPanelService
+  await service.action(String(parent.id), { action: 'resume', task_id: 'legacy' })
+  await service.whenIdle(cwd)
+  expect(await service.state(String(parent.id))).toMatchObject({ active: 'legacy', job: { state: 'completed' }, graph: { status: 'completed', verified: 1 } })
+  expect(await store.readRun(first.id)).toEqual(saved)
+  expect((await store.read()).facts.find(f => f.id === 'f001')?.description).toBe('A local fixture.txt is available')
+  expect(model.requests.slice(before).some(r => !JSON.stringify(r.messages).includes('# Sapper explore') && !JSON.stringify(r.messages).includes('# Sapper verify'))).toBe(false)
+})
+it('keeps read-only panel starts out of the filesystem and reports the actual policy refusal', async () => {
+  const { ctx, cwd, parent, store } = await setup({}, {}, false, 1, 'preset', false)
+  parent.session.append('sandbox/mode', { mode: 'read-only' })
+  const service = ctx.get('sapperPanel') as TaskPanelService
+  await service.action(String(parent.id), { action: 'start', goal: 'Verify local fixture' })
+  await service.whenIdle(cwd)
+  const state = await service.state(String(parent.id))
+  expect(state.job).toMatchObject({ state: 'failed', error: expect.stringContaining('只读') })
+  expect(state.tasks).toEqual([])
+  expect(await store.initialized()).toBe(false)
+  await expect(readFile(path.join(cwd, '.sapper', 'tasks', 'index.json'))).rejects.toMatchObject({ code: 'ENOENT' })
 })
