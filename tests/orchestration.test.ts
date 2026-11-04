@@ -218,7 +218,15 @@ async function setup(
   }
   let config = resolveConfig({ ...input, orchestration: { maxExplore: 1, maxSteps: 1, ...input?.orchestration } })
   if (commands) await ctx.plugin(CommandRuntime)
-  if(process.env.SAPPER_PACKAGED_HOST==='1'){const built=await import(new URL('../lib/index.js',import.meta.url).href);built.apply(ctx,{get:()=>config})}else registerRuntime(ctx, () => config)
+  // Match the real Loader boundary: optional services cannot be accessed as
+  // properties of this tools/agents scope, even when provided at the root.
+  const built = process.env.SAPPER_PACKAGED_HOST === '1'
+    ? await import(new URL('../lib/index.js', import.meta.url).href)
+    : undefined
+  await ctx.plugin({ name: 'sapper-runtime-fixture', inject: ['tools', 'agents'], apply(scoped: Context) {
+    if (built) built.apply(scoped, { get: () => config })
+    else registerRuntime(scoped, () => config)
+  } })
   await mountAgentLoopTestHarness(ctx)
   const parentHandle = await ctx.agents.create({
     sessionId: SessionId('m3-parent'),
@@ -669,6 +677,22 @@ it(
     if (process.env.SAPPER_BROWSER_PROBE === '1') {
       await ctx.plugin(CommandRuntime)
       const panel = await mountNative(ctx, cwd)
+      const { DirectoryPicker } = await import('@deepseek-ai/dsh-host-directory-picker')
+      const { DirectoryPickerController } = await import('@deepseek-ai/dsh-api-workspace-controller')
+      const { readdir, realpath } = await import('node:fs/promises')
+      await ctx.plugin(class extends DirectoryPicker {
+        private picker = {
+          kind: 'browse' as const,
+          list: async (requested?: string) => {
+            const current = await realpath(requested || cwd)
+            return { path: current, home: cwd, crumbs: [{ name: path.basename(current), path: current, hidden: false }], entries: (await readdir(current, { withFileTypes: true })).filter((e) => e.isDirectory()).map((e) => ({ name: e.name, path: path.join(current, e.name), hidden: e.name.startsWith('.') })), truncated: false }
+          },
+          createDirectory: async () => { throw new Error('not used') },
+        }
+        constructor(scoped: Context) { super(scoped) }
+        capability() { return this.picker }
+      })
+      await ctx.plugin(DirectoryPickerController)
       panelScenario.emptyReason = true
       const { workbenchBrowser } = await import(
         './fixtures/workbench-browser.js'
@@ -1218,6 +1242,35 @@ it.each(['workspace', 'session', 'title', 'command'] as const)(
     ).rejects.toThrow('可预览文件')
   },
 )
+it('recovers an alpha.13 launch blocked by missing commands after cold restart without duplicating its directory, workspace or session', async () => {
+  const first = await setup({ emptyReason: true }, {}, false, 1, 'global', false),
+    panel = await mountNative(first.ctx, first.cwd),
+    { randomUUID } = await import('node:crypto'),
+    { readdir } = await import('node:fs/promises'),
+    input = { requestId: randomUUID(), rootDir: first.cwd, title: 'try it 中文', goal: 'Check an empty directory' }
+  await expect(panel.launch(input)).rejects.toThrow('DSH 命令服务尚未就绪')
+  const partial = panel.workbench.snapshot().launches[input.requestId]!
+  expect(partial.sessionId).toBeTruthy()
+  expect(partial.workspaceId).toBeTruthy()
+  expect(partial.jobId).toBeUndefined()
+  expect(first.model.requests).toHaveLength(0)
+  await first.ctx.fiber.dispose()
+  const second = await setup({ emptyReason: true }, {}, true, 1, 'global', false),
+    restored = await mountNative(second.ctx, first.cwd)
+  const [one, two] = await Promise.all([restored.launch(input), restored.launch(input)])
+  expect(one).toEqual(two)
+  expect(one.sessionId).toBe(partial.sessionId)
+  expect(one.workspaceId).toBe(partial.workspaceId)
+  expect(one.cwd).toBe(partial.cwd)
+  expect(one.error).toBeUndefined()
+  expect((await readdir(first.cwd)).filter((n) => n.startsWith('try it 中文'))).toHaveLength(1)
+  await restored.whenIdle(one.cwd)
+  await restored.briefs.whenIdle(one.sessionId!)
+  expect(restored.workbench.snapshot().jobs[one.jobId!]?.state).toBe('completed')
+  const count = second.model.requests.length
+  await restored.launch(input)
+  expect(second.model.requests).toHaveLength(count)
+})
 it('keeps two challenges running, queues the third without model requests, applies a lower limit only to later admission and cancels queued work', async () => {
   let release!: () => void
   const gate = new Promise<void>((resolve) => {

@@ -12,6 +12,7 @@ import type {
 import type { WorkbenchController } from './workbench-store.js'
 import { workbenchStyle } from './workbench-style.js'
 import { GraphPreview } from './graph.js'
+import { DirectoryPicker } from './directory-picker.js'
 
 const labels: Record<string, string> = {
   queued: '排队中',
@@ -255,28 +256,21 @@ function NewChallenge({
     [title, setTitle] = useState(initial?.input.title ?? ''),
     [goal, setGoal] = useState(initial?.input.goal ?? ''),
     [permission, setPermission] = useState(
-      saved.permissionPreset ?? data.defaults.permissionPreset ?? '',
+      initial?.input.permissionPreset ?? saved.permissionPreset ?? data.defaults.permissionPreset ?? '',
     ),
     [preset, setPreset] = useState(
-      saved.agentPreset ?? data.defaults.agentPreset ?? '',
+      initial?.input.agentPreset ?? saved.agentPreset ?? data.defaults.agentPreset ?? '',
     ),
     [provider, setProvider] = useState(
-      saved.model?.provider ?? data.defaults.model?.provider ?? '',
+      initial?.input.model?.provider ?? saved.model?.provider ?? data.defaults.model?.provider ?? '',
     ),
     [model, setModel] = useState(
-      saved.model?.model ?? data.defaults.model?.model ?? '',
+      initial?.input.model?.model ?? saved.model?.model ?? data.defaults.model?.model ?? '',
     ),
     [pending, setPending] = useState(false),
-    [error, setError] = useState(''),
+    [error, setError] = useState(initial?.error ?? ''),
+    [picking, setPicking] = useState(false),
     [request, setRequest] = useState<LaunchInput | undefined>(initial?.input)
-  const pick = async () => {
-    try {
-      const value = await ctx.uiWorkspace?.pickDirectory()
-      if (value) setRoot(value)
-    } catch (e) {
-      setError((e as Error).message)
-    }
-  }
   const launch = async () => {
     setPending(true)
     setError('')
@@ -337,14 +331,22 @@ function NewChallenge({
               onChange={(e) => setRoot(e.target.value)}
             />
             <button
+              disabled={!ctx.uiWorkspace || picking}
               onClick={() => {
-                void pick()
+                setError('')
+                setPicking(true)
               }}
             >
               选择文件夹
             </button>
           </div>
         </label>
+        {picking && ctx.uiWorkspace && <DirectoryPicker
+          workspace={ctx.uiWorkspace}
+          initialPath={rootDir}
+          onPicked={setRoot}
+          onClose={() => setPicking(false)}
+        />}
         <label>
           题名（可选）
           <input
@@ -429,6 +431,7 @@ function NewChallenge({
           className="sp-primary"
           disabled={
             pending ||
+            picking ||
             !goal.trim() ||
             !rootDir ||
             !data.available ||

@@ -138,7 +138,9 @@ export class NativeWorkbench {
     if (!(await lstat(root)).isDirectory())
       throw new StoreError('比赛根目录不是文件夹')
     const existing = this.store.snapshot().launches[input.requestId]
-    if (existing && JSON.stringify(existing.input) !== JSON.stringify(input))
+    // Domain decoding can reorder object keys. Compare normalized launch data,
+    // not the incidental key order stored by the persistence schema.
+    if (existing && JSON.stringify(launchSchema.parse(existing.input)) !== JSON.stringify(input))
       throw new StoreError('同一启动请求不能更换目标或目录；请新建题目')
     let record: LaunchRecord = existing ?? {
       requestId: input.requestId,

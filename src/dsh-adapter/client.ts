@@ -2,6 +2,7 @@ import type { TypertClientRemote } from '@deepseek-ai/dsh-typert-protocol'
 import type { ConversationEventRegistry } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { ComponentType } from 'react'
 import type { ConfigForm, ConfigForms } from '@deepseek-ai/dsh-client-ui-settings/client'
+import type { DirectoryListing } from '@deepseek-ai/dsh-host-directory-picker/types'
 
 /** Narrow client service contracts observed in DSH 0.2.1-rc.2.
  * Keep this browser-only seam separate from Node/Cordis host augmentations.
@@ -18,7 +19,11 @@ interface SlotOptions {
 
 export interface BrowserContext {
   layout?: { selectPanel(id: 'sapper' | null): void }
-  uiWorkspace?: { pickDirectory(): Promise<string | null>; openSession(id: string): void }
+  uiWorkspace?: {
+    pickDirectory(): Promise<string | null>
+    listDirectory?(path?: string, signal?: AbortSignal): Promise<DirectoryListing>
+    openSession(id: string): void
+  }
   sessions?: { retain(id: string, options: { source: 'sapperTask' }): { ready: Promise<unknown>; release(): void } }
   remote?: TypertClientRemote
   uiConversation?: { events: Pick<ConversationEventRegistry, 'register'> }

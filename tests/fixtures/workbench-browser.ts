@@ -35,6 +35,14 @@ export async function workbenchBrowser(
     require.resolve('@deepseek-ai/dsh-client-ui-layout/client'),
     'utf8',
   )
+  // Exercise the SDK's real UiWorkspace directory methods, including its typed
+  // DirectoryBrowseError, instead of a picker that always returns cwd.
+  const workspaceSource = await readFile(require.resolve('@deepseek-ai/dsh-client-ui-workspace/client'), 'utf8')
+  const methodsStart = workspaceSource.indexOf('async pickDirectory() {')
+  const directoryMethods = workspaceSource.slice(methodsStart, workspaceSource.indexOf('watchNavigation() {', methodsStart))
+  const errorStart = workspaceSource.indexOf('var DirectoryBrowseError = class')
+  const directoryError = workspaceSource.slice(errorStart, workspaceSource.indexOf('\n\t\t};', errorStart) + 6)
+  if (!directoryMethods.includes('async listDirectory(') || !directoryError.includes('this.rpcError = rpcError')) throw new Error('DSH directory API extraction drift')
   const layout = layoutSource
     .slice(
       layoutSource.indexOf('var LayoutController = class'),
@@ -47,18 +55,25 @@ export async function workbenchBrowser(
   if (!layout.includes('selectPanel(panelId)'))
     throw new Error('DSH LayoutController extraction drift')
   const html = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><style>html,body{height:100%;margin:0}body{font:14px system-ui,sans-serif;color:#1e2635;background:#fff}body.dark{background:#181b22;color:#e4e8ef;--dsw-alias-bg-base:#181b22;--dsw-alias-label-primary:#e4e8ef;--dsw-alias-label-secondary:#a1abba;--dsw-alias-border-l3:#a6afbf32}#shell{height:100%;display:grid;grid-template-columns:280px minmax(0,1fr)}#sidebar{border-right:1px solid #8392a538;padding:12px}#app{min-width:0;overflow:hidden}button{font:inherit;color:inherit}#chat{padding:32px}#chat textarea{width:80%;height:100px}#composer{margin-top:20px}</style><div id="shell"><aside id="sidebar"></aside><div id="app"></div></div><script src="/react.js"></script><script src="/react-dom.js"></script><script>window.__ModuleLoader__={load(entry){window.sapper=entry.factory(id=>id==='react'?React:id==='react-dom'?ReactDOM:{Fragment:React.Fragment,jsx:(type,props,key)=>React.createElement(type,{...props,key}),jsxs:(type,props,key)=>React.createElement(type,{...props,key})})}};</script><script src="/plugin.js"></script>
-  <script type="module">import{SlotCore}from'/slots.js';import{LayoutController}from'/layout.js';
+  <script type="module">import{SlotCore}from'/slots.js';import{LayoutController}from'/layout.js';import{DirectoryUi}from'/directory.js';
   const slots=new SlotCore();slots.register({name:'root',children:{'sidebar.panellist':{kind:'list',scope:'root'},main:{kind:'keyed',scope:'root'},'conversation.input.left':{kind:'list',scope:'root'},'conversation.chat.node':{kind:'keyed',scope:'session'},'settings.section':{kind:'list',scope:'root'},'plugins.item':{kind:'list',scope:'root'}}},()=>null);
   const app=ReactDOM.createRoot(document.getElementById('app')),sidebar=ReactDOM.createRoot(document.getElementById('sidebar'));let selected=null;window.retained=new Set();
   const render=()=>{sidebar.render(React.createElement(React.Fragment,null,...slots.entriesOfSlot('sidebar.panellist').map(e=>React.createElement('button',{key:e.options.id,onClick:()=>layout.selectPanel(e.options.id)},e.options.label))));const main=slots.entriesOfSlot('main').find(e=>e.options.key===selected);app.render(main?React.createElement(main.component):React.createElement('section',{id:'chat'},React.createElement('h2',null,'主会话'),React.createElement('textarea',{'aria-label':'主会话输入'}),React.createElement('div',{id:'composer'},...slots.entriesOfSlot('conversation.input.left').map(e=>React.createElement(e.component,{key:e.options.id})))))};
   const layout=new LayoutController({selectPanel(id){selected=id;render()}},id=>slots.entriesOfSlot('main').some(e=>e.options.key===id),{getSnapshot:()=>({}),subscribe:()=>()=>{}});window.layout=layout;
   const remote={$mount:async contribution=>{for(const d of contribution.descriptors){remote[d.namespace]??={};remote[d.namespace][d.method]=async(...values)=>{const args=Object.fromEntries(d.parameters.map((p,i)=>[p.wire,values[i]]));return fetch('/rpc/'+d.namespace+'/'+d.method,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(args)}).then(r=>r.json())}}return()=>{}}};
   const value={status:'ready',writable:true,value:{enabled:true},base:{},user:{},revision:0};const scope={getSnapshot:()=>value,subscribe:()=>()=>{},set:async()=>true,mutate:async()=>true};
-  const ctx={remote,layout,uiWorkspace:{pickDirectory:async()=>${JSON.stringify(cwd)},openSession(id){window.opened=id;layout.selectPanel(null)}},sessions:{retain(id){window.retained.add(id);return{ready:Promise.resolve(),release(){window.retained.delete(id)}}}},inject:(_services,setup)=>setup(ctx),uiConversation:{events:{register:()=>()=>{}}},configForms:{get:()=>scope,whileServed:(ids,setup)=>setup(new Set(ids))},effect:setup=>setup(),slots:{inject:(_name,setup)=>setup(),register:(options,component)=>slots.register(options,component)}};
+  const directoryRpc=async(method,args)=>fetch('/rpc/directoryPicker/'+method,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(args)}).then(r=>r.json());
+  const directoryUi=new DirectoryUi({pick:()=>directoryRpc('pick',{}),list:(path)=>directoryRpc('list',{path}),createDirectory:(path,name)=>directoryRpc('createDirectory',{path,name})});directoryUi.openSession=id=>{window.opened=id;layout.selectPanel(null)};
+  const ctx={remote,layout,uiWorkspace:directoryUi,sessions:{retain(id){window.retained.add(id);return{ready:Promise.resolve(),release(){window.retained.delete(id)}}}},inject:(_services,setup)=>setup(ctx),uiConversation:{events:{register:()=>()=>{}}},configForms:{get:()=>scope,whileServed:(ids,setup)=>setup(new Set(ids))},effect:setup=>setup(),slots:{inject:(_name,setup)=>setup(),register:(options,component)=>slots.register(options,component)}};
   sapper.apply(ctx);render();window.ready=true;
   </script></html>`
   const server = createServer(async (req, res) => {
     try {
+      if (req.url === '/directory.js') {
+        res.setHeader('content-type', 'text/javascript')
+        res.end(directoryError + '\nexport class DirectoryUi { constructor(directoryPicker){this.directoryPicker=directoryPicker}\n' + directoryMethods + '}')
+        return
+      }
       if (assets[req.url!]) {
         res.setHeader('content-type', 'text/javascript')
         res.end(await readFile(assets[req.url!]!))
@@ -85,7 +100,7 @@ export async function workbenchBrowser(
           res.end(
             JSON.stringify({
               ok: false,
-              error: { message: (e as Error).message },
+              error: { message: (e as Error).message, code: (e as {code?: string}).code, details: (e as {details?: unknown}).details },
             }),
           )
         }
@@ -115,7 +130,10 @@ export async function workbenchBrowser(
       .getByRole('button', { name: 'Sapper 比赛工作台', exact: true })
       .click()
     await page.getByRole('button', { name: '＋ 新建题目' }).click()
+    await page.getByLabel('比赛根目录', { exact: true }).fill(cwd)
     await page.getByRole('button', { name: '选择文件夹' }).click()
+    await page.getByRole('region', { name: '选择比赛根目录' }).waitFor()
+    await page.getByRole('button', { name: '使用此目录' }).click()
     const title = '中文长题目 · 验证自动工作区、主会话和任务详情的可读性'
     await page.getByLabel('题名', { exact: true }).fill(title)
     await page

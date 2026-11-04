@@ -649,9 +649,13 @@ export class TaskPanelService extends TypertRemoteService {
   async startNative(agent: Agent, goal: string, requestId: string) {
     const old = this.workbench.snapshot().jobs[requestId]
     if (old) return old.id
+    // commands is optional and registered in its own injection scope. The panel
+    // belongs to the plugin scope, so a direct property read throws in Loader.
+    const commands = this.ctx.get('commands')
+    if (!commands) throw new StoreError('DSH 命令服务尚未就绪，请稍后继续创建')
     this.launches.set(String(agent.id), requestId)
     try {
-      const command = await this.ctx.commands.execute(
+      const command = await commands.execute(
         agent,
         '/sapper start ' + goal,
         [],
