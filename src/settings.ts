@@ -56,8 +56,14 @@ const PlainConfig = group({
     injectTopK: Schema.number().min(0).max(20).step(1).default(3),
   }),
   flags: group({
+    completion: Schema.union(['first', 'count', 'all']).default('first').description('首个即停、指定数量或持续收集；任务可单独覆盖'),
+    targetCount: positive(2, 10000),
     autoCapture: Schema.boolean().default(true),
     patterns: Schema.array(Schema.string()).default(['flag\\{[^}]{1,200}\\}', 'ctf\\{[^}]{1,200}\\}']),
+  }),
+  verification: group({
+    mode: Schema.union(['none', 'lightweight', 'selective', 'independent']).default('lightweight').description('默认仅在探索代理中轻量检查；完整独立复核可选'),
+    criticalKinds: Schema.array(Schema.union(['host', 'service', 'cred', 'vuln', 'loot', 'flag', 'note'])).default(['flag', 'vuln', 'cred']),
   }),
   ui: group({ graphPreview: Schema.boolean().default(false) }),
 })

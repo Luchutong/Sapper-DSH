@@ -3,14 +3,18 @@ import { object, text, StoreError } from './validation.js'
 
 export interface Evidence { call_id: string; tool: string; excerpt: string; receipt_id?: string; sha256?: string }
 export interface Candidate {
+  goal_achieved?: boolean
   title: string; description: string; kind: FactKind; evidence: Evidence[]; explorer_session: string; reproduction?: string
 }
 export interface Verification { verified: boolean; evidence: Evidence[]; issues: string; verifier_session: string; goal_achieved?: boolean }
 export interface RunOutcome {
-  intent_id: string; state: 'pending-verification' | 'confirmed' | 'failed' | 'stopped'; candidate?: Candidate
+  intent_id: string; state: 'pending-verification' | 'observed' | 'confirmed' | 'failed' | 'stopped'; candidate?: Candidate
+  evidence_check?: import('../orchestration/verification-policy.js').EvidenceCheck
   verification?: Verification; verify_attempts: number; fact_id?: string; error?: string
 }
 export interface RunRecord {
+  flag_progress?: import('../orchestration/flag-policy.js').FlagProgress
+  verification_mode?: import('../orchestration/verification-policy.js').VerificationMode
   id: string; mode: 'reason' | 'explore' | 'verify' | 'run'; parent_session: string
   state: 'running' | 'completed' | 'failed' | 'cancelled'; created_at: string; updated_at: string
   steps: number; explored: number; outcomes: RunOutcome[]; intent_ids: string[]; stop_reason?: string

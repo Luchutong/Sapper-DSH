@@ -18,7 +18,7 @@ import type { TaskPanelService } from './panel.js'
 import { randomUUID } from 'node:crypto'
 
 const USAGE =
-  '/sapper [status | graph | frontier | recall <query> | flag | kb <query|kb001> | start <goal> | run | runs | job | result | steer <方向> | continue <目标> | retry [纠错要求] | wp [要求] | verify <task_id> <run_id> <intent_id> | cancel]'
+  '/sapper [status | graph | frontier | recall <query> | flag | kb <query|kb001> | start <goal> | run | collect [all|数量] | runs | job | result | steer <方向> | continue <目标> | retry [纠错要求] | wp [要求] | verify <task_id> <run_id> <intent_id> | cancel]'
 export function registerSapperCommand(
   ctx: Context,
   getConfig: () => Config,
@@ -38,6 +38,15 @@ export function registerSapperCommand(
       const [command = 'status', ...tail] = input.split(/\s+/u).filter(Boolean)
       const query = input.slice(command.length).trim()
       const cwd = invocation.agent.session.header.cwd
+      if (command === 'collect') {
+        const count = Number(query), all = !query || query === 'all'
+        if (!all && (!Number.isInteger(count) || count < 1 || count > 10000)) return { kind: 'error', text: USAGE }
+        const root = await resolveSelectedStore(cwd, config)
+        if (!root || !cwd) throw new StoreError('需要已初始化的工作区任务')
+        const graph = await new GraphStore(root, cwd).read()
+        const accepted = jobs.submit(invocation.agent, { action: graph.project.status === 'completed' ? 'continue' : 'run', flag_mode: all ? 'all' : 'count', flag_count: all ? config.flags.targetCount : count, verification_mode: config.verification.mode })
+        return { kind: 'success', text: `多 flag 收集已受理（${accepted.job_id}）。每个新值即时回传；复核遵循当前快速策略。` }
+      }
       if (['steer', 'continue', 'retry', 'wp'].includes(command)) {
         if ((command === 'steer' || command === 'continue') && !query) return { kind: 'error', text: USAGE }
         const goal = command === 'wp' ? `根据前序任务证据编写本地 WP（解题报告），保存为 WP.md；不重新访问外部目标。${query}` : query

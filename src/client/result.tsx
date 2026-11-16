@@ -7,6 +7,7 @@ export function candidateLabel(candidate: TaskResult['candidates'][number]): str
   if (candidate.status === 'rejected')
     return candidate.kind === 'flag' ? 'flag 复核未通过' : '复核未通过'
   if (candidate.kind === 'flag') return '未验证 flag · 可先提交测试'
+  if (candidate.evidence_check) return candidate.evidence_check.mode === 'none' ? '已有工具证据 · 未独立复核' : candidate.evidence_check.passed ? '轻量证据检查通过 · 未独立复核' : '已有工具证据 · 轻量检查待补充'
   if (candidate.kind === 'vuln') return '漏洞候选 · 尚未复核'
   return '候选结果 · 尚未复核'
 }
@@ -62,6 +63,8 @@ export function ResultBody({
         {result.summary.split('\n')[0]?.slice(0, 300)}
       </p>
       {!!result.attachments?.length && <details><summary>题目附件 · {result.attachments.length} 个已保存</summary><ul>{result.attachments.map((f) => <li key={f.id}>{f.name} · {f.bytes.toLocaleString()} 字节<br />{f.path}</li>)}</ul></details>}
+      {result.flag_progress && <p>flag 收集：{result.flag_progress.found}{result.flag_progress.target ? ` / ${result.flag_progress.target}` : ''} 个不同值；已独立复核 {result.flag_progress.confirmed} 个</p>}
+      {result.verification_mode && result.verification_mode !== 'independent' && <p>快速策略：未独立复核的观察与 confirmed 结果分别显示。</p>}
       {result.confirmed.map((f) => (
         <div
           key={f.id}
@@ -106,6 +109,7 @@ export function ResultBody({
           <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace' }}>
             {c.description}
           </pre>
+          {c.evidence_check && <details><summary>工具证据检查</summary><p>{c.evidence_check.checks.join('；')}</p>{c.evidence_check.issues.map((issue) => <p key={issue}>{issue}</p>)}</details>}
         </div>
       ))}
       {!!result.errors.length && (

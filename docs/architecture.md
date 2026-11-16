@@ -1,6 +1,6 @@
 # 架构与边界
 
-当前交付为 0.1.0-alpha.7 / M2/M3，目标 DSH 0.2.1-rc.2。M0/M1 已获用户验收。
+当前交付为 0.1.0-alpha.19，目标 DSH 0.2.1-rc.2。后文 M0–M3 为早期设计，当前增量见各 alpha 小节。M0/M1 已获用户验收。
 原计划保留在 docs/plan.html，SDK 和实现细节以当前代码与 sdk-contract.md 为准。
 
 ```text
@@ -119,3 +119,10 @@ panel.capabilities 经 owner-only Remote 查询指定主会话或全局的工具
 统一 tool-policy 仅允许 MCP 命名空间前缀及外部工具精确名称。Orchestrator 将配置范围与父会话和祖先作用域可见工具取交集，给子代理安装有限 mask，监听 tools/change 并在推理边界更新。guard 在执行前重新检查父会话能力，不能用前缀恢复被撤销的工具。MCP 成功输出沿用原独立回执、候选与复核链。规划角色不获得 MCP，连接器本身的工作区和 Agent 激活限制仍独立生效。
 
 推理强度通过 AgentOptions.reasoningEffort 传给正式 spawn，显式值先验证所选精确模型的 resolveModelInfo；默认继承与跨模型清除旧档位沿用 SDK 契约。模型列表之外的当前路由和已配置角色路由也查询元数据，不将目录成员资格作为执行授权。
+
+
+## alpha.19 完成与复核策略
+
+flag-policy 将 first/count/all 与候选/confirmed 计数分离，模式存于 project 与启动清单，运行快照保存当次进度；多 flag 模式同时约束早停和 GraphStore 的独立目标终态。发现通知仍在成功工具输出时发布，count 达标可先收尾，all 保留其余路线。策略覆盖通过原 Task/Dispatch ToolRuntime 写入，查看和草稿编辑不执行。
+
+verification-policy 默认 lightweight，支持 none/selective/independent。快路径仍校验真实工具回执，保存 observed outcome、证据检查及普通观察 note，不占用第二个 verifier；evidence_completed 标记使本插件 frontier 不自动重做，原意图保留给显式 verify。只有 promoteVerified 可以创建 confirmed 事实与独立目标完成状态。角色提示词携带收集状态及复核策略，重要结论的轻量检查复用调用，并明确区分证据完整性与语义正确性。执行记录和主会话卡片分别展示这些状态。

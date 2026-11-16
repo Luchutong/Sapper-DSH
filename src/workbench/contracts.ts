@@ -2,6 +2,9 @@ import { z } from 'zod'
 import type { PanelState, PanelAction } from '../panel/rpc.js'
 import type { TaskResult } from '../panel/result.js'
 import type { FileAttachmentRef } from '@deepseek-ai/dsh-attachment/types'
+import { flagPolicySchema } from '../orchestration/flag-policy.js'
+import type { FlagPolicy } from '../orchestration/flag-policy.js'
+import { verificationModeSchema } from '../orchestration/verification-policy.js'
 
 export const attachmentSchema = z.object({
   id: z.string().uuid(), name: z.string().min(1).max(255), bytes: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
@@ -39,6 +42,8 @@ export const launchSchema = z
     rootDir: z.string().min(1),
     title: z.string().max(120).default(''),
     goal: z.string().min(1).max(8000),
+    flag_policy: flagPolicySchema.optional(),
+    verification_mode: verificationModeSchema.optional(),
     model: modelSchema.optional(),
     agentPreset: z.string().optional(),
     permissionPreset: z.string().optional(),
@@ -78,7 +83,7 @@ export interface JobRecord {
   result?: TaskResult
   error?: string
   stage?: string
-  next?: { goal: string; purpose: 'solve' | 'writeup' }
+  next?: { goal: string; purpose: 'solve' | 'writeup'; flag_mode?: FlagPolicy['mode']; flag_count?: number; verification_mode?: import('../orchestration/verification-policy.js').VerificationMode }
 }
 export interface BriefRecord {
   jobId: string
@@ -148,6 +153,8 @@ export interface WorkbenchSnapshot {
   jobs: JobRecord[]
   briefs: BriefRecord[]
   defaults: {
+    flagPolicy?: FlagPolicy
+    verificationMode?: import('../orchestration/verification-policy.js').VerificationMode
     model?: Preferences['model']
     agentPreset?: string
     permissionPreset?: string
@@ -156,6 +163,8 @@ export interface WorkbenchSnapshot {
   }
 }
 export interface TaskDetail {
+  flagPolicy?: FlagPolicy | undefined
+  verificationMode?: import('../orchestration/verification-policy.js').VerificationMode
   address: TaskAddress
   state: PanelState
   result?: TaskResult

@@ -63,6 +63,18 @@ it('adds/removes files and retries only the failed upload before opening the mai
     expect(h.order.indexOf('open')).toBeLessThan(h.order.lastIndexOf('release'))
   } finally { await act(async () => { view.unmount() }) }
 })
+it('freezes per-task collection and review settings into the native launch request', async () => {
+  const h = harness(), view = await newForm(h)
+  try {
+    await act(async () => view.root.findByProps({ 'aria-label': 'flag 完成策略' }).props.onChange({ target: { value: 'count' } }))
+    await act(async () => view.root.findByProps({ 'aria-label': '目标 flag 数量' }).props.onChange({ target: { value: '3' } }))
+    await act(async () => view.root.findByProps({ 'aria-label': '自动复核' }).props.onChange({ target: { value: 'none' } }))
+    expect(h.prepare).not.toHaveBeenCalled()
+    await act(async () => { button(view, '创建并开始').props.onClick() })
+    expect(h.prepare.mock.calls[0]![0]).toMatchObject({ flag_policy: { mode: 'count', count: 3 }, verification_mode: 'none' })
+    expect(h.launch).toHaveBeenCalledOnce()
+  } finally { await act(async () => view.unmount()) }
+})
 it('cancels an active upload without admitting a task and releases its session reference', async () => {
   const h = harness({ block: true }), view = await newForm(h)
   try {

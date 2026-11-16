@@ -1,8 +1,12 @@
 import { z } from 'zod'
+import { flagPolicySchema } from '../orchestration/flag-policy.js'
+import { verificationModeSchema } from '../orchestration/verification-policy.js'
 import type { TaskResult } from './result.js'
 /** Restored plugin records are opaque SDK data; validate before displaying them. */
 const schema = z
   .object({
+    flag_progress: z.object({ policy: flagPolicySchema, found: z.number().int().nonnegative(), confirmed: z.number().int().nonnegative(), target: z.number().int().positive().optional() }).optional(),
+    verification_mode: verificationModeSchema.optional(),
     job_id: z.string(),
     task_id: z.string(),
     goal: z.string(),
@@ -33,6 +37,7 @@ const schema = z
         description: z.string(),
         kind: z.string(),
         status: z.enum(['unverified', 'rejected']),
+        evidence_check: z.object({ mode: z.enum(['none', 'lightweight']), passed: z.boolean(), checks: z.array(z.string()), issues: z.array(z.string()) }).optional(),
       }),
     ),
     errors: z.array(z.string()),

@@ -31,6 +31,8 @@ import type { DispatchMode, CapturedCall } from './types.js'
 import { ChildBudget } from './budget.js'
 import { flagLiterals } from './flags.js'
 import { matchesTool } from './tool-policy.js'
+import { collectedFlags, defaultFlagPolicy, flagProgress, projectFlagPolicy } from './flag-policy.js'
+import { checkCandidateEvidence, verificationModeSchema } from './verification-policy.js'
 
 interface Child {
   role: 'reason' | 'explore' | 'verify'; controller: AbortController; calls: Map<string, CapturedCall>
@@ -318,23 +320,40 @@ export class Orchestrator {
       runOptions = { ...options, signal }
     const deadline = setTimeout(() => controller.abort(new StopRunError('运行时长上限已到，已保留可恢复的结果')), config.orchestration.runTimeoutMin * 60000)
     let record: RunRecord | undefined
+    let updateFlagProgress: (() => void) | undefined
     const guard = () => { options.guard?.(); signal.throwIfAborted(); if (!this.alive() || !this.getConfig().enabled || JSON.stringify(config) !== JSON.stringify(this.getConfig())) throw new StoreError('Sapper 已关闭或配置已改变') }
     try {
       guard()
+      let initial = await store.read()
+      if (!initial.project.flag_policy && initial.project.stop_on_flag !== false && initial.project.purpose !== 'writeup') {
+        await store.configureFlagPolicy(defaultFlagPolicy(config.flags), runOptions)
+        initial = await store.read()
+      }
       record = await store.beginRun(mode, actor, runOptions)
       const run = record,
         managed = { ...runOptions, managedRun: run.id }
-      const stopOnFlag = (await store.read()).project.stop_on_flag !== false
+      const policy = projectFlagPolicy(initial.project) ?? { mode: 'all' as const, count: 2 }
+      const writeup = initial.project.purpose === 'writeup'
+      const collectionMode = !writeup && !!initial.project.flag_policy && policy.mode !== 'first'
+      const stopOnFlag = !writeup && policy.mode === 'first'
+      const verificationMode = verificationModeSchema.parse(initial.project.verification_mode ?? config.verification.mode)
+      run.verification_mode = mode === 'verify' ? 'independent' : verificationMode
+      const history = (await store.listRuns()).filter((r) => r.id !== run.id)
+      const known = collectedFlags(initial.facts, history)
+      updateFlagProgress = () => { if (!writeup) run.flag_progress = flagProgress(policy, initial.facts, [...history, run]) }
+      updateFlagProgress()
+      const flagContext = () => ({ policy, found: run.flag_progress?.found ?? 0, found_values: [...known].filter(([, status]) => status !== 'rejected').map(([v]) => v).slice(-128) })
       let foundFlag = false
       const pipelines = new Set<AbortController>()
       const stopForFlag = async () => {
-        if (foundFlag || !stopOnFlag) return
-        foundFlag = true; run.stop_reason = 'flag-found'
-        // Stop every competing pipeline immediately; the winning candidate is already durable.
-        for (const pipeline of pipelines) pipeline.abort(new FlagStop('发现 flag，停止其他路线'))
-        await this.progress?.(parent, store.root, run, 'flag-found')
+        updateFlagProgress?.()
+        if (foundFlag || writeup || policy.mode === 'all' || (run.flag_progress?.found ?? 0) < (policy.mode === 'count' ? policy.count : 1)) return
+        foundFlag = true; run.stop_reason = policy.mode === 'count' ? 'flag-target-reached' : 'flag-found'
+        for (const pipeline of pipelines) pipeline.abort(new FlagStop('已达到 flag 收集目标，停止其他路线'))
+        await this.progress?.(parent, store.root, run, run.stop_reason)
       }
       const onReady = async (capabilities: ChildCapabilities) => {
+        updateFlagProgress?.()
         run.children ??= []
         const index = run.children.findIndex(c => c.session_id === capabilities.session_id)
         if (index < 0) run.children.push({ ...capabilities })
@@ -344,7 +363,7 @@ export class Orchestrator {
       }
       const reason = async () => {
         const graph = await store.read()
-        const output = await this.child('reason', { graph: renderGraphContext(graph, { ...config, context: { ...config.context, scope: 'frontier-history' } }, { fullAccess: options.autoConfirm?.() ?? false, actor }).text }, parent, config, signal, guard, onReady)
+        const output = await this.child('reason', { flag_collection: flagContext(), verification_policy: verificationMode, graph: renderGraphContext(graph, { ...config, context: { ...config.context, scope: 'frontier-history' } }, { fullAccess: options.autoConfirm?.() ?? false, actor }).text }, parent, config, signal, guard, onReady)
         const proposals = parseProposals(output.value)
         // Validate the entire batch before creating the first intent.
         const keys = new Set(graph.intents.map(i => normalize(i.description) + ':' + [...i.from].sort().join(',')))
@@ -391,18 +410,23 @@ export class Orchestrator {
               guard()
               if (foundFlag) return
               run.flag_observations ??= []
-              const fresh = candidates.filter((candidate) => !run.flag_observations!.some((o) => o.candidate.description === candidate.description))
+              const fresh = candidates.filter((candidate) => !known.has(candidate.description.trim()))
               if (!fresh.length) return
+              for (const candidate of fresh) known.set(candidate.description.trim(), 'unverified')
               run.flag_observations.push(...fresh.map((candidate) => ({ intent_id: nodeId, candidate })))
+              updateFlagProgress?.()
               // Keep an independently verifiable candidate even when stopping the
               // explorer before it returns structured_output or finishes disposal.
-              if (stopOnFlag) outcome.candidate = fresh[0]!
+              if (stopOnFlag || policy.mode === 'count') outcome.candidate = fresh[0]!
               await store.saveRun(run, runOptions)
-              if (stopOnFlag) await stopForFlag()
-              else await this.progress?.(parent, store.root, run, 'flag-candidate')
+              await stopForFlag()
+              if (!foundFlag) await this.progress?.(parent, store.root, run, 'flag-candidate')
             }
-            const output = await this.child('explore', { goal: graph.project.goal, intent, facts: graph.facts.filter(f => intent.from.includes(f.id)) }, parent, config, pipelineSignal, guard, onReady, publishFlags)
+            const output = await this.child('explore', { goal: graph.project.goal, flag_collection: flagContext(), verification_policy: verificationMode, intent, facts: graph.facts.filter(f => intent.from.includes(f.id)) }, parent, config, pipelineSignal, guard, onReady, publishFlags)
             outcome.candidate = parseCandidate(output.value, output.session, output.calls)
+            const independent = verificationMode === 'independent' || (verificationMode === 'selective' && config.verification.criticalKinds.includes(outcome.candidate.kind))
+            if (mode !== 'explore' && !independent) outcome.evidence_check = checkCandidateEvidence(outcome.candidate, output.calls, verificationMode === 'none' ? 'none' : 'lightweight')
+            updateFlagProgress?.()
             await store.saveRun(run, runOptions)
           }
           if (!existing && stopOnFlag && outcome.candidate?.kind === 'flag') {
@@ -411,8 +435,18 @@ export class Orchestrator {
             return
           }
           pipelineSignal.throwIfAborted()
+          const independent = mode === 'verify' || verificationMode === 'independent' || (verificationMode === 'selective' && outcome.candidate && config.verification.criticalKinds.includes(outcome.candidate.kind))
           if (mode === 'explore') await store.intentAction('release', nodeId, actor, undefined, managed)
-          else await verify(outcome, pipelineSignal)
+          else if (independent) await verify(outcome, pipelineSignal)
+          else {
+            await store.recordEvidence(run, outcome, actor, { ...managed, signal: pipelineSignal })
+            await this.progress?.(parent, store.root, run, 'evidence-recorded')
+            const intent = await store.readNode('intent', nodeId)
+            if (!collectionMode && intent.completes_goal === true && outcome.candidate?.goal_achieved === true) {
+              foundFlag = true; run.stop_reason = 'evidence-goal-reached'
+              for (const other of pipelines) if (other !== pipeline) other.abort(new FlagStop('已有工具证据，快速策略结束本轮'))
+            }
+          }
         } catch (error) {
           if (pipeline.signal.reason instanceof FlagStop) {
             if (!outcome.fact_id) {
@@ -452,7 +486,8 @@ export class Orchestrator {
           guard()
           const graph = await store.read()
           if (foundFlag) break
-          if (stopOnFlag && graph.facts.some(f => f.kind === 'flag' && f.verification_status === 'confirmed' && f.data?.status !== 'rejected')) { await stopForFlag(); break }
+          updateFlagProgress?.()
+          if ((stopOnFlag && graph.facts.some(f => f.kind === 'flag' && f.verification_status === 'confirmed' && f.data?.status !== 'rejected')) || (policy.mode === 'count' && (run.flag_progress?.found ?? 0) >= policy.count)) { await stopForFlag(); break }
           if (graph.project.status === 'completed') { run.stop_reason = 'goal-completed'; break }
           const ready = frontier(graph, { fullAccess: options.autoConfirm?.() ?? false, actor }).ready.filter(i => !attempted.has(i.id))
           if (!ready.length) {
@@ -478,12 +513,14 @@ export class Orchestrator {
         !foundFlag && run.outcomes.some((o) => o.state === 'failed')
           ? 'failed'
           : 'completed'
+      updateFlagProgress?.()
       await store.saveRun(run, runOptions)
       return run
     } catch (error) {
       if (!record) throw error
       record.state = signal.aborted ? 'cancelled' : 'failed'
       record.stop_reason = (error as Error).message
+      updateFlagProgress?.()
       const { signal: _cancelled, ...cleanup } = options
       try {
         await store.saveRun(record, cleanup)

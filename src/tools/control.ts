@@ -23,6 +23,9 @@ export function createControlTool(jobs: TaskPanelService) {
       task_id: { type: 'string' },
       run_id: { type: 'string' },
       intent_id: { type: 'string' },
+      flag_mode: { type: 'string', enum: ['first', 'count', 'all'] },
+      flag_count: { type: 'integer' },
+      verification_mode: { type: 'string', enum: ['none', 'lightweight', 'selective', 'independent'] },
     },
     output,
     async execute(args, exec) {
@@ -39,6 +42,9 @@ export function createControlTool(jobs: TaskPanelService) {
           ...(args.task_id ? { task_id: args.task_id } : {}),
           ...(args.run_id ? { run_id: args.run_id } : {}),
           ...(args.intent_id ? { intent_id: args.intent_id } : {}),
+          ...(args.flag_mode ? { flag_mode: args.flag_mode } : {}),
+          ...(args.flag_count ? { flag_count: args.flag_count } : {}),
+          ...(args.verification_mode ? { verification_mode: args.verification_mode } : {}),
         }),
       )
     },

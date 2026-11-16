@@ -131,7 +131,7 @@ export async function workbenchBrowser(
     }
   })
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
-  const browser = await chromium.launch({ headless: true }),
+  const browser = await chromium.launch({ headless: true }).catch(async (error) => { await new Promise<void>((resolve) => server.close(() => resolve())); throw error }),
     errors: string[] = []
   try {
     const page = await browser.newPage({
@@ -176,6 +176,10 @@ export async function workbenchBrowser(
       .fill('检查当前文件夹；记录真实证据。'.repeat(16))
     await page.locator('summary').filter({ hasText: '模型：' }).click()
     await page.getByLabel('任务推理强度', { exact: true }).selectOption('fixture-max')
+    await page.getByLabel('flag 完成策略', { exact: true }).selectOption('count')
+    await page.getByLabel('目标 flag 数量', { exact: true }).fill('3')
+    await page.getByLabel('flag 完成策略', { exact: true }).selectOption('all')
+    await page.getByLabel('自动复核', { exact: true }).selectOption('none')
     await page.getByLabel('添加题目附件', { exact: true }).setInputFiles([
       { name: '中文题目.zip', mimeType: 'application/zip', buffer: Buffer.from([80, 75, 0, 255, 0, 1]) },
       { name: 'sample.bin', mimeType: 'application/octet-stream', buffer: Buffer.from([0, 128, 255, 42]) },
@@ -196,6 +200,9 @@ export async function workbenchBrowser(
     const challenge = (await panel.overview()).challenges.find(
       (c) => c.title === title,
     )!
+    const project = JSON.parse(await readFile(path.join(challenge.cwd, '.sapper', 'tasks', challenge.taskId, 'project.json'), 'utf8'))
+    expect(project.flag_policy).toEqual({ mode: 'all', count: 3 })
+    expect(project.verification_mode).toBe('none')
     expect(await readFile(path.join(challenge.cwd, 'attachments', '01-中文题目.zip'))).toEqual(Buffer.from([80, 75, 0, 255, 0, 1]))
     expect(await readFile(path.join(challenge.cwd, 'attachments', '02-sample.bin'))).toEqual(Buffer.from([0, 128, 255, 42]))
     await page.getByRole('tab', { name: '文件', exact: true }).click()

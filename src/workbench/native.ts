@@ -39,6 +39,9 @@ import {
 import type { PanelAction } from '../panel/rpc.js'
 import { runCandidates } from '../orchestration/flags.js'
 import { attachmentPath, materializeAttachment, publicAttachments, validateAttachment } from './attachments.js'
+import { defaultFlagPolicy, projectFlagPolicy } from '../orchestration/flag-policy.js'
+import type { Config } from '../settings.js'
+import { verificationModeSchema } from '../orchestration/verification-policy.js'
 
 export function directoryName(
   title: string,
@@ -67,6 +70,7 @@ export class NativeWorkbench {
     private ctx: Context,
     private panel: TaskPanelService,
     private getRoot: (cwd: string) => string,
+    private getConfig: () => Config,
   ) {}
   private get store() {
     return this.panel.workbench
@@ -550,6 +554,8 @@ export class NativeWorkbench {
       jobs: Object.values(data.jobs),
       briefs: Object.values(data.briefs),
       defaults: {
+        flagPolicy: defaultFlagPolicy(this.getConfig().flags),
+        verificationMode: this.getConfig().verification.mode,
         ...(model
           ? {
               model: {
@@ -639,6 +645,7 @@ export class NativeWorkbench {
       )
     return {
       address: input,
+      ...(graph ? { flagPolicy: projectFlagPolicy(graph.project), verificationMode: verificationModeSchema.parse(graph.project.verification_mode ?? this.getConfig().verification.mode) } : {}),
       state,
       ...(result ? { result } : {}),
       evidence,

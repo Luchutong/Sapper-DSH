@@ -11,6 +11,7 @@ import { resultDefinition, ResultNode } from './result.js'
 import { VERSION } from '../constants.js'
 import { CapabilitySettings, type SettingValue } from './capability-settings.js'
 import type { WorkbenchPanelApi } from '../panel/rpc.js'
+import { verificationLabels } from './task-policy.js'
 
 export const name = 'sapper-dsh'
 export const inject = [
@@ -66,6 +67,8 @@ export function SapperSettings({ scope, api }: { scope: BrowserSettingsScope; ap
   }
 
   const orchestration = (state.value as { orchestration?: Record<string, unknown> } | undefined)?.orchestration ?? {}
+  const flags = (state.value as { flags?: { completion?: string; targetCount?: number } } | undefined)?.flags ?? {}
+  const verification = (state.value as { verification?: { mode?: string; criticalKinds?: string[] } } | undefined)?.verification ?? {}
   return (
     <section
       aria-label="Sapper 设置"
@@ -118,6 +121,17 @@ export function SapperSettings({ scope, api }: { scope: BrowserSettingsScope; ap
           : '正在等待 DSH 的 sapper 配置表单；不会自动写入默认值。'}
       </p>
       {error && <p role="alert">{error}</p>}
+      <fieldset style={{ border: '1px solid #71809655', borderRadius: 8, marginTop: 20 }}><legend>默认完成与复核策略</legend>
+        <label>默认 flag 策略{' '}<select aria-label="默认 flag 策略" value={flags.completion ?? 'first'} disabled={!state.writable || pending} onChange={(e) => { void save(['flags', 'completion'], e.target.value) }}>
+          <option value="first">首个 flag 即停</option><option value="count">收集指定数量</option><option value="all">持续收集多个 flag</option>
+        </select></label>
+        <label style={{ display: 'block', margin: '10px 0' }}>默认目标 flag 数量{' '}<BudgetNumber label="默认目标 flag 数量" value={flags.targetCount ?? 2} min={1} max={10000} disabled={!state.writable || pending} save={(v) => save(['flags', 'targetCount'], v)} /></label>
+        <label>默认自动复核{' '}<select aria-label="默认自动复核" value={verification.mode ?? 'lightweight'} disabled={!state.writable || pending} style={{ maxWidth: '100%' }} onChange={(e) => { void save(['verification', 'mode'], e.target.value) }}>
+          {Object.entries(verificationLabels).map(([id, label]) => <option value={id} key={id}>{label}</option>)}
+        </select></label>
+        {verification.mode === 'selective' && <div>自动独立复核的类型：{['flag', 'vuln', 'cred', 'loot', 'note', 'host', 'service'].map((kind) => <label key={kind} style={{ marginRight: 8 }}><input type="checkbox" aria-label={`独立复核 ${kind}`} checked={(verification.criticalKinds ?? ['flag', 'vuln', 'cred']).includes(kind)} disabled={!state.writable || pending} onChange={() => { const old = verification.criticalKinds ?? ['flag', 'vuln', 'cred']; void save(['verification', 'criticalKinds'], old.includes(kind) ? old.filter((k) => k !== kind) : [...old, kind]) }} />{kind}</label>)}</div>}
+        <p>默认轻量模式不启动第二个代理；关闭自动复核仍保留成功工具证据检查。每题可覆盖这些默认值。调整默认值会停止当前编排，原阶段策略与历史记录保留。</p>
+      </fieldset>
       <p>工具范围、模型和推理强度保存后会停止正在运行的编排，请在发起任务前设置。</p>
       <CapabilitySettings api={api} orchestration={orchestration} disabled={state.status !== 'ready' || !state.writable || pending} save={save} />
       <fieldset

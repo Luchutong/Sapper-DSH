@@ -3,7 +3,8 @@
 将 [sapper-v2](https://github.com/N1nEmAn/sapper-v2) 的事实图与
 `reason → explore → verify` 循环移植为 DSH NEXT 桌面插件。
 
-**当前版本 `0.1.0-alpha.18`：设置页可选择探索/复核工具范围、MCP 前缀、角色模型和默认推理强度；子代理支持使用父会话允许的 MCP 工具。**
+**当前版本 `0.1.0-alpha.19`：支持多个 flag 持续收集与数量目标，自动复核可关闭、轻量或选择性启用；默认不再为普通结论启动第二个代理。**
+新建题目可选完成/复核策略；已有任务在详情中“调整完成/复核策略并继续”，或在主会话使用 `/sapper collect all`、`/sapper collect 3`。flag 逐个即时回显，已有成功工具回执始终保留。见 [多 flag 与快速策略](docs/alpha19-validation.md)。
 默认工具范围增加 `mcp__*`，已有显式白名单保持原值，可在设置页启用全部 MCP、选择服务前缀或精确工具。推理档位由 DSH 模型适配器提供。见 [工具与模型配置](docs/alpha18-validation.md)。
 附件支持多选、移除、上传进度、取消和失败恢复；中文及同名文件原样保存，分析代理从本题 `attachments/` 读取。使用方法与验证见 [附件上传](docs/alpha17-validation.md)。
 本版修复 browse 目录选择、插件作用域下命令受理，以及重启后未完成题目的恢复。已有 alpha.13 创建记录可直接继续，见 [修复与验收](docs/alpha14-validation.md)。
@@ -55,7 +56,7 @@ requires_confirmation 或设置为 always，也不额外 ask；确认来源记�
 
 面板发起任务或 `/sapper start <目标>` 会自动准备存储并开始运行。已有图也可
 显式调用 `sapper_dispatch {"mode":"run"}` 或 `/sapper run`，开始后连续推进就绪意图，
-必要时 reason 提出新任务，explore 收集候选证据，普通候选经 verify 独立复核后才原子写入
+必要时 reason 提出新任务，explore 收集候选证据；默认轻量模式记录工具观察，独立复核后才写入
 `verification_status=confirmed` 的事实。`/sapper runs` 只读查看运行摘要。`/sapper start` 和 `/sapper run` 立即返回后台任务编号；用 `/sapper job` 查看进度、`/sapper cancel` 取消。
 子代理从实际 preset 继承文件/命令工具，启动时记录 tools/external_tools 清单；
 缺工具或 max-tokens 时停止本轮并报告原因。alpha.6 的失败图可直接重跑，不需重建。
@@ -92,7 +93,7 @@ flag 事实是权威记录，`flags/ledger.json` 是可重建索引。详细边�
 在 DSH NEXT 菜单“打开 DSH 终端”，执行后重启应用：
 
 ```powershell
-dsh plugin add "D:\BaiduSyncdisk\sapper移植\sapper-dsh-0.1.0-alpha.18.tgz"
+dsh plugin add "D:\BaiduSyncdisk\sapper移植\sapper-dsh-0.1.0-alpha.19.tgz"
 ```
 
 开发需要 Node.js 22+、pnpm 8.15.4 和 Python 3（仅 golden 测试使用）：

@@ -5,6 +5,8 @@ import { FACT_KINDS, FLAG_STATUSES, StoreError, factData, id, nullable, object, 
 import type { Fact, FactKind, GraphSnapshot, Hint, Intent, Project } from './types.js'
 import { validateRun, runId } from './runs.js'
 import type { RunRecord, RunOutcome } from './runs.js'
+import { flagPolicySchema, projectFlagPolicy, collectedFlags, type FlagPolicy } from '../orchestration/flag-policy.js'
+import { verificationModeSchema, type VerificationMode } from '../orchestration/verification-policy.js'
 
 type Entry = { file: string; value: unknown }
 type Changes = Map<string, unknown>
@@ -418,6 +420,44 @@ export class GraphStore {
       return record
     }, options)
   }
+  async configureFlagPolicy(policy: FlagPolicy, options?: WriteOptions): Promise<FlagPolicy> {
+    const value = flagPolicySchema.parse(policy)
+    return this.mutate(async (changes) => {
+      const graph = await this.healthy()
+      if (graph.project.status === 'completed') throw new StoreError('已完成阶段请创建后续阶段以继续收集 flag')
+      graph.project.flag_policy = value
+      if (graph.project.purpose !== 'writeup') graph.project.stop_on_flag = value.mode === 'first'
+      changes.set('project.json', graph.project)
+      return value
+    }, options)
+  }
+  async configureVerification(mode: VerificationMode, options?: WriteOptions): Promise<void> {
+    verificationModeSchema.parse(mode)
+    return this.mutate(async (changes) => {
+      const graph = await this.healthy()
+      if (graph.project.status === 'completed') throw new StoreError('已完成阶段请创建后续阶段')
+      graph.project.verification_mode = mode
+      changes.set('project.json', graph.project)
+    }, options)
+  }
+  async recordEvidence(record: RunRecord, outcome: RunOutcome, actor: string, options?: WriteOptions): Promise<void> {
+    return this.mutate(async (changes) => {
+      const graph = await this.healthy(), intent = await this.getNode('intent', outcome.intent_id) as Intent
+      if (!outcome.candidate?.evidence.length || intent.orchestration_run !== record.id || intent.to) throw new StoreError('观察结果的证据或意图归属不匹配')
+      this.permission(intent, actor, options?.autoConfirm?.())
+      // A recallable observation is separate from a confirmed fact. Keeping the
+      // original intent unlinked permits an explicit independent verification.
+      const fact = this.makeFact(await this.nextId(graph.project, 'fact', changes), {
+        title: `工具观察（未独立复核）：${outcome.candidate.title}`, kind: 'note',
+        description: `${outcome.candidate.description}\n状态：已有工具证据，未独立复核。`,
+        doc: JSON.stringify({ candidate: outcome.candidate, evidence_check: outcome.evidence_check, run_id: record.id }, null, 2),
+      }, actor)
+      outcome.state = 'observed'; outcome.fact_id = fact.id
+      Object.assign(intent, { status: 'open', worker: null, evidence_completed: true, evidence_fact: fact.id })
+      changes.set(`facts/${fact.id}.json`, fact); changes.set(`intents/${intent.id}.json`, intent)
+      changes.set(`runs/${record.id}.json`, structuredClone(record))
+    }, options)
+  }
   async promoteVerified(record: RunRecord, outcome: RunOutcome, actor: string, options?: WriteOptions): Promise<Fact> {
     return this.mutate(async changes => {
       const graph = await this.healthy(), intent = await this.getNode('intent', outcome.intent_id) as Intent
@@ -437,7 +477,9 @@ export class GraphStore {
       Object.assign(intent, { to: fact.id, worker: actor, status: 'done', concluded_at: now() })
       changes.set(`facts/${fact.id}.json`, fact); changes.set(`intents/${intent.id}.json`, intent)
       changes.set(`runs/${record.id}.json`, structuredClone(record))
-      if (intent.completes_goal === true && verification.goal_achieved === true) {
+      const policy = projectFlagPolicy(graph.project)
+      const completionAllowed = !policy || policy.mode === 'first' || (policy.mode === 'count' && [...collectedFlags([...graph.facts, fact], []).values()].filter((s) => s === 'confirmed').length >= policy.count)
+      if (completionAllowed && intent.completes_goal === true && verification.goal_achieved === true) {
         const completion: Intent = { id: await this.nextId(graph.project, 'intent', changes), from: [fact.id], to: 'goal', description: 'Independently verified project goal', doc: `Verified by ${verification.verifier_session}; run ${record.id}`, status: 'complete', worker: actor, requires_confirmation: false, confirmed_at: now(), concluded_at: now(), created_at: now(), creator: actor, orchestration_run: record.id }
         graph.project.status = 'completed'; graph.project.completed_at = now()
         changes.set(`intents/${completion.id}.json`, completion); changes.set('project.json', graph.project)

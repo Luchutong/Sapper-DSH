@@ -7,6 +7,7 @@ import { createTask, selectTask, taskRoot } from '../store/tasks.js'
 import { resolveStorePath } from '../store/paths.js'
 import { executionStore, json, output, type AuthorizeWrite } from './shared.js'
 import { StoreError } from '../store/validation.js'
+import { defaultFlagPolicy } from '../orchestration/flag-policy.js'
 
 export function createTaskTool(
   getConfig: () => Config,
@@ -23,7 +24,7 @@ export function createTaskTool(
   return defineTool({
     name: 'sapper_task',
     description:
-      'Start a user goal in any existing DSH workspace. Automatically creates an isolated task graph and task-context record, then runs independent evidence verification. No fixture or manual init needed. action=resume selects an existing task_id (legacy for the original graph) and continues ready work. action=continue starts a linked phase even after completion, inheriting historical evidence as observations; purpose=writeup prepares a local WP and does not stop on historical flags; solve re-examines/corrects a flag. Does not overwrite old graphs.',
+      'Start a user goal in any existing DSH workspace with configurable flag collection and review policy. Creates an isolated graph automatically. verification_mode=none/lightweight avoids automatic verifier agents; selective reviews configured important kinds; independent is the original full review. Only independently verified results become confirmed. flag_mode=first/count/all controls discovery stopping; flags are reported immediately. resume continues task_id; continue starts a linked phase without overwriting history. purpose=writeup prepares local WP without flag early stop. verify always independently checks only the selected candidate.',
     parameters: {
       action: {
         type: 'string',
@@ -35,6 +36,9 @@ export function createTaskTool(
       purpose: { type: 'string', enum: ['solve', 'writeup'] },
       run_id: { type: 'string' },
       intent_id: { type: 'string' },
+      flag_mode: { type: 'string', enum: ['first', 'count', 'all'], description: 'Completion policy explicitly selected by the user. all keeps collecting distinct flags; count stops at flag_count. Every new flag is reported immediately.' },
+      flag_count: { type: 'integer' },
+      verification_mode: { type: 'string', enum: ['none', 'lightweight', 'selective', 'independent'] },
     },
     output,
     async execute(args, exec) {
@@ -64,6 +68,10 @@ export function createTaskTool(
           : await selectTask(base, cwd, args.task_id ?? 'legacy', options)
         const context = args.action === 'start' ? seedContext?.(exec) : undefined
         if (context) await store.addFact(context, creator, options)
+        const project = (await store.read()).project
+        if (project.purpose !== 'writeup' && (args.flag_mode || ((args.action === 'start' || args.action === 'continue') && !project.flag_policy)))
+          await store.configureFlagPolicy({ mode: args.flag_mode ?? getConfig().flags.completion, count: args.flag_count ?? defaultFlagPolicy(getConfig().flags).count }, options)
+        if (args.verification_mode || ((args.action === 'start' || args.action === 'continue') && !project.verification_mode)) await store.configureVerification(args.verification_mode ?? getConfig().verification.mode, options)
         if ((await store.read()).project.status === 'completed') return json({ state: 'completed', stop_reason: 'goal-already-completed', task_id: store.root === base ? 'legacy' : path.basename(store.root) })
         if (args.action === 'verify' && (!args.run_id || !args.intent_id))
           throw new StoreError('独立复核需要 run_id 和 intent_id')

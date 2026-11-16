@@ -10,7 +10,7 @@ export const SCHEMAS: Record<'reason' | 'explore' | 'verify', ObjectJsonSchema> 
   reason: { type: 'object', properties: { intents: { type: 'array', items: { type: 'object', properties: {
     title: str, description: str, from: { type: 'array', items: str }, success_criteria: str, completes_goal: { type: 'boolean' },
   }, required: ['title', 'description', 'from', 'success_criteria'], additionalProperties: false } } }, required: ['intents'], additionalProperties: false },
-  explore: { type: 'object', properties: { title: str, description: str, kind: { type: 'string', enum: [...FACT_KINDS] }, reproduction: str, evidence }, required: ['title', 'description', 'kind', 'evidence'], additionalProperties: false },
+  explore: { type: 'object', properties: { title: str, description: str, kind: { type: 'string', enum: [...FACT_KINDS] }, reproduction: str, goal_achieved: { type: 'boolean' }, evidence }, required: ['title', 'description', 'kind', 'evidence'], additionalProperties: false },
   verify: { type: 'object', properties: { verified: { type: 'boolean' }, evidence, issues: str, goal_achieved: { type: 'boolean' } }, required: ['verified', 'evidence', 'issues'], additionalProperties: false },
 }
 export interface CapturedCall { tool: string; text: string; receipt_id?: string }
@@ -39,7 +39,11 @@ export function checkedEvidence(value: unknown, calls: Map<string, CapturedCall>
 export function parseCandidate(value: unknown, session: string, calls: Map<string, CapturedCall>): Candidate {
   const v = object(value, 'candidate')
   if (!FACT_KINDS.includes(v.kind as never)) throw new StoreError('候选 kind 无效')
-  return { title: text(v.title, 'title'), description: text(v.description, 'description'), kind: v.kind as Candidate['kind'], evidence: checkedEvidence(v.evidence, calls), explorer_session: session, ...(typeof v.reproduction === 'string' && v.reproduction.trim() ? { reproduction: v.reproduction.slice(0, 12000) } : {}) }
+  if (v.kind === 'flag') {
+    const value = text(v.description, 'description').trim(), evidence = checkedEvidence(v.evidence, calls)
+    if (!evidence.some((e) => calls.get(e.call_id)?.text.includes(value))) throw new StoreError('flag 候选值必须实际出现在引用的成功工具输出中')
+  }
+  return { title: text(v.title, 'title'), description: text(v.description, 'description'), kind: v.kind as Candidate['kind'], evidence: checkedEvidence(v.evidence, calls), explorer_session: session, ...(v.goal_achieved === true ? { goal_achieved: true } : {}), ...(typeof v.reproduction === 'string' && v.reproduction.trim() ? { reproduction: v.reproduction.slice(0, 12000) } : {}) }
 }
 export function parseVerification(value: unknown, session: string, calls: Map<string, CapturedCall>): Verification {
   const v = object(value, 'verification')

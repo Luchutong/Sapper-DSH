@@ -47,6 +47,9 @@ interface Scenario {
   userGate?: Promise<void>
   writeup?: boolean
   flag?: string
+  flagValues?: string[]
+  reasonOnce?: boolean
+  citeAll?: boolean
   hangOther?: boolean
   exploreReads?: number
   verifyReads?: number
@@ -136,6 +139,7 @@ class FixtureModel extends LlmAdapter {
     const role = raw.includes('# Sapper verify') ? 'verify' : raw.includes('# Sapper explore') ? 'explore' : 'reason'
     if (role === 'verify') await this.scenario.verifyGate
     const receipt = raw.match(/ev-[a-f0-9-]{36}/g)?.at(-1) ?? 'missing-receipt'
+    const route = Number(/Read local fixture (\d+)/.exec(raw)?.[1] ?? 0), flagValue = this.scenario.flagValues?.[route] ?? this.scenario.flag
     const tools = options.messages.filter((m) => m.role === 'tool')
     if (this.scenario.maxTokens === role) { yield { type: 'finish', reason: { kind: 'max-tokens' } }; return }
     if ((this.scenario.hang || (this.scenario.hangOther && raw.includes('Read local fixture 1'))) && role === 'explore') {
@@ -145,11 +149,11 @@ class FixtureModel extends LlmAdapter {
     const requiredReads = role === 'verify' ? this.scenario.verifyReads ?? 1 : this.scenario.exploreReads ?? 1
     let name = 'structured_output',
       args: unknown
-    if (role === 'reason') args = { intents: this.scenario.emptyReason ? [] : Array.from({ length: this.scenario.proposals ?? 1 }, (_, n) => ({ title: `Check fixture ${n}`, description: `Read local fixture ${n}`, from: ['f001'], success_criteria: 'Fixture content contains VERIFIED-LOCAL-7C42', completes_goal: !!this.scenario.completesGoal })) }
+    if (role === 'reason') args = { intents: this.scenario.emptyReason || (this.scenario.reasonOnce && this.requests.filter((r) => JSON.stringify(r.messages).includes('# Sapper reason')).length > 1) ? [] : Array.from({ length: this.scenario.proposals ?? 1 }, (_, n) => ({ title: `Check fixture ${n}`, description: `Read local fixture ${n}`, from: ['f001'], success_criteria: 'Fixture content contains VERIFIED-LOCAL-7C42', completes_goal: !!this.scenario.completesGoal })) }
     else if (!tools.length && this.scenario.writeup) { name = role === 'explore' ? 'pwsh' : 'read'; args = role === 'explore' ? { code: 'write-local-wp' } : { path: 'WP.md' } }
     else if (!tools.length && this.scenario.attack) { name = 'sapper_fact'; args = { action: 'create', description: 'BYPASS' } }
-    else if (tools.length < (this.scenario.attack ? requiredReads + 1 : requiredReads) && !(role === 'explore' && (this.scenario.noEvidence || this.scenario.forged))) { name = (role === 'verify' ? this.scenario.verifyExternalName : undefined) ?? this.scenario.externalName ?? 'read'; args = { path: requiredReads > 1 ? `fixture-${tools.length}.txt` : 'fixture.txt' } }
-    else if (role === 'explore') args = { title: 'Fixture observation', description: this.scenario.writeup ? 'WP.md: local evidence and reproduction steps saved' : this.scenario.flag ?? 'Local fixture contains VERIFIED-LOCAL-7C42', kind: this.scenario.flag && !this.scenario.writeup ? 'flag' : 'note', ...(this.scenario.recipe ? { reproduction: this.scenario.recipe } : {}), evidence: this.scenario.noEvidence ? [] : [{ receipt_id: this.scenario.forged ? 'invented' : receipt }] }
+    else if (tools.length < (this.scenario.attack ? requiredReads + 1 : requiredReads) && !(role === 'explore' && (this.scenario.noEvidence || this.scenario.forged))) { name = (role === 'verify' ? this.scenario.verifyExternalName : undefined) ?? this.scenario.externalName ?? 'read'; args = { path: this.scenario.flagValues ? `flag-${route}.txt` : requiredReads > 1 ? `fixture-${tools.length}.txt` : 'fixture.txt' } }
+    else if (role === 'explore') args = { title: 'Fixture observation', description: this.scenario.writeup ? 'WP.md: local evidence and reproduction steps saved' : flagValue ?? 'Local fixture contains VERIFIED-LOCAL-7C42', kind: flagValue && !this.scenario.writeup ? 'flag' : 'note', goal_achieved: !!this.scenario.completesGoal, ...(this.scenario.recipe ? { reproduction: this.scenario.recipe } : {}), evidence: this.scenario.noEvidence ? [] : this.scenario.citeAll ? [...new Set(raw.match(/ev-[a-f0-9-]{36}/g) ?? [])].map((receipt_id) => ({ receipt_id })) : [{ receipt_id: this.scenario.forged ? 'invented' : receipt }] }
     else args = { goal_achieved: !!this.scenario.completesGoal && !this.scenario.denyGoal, verified: !this.scenario.reject, issues: this.scenario.reject ? 'REPRODUCTION-MISMATCH' : '', evidence: this.scenario.noVerifyEvidence || this.scenario.reject ? [] : [{ receipt_id: receipt }] }
     yield { type: 'reasoning-delta', index: 1, text: role === 'explore' ? 'EXPLORER-PRIVATE-TRACE' : 'fixture reasoning' }
     yield { type: 'tool-call-delta', index: 0, id: ToolCallId('fixture-' + this.requests.length), name, argumentsDelta: JSON.stringify(args) }
@@ -172,6 +176,7 @@ async function setup(
     (scenario.flag ?? 'VERIFIED-LOCAL-7C42') + '\n',
   )
   for (let i = 0; i < Math.max(scenario.exploreReads ?? 0, scenario.verifyReads ?? 0); i++) await writeFile(path.join(cwd, `fixture-${i}.txt`), `VERIFIED-LOCAL-7C42 observation ${i}\n`)
+  for (const [i, value] of (scenario.flagValues ?? []).entries()) await writeFile(path.join(cwd, `flag-${i}.txt`), value + '\n')
   const ctx = new Context()
   cleanup.push(() => ctx.fiber.dispose())
   await mountAgentLoopTestDependencies(ctx, { workingDirectory: true })
@@ -225,7 +230,7 @@ async function setup(
     } }
     await ctx.agentPresets.register({ id: 'fixture', plugins: [{ name: 'cordis:fixtureTools' }] })
   }
-  let config = resolveConfig({ ...input, orchestration: { maxExplore: 1, maxSteps: 1, ...input?.orchestration } })
+  let config = resolveConfig({ ...input, verification: { mode: 'independent', ...input?.verification }, orchestration: { maxExplore: 1, maxSteps: 1, ...input?.orchestration } })
   if (commands) await ctx.plugin(CommandRuntime)
   // Match the real Loader boundary: optional services cannot be accessed as
   // properties of this tools/agents scope, even when provided at the root.
@@ -277,7 +282,7 @@ async function setup(
     store,
     disposeSubagents: () => subagentsFiber.dispose(),
     setConfig: (next: ConfigInput) => {
-      config = resolveConfig(next)
+      config = resolveConfig({ ...next, verification: { mode: 'independent', ...next?.verification } })
       ctx.emit('loader/volatile-update', [])
     },
     config,
@@ -1000,6 +1005,112 @@ it('denies extra evidence calls after entering finalization even when a model ig
   expect(run.state).toBe('failed')
   expect(run.outcomes[0]?.error).toContain('步数预算')
   expect(read).toHaveBeenCalledTimes(1)
+})
+
+it('collects the requested number of distinct flags, reports each immediately and does not start verifier agents', async () => {
+  const values = ['CTF2{MULTI-A}', 'CTF2{MULTI-B}'], { ctx, parent, cwd, model } = await setup({ flagValues: values, proposals: 2, reasonOnce: true }, { flags: { completion: 'count', targetCount: 2 }, verification: { mode: 'none' }, orchestration: { concurrency: 1, maxSteps: 6, maxExplore: 6 } }, true, 1, 'preset', false)
+  const service = ctx.get('sapperPanel') as TaskPanelService, events: import('../src/panel/result.js').TaskResult[] = []
+  ctx.on('session/event', (_s,e) => { const result = resultOfEvent(e); if (result?.phase === 'flag-found') events.push(result) })
+  service.submit(parent, { action: 'start', goal: '收集两个不同 flag' })
+  await service.whenIdle(cwd)
+  const state = await service.state(String(parent.id)), result = state.job!.result!
+  expect(result.stop_reason).toBe('flag-target-reached')
+  expect(result.flag_progress).toMatchObject({ found: 2, target: 2, confirmed: 0 })
+  expect(events.some((e) => e.flag_progress?.found === 1 && e.state === 'running')).toBe(true)
+  expect(result.candidates.filter((c) => c.kind === 'flag').map((c) => c.description).sort()).toEqual(values)
+  expect(model.requests.filter((r) => JSON.stringify(r.messages).includes('# Sapper verify'))).toHaveLength(0)
+  expect(ctx.agents.list()).toEqual([parent])
+})
+it('continues past flags in all mode and ignores a premature completes_goal claim from a verifier', async () => {
+  const { dispatch, store, model } = await setup({ flagValues: ['CTF2{ALL-A}', 'CTF2{ALL-B}'], proposals: 2, completesGoal: true, reasonOnce: true }, { flags: { completion: 'all' }, verification: { mode: 'independent' }, orchestration: { concurrency: 1, maxSteps: 6, maxExplore: 6 } })
+  const run = await dispatch()
+  expect(run.state, JSON.stringify(run)).toBe('completed')
+  expect(run.stop_reason).toBe('no-new-intents')
+  expect(run.flag_progress).toMatchObject({ found: 2, confirmed: 2 })
+  expect(run.outcomes.filter((o) => o.state === 'confirmed')).toHaveLength(2)
+  expect((await store.read()).project.status).toBe('active')
+  expect(model.requests.filter((r) => JSON.stringify(r.messages).includes('# Sapper verify')).length).toBeGreaterThanOrEqual(2)
+})
+it('deduplicates repeated flag values and does not claim the requested target was reached', async () => {
+  const { dispatch, store } = await setup({ flagValues: ['CTF2{SAME}', 'CTF2{SAME}'], proposals: 2, reasonOnce: true }, { flags: { completion: 'count', targetCount: 2 }, verification: { mode: 'none' }, orchestration: { maxSteps: 6, maxExplore: 6 } })
+  const run = await dispatch()
+  expect(run.stop_reason).toBe('no-new-intents')
+  expect(run.flag_progress).toMatchObject({ found: 1, target: 2 })
+  expect((await store.readRun(run.id)).flag_observations).toHaveLength(1)
+})
+it('resumes a first-flag run in the same graph with a larger target and preserves its earlier run', async () => {
+  const { execute, dispatch, store, model } = await setup({ flagValues: ['CTF2{RESUME-A}', 'CTF2{RESUME-B}'], proposals: 2, reasonOnce: true }, { orchestration: { concurrency: 1, maxSteps: 6, maxExplore: 6 } })
+  const first = await dispatch(), original = await readFile(path.join(store.root, 'runs', first.id + '.json'), 'utf8')
+  expect(first.stop_reason).toBe('flag-found')
+  const result = await execute('sapper_dispatch', { mode: 'run', flag_mode: 'count', flag_count: 2, verification_mode: 'none' }) as unknown as RunRecord
+  expect(result.flag_progress).toMatchObject({ found: 2, target: 2 })
+  expect(result.stop_reason).toBe('flag-target-reached')
+  expect(await readFile(path.join(store.root, 'runs', first.id + '.json'), 'utf8')).toBe(original)
+  expect((await store.read()).integrity).toEqual([])
+  expect(model.requests.filter((r) => JSON.stringify(r.messages).includes('# Sapper verify'))).toHaveLength(0)
+})
+it('records fast evidence without a verifier and still permits explicit independent verification afterwards', async () => {
+  const { dispatch, store, model } = await setup({ completesGoal: true }, { verification: { mode: 'none' }, orchestration: { maxSteps: 3, maxExplore: 3 } })
+  const fast = await dispatch()
+  expect(fast.state, JSON.stringify(fast)).toBe('completed')
+  expect(fast.stop_reason).toBe('evidence-goal-reached')
+  expect(fast.outcomes[0]).toMatchObject({ state: 'observed', verify_attempts: 0, evidence_check: { mode: 'none' } })
+  expect(model.requests.some((r) => JSON.stringify(r.messages).includes('# Sapper verify'))).toBe(false)
+  expect((await store.read()).facts.some((f) => f.verification_status === 'confirmed')).toBe(false)
+  const checked = await dispatch('verify', { run_id: fast.id, intent_id: fast.outcomes[0]!.intent_id })
+  expect(checked.outcomes[0]?.state).toBe('confirmed')
+  expect((await store.read()).integrity).toEqual([])
+})
+it('lightly checks important flag evidence in the explorer with two actual receipts, without a second agent', async () => {
+  const { dispatch, model, store } = await setup({ flagValues: ['CTF2{LIGHT-A}'], exploreReads: 2, citeAll: true, reasonOnce: true }, { flags: { completion: 'all' }, verification: { mode: 'lightweight' }, orchestration: { maxSteps: 4, maxExplore: 4 } })
+  const run = await dispatch()
+  expect(run.outcomes[0], JSON.stringify(run)).toMatchObject({ state: 'observed', evidence_check: { mode: 'lightweight', passed: true } })
+  expect((await store.readRun(run.id)).outcomes[0]?.candidate?.evidence).toHaveLength(2)
+  expect(model.requests.some((r) => JSON.stringify(r.messages).includes('# Sapper verify'))).toBe(false)
+})
+it('retains a one-receipt important observation without secretly launching a verifier to fill the missing check', async () => {
+  const { dispatch, model } = await setup({ flagValues: ['CTF2{ONE-RECEIPT}'], reasonOnce: true }, { flags: { completion: 'all' }, verification: { mode: 'lightweight' }, orchestration: { maxSteps: 3, maxExplore: 3 } })
+  const run = await dispatch()
+  expect(run.outcomes[0]).toMatchObject({ state: 'observed', evidence_check: { passed: false } })
+  expect(model.requests.some((r) => JSON.stringify(r.messages).includes('# Sapper verify'))).toBe(false)
+})
+it('selectively verifies configured important kinds while ordinary notes use fast evidence recording', async () => {
+  const ordinary = await setup({ completesGoal: true }, { verification: { mode: 'selective', criticalKinds: ['flag'] } })
+  expect((await ordinary.dispatch()).outcomes[0]?.state).toBe('observed')
+  expect(ordinary.model.requests.some((r) => JSON.stringify(r.messages).includes('# Sapper verify'))).toBe(false)
+  const important = await setup({ flag: 'CTF2{SELECTIVE}', reasonOnce: true }, { flags: { completion: 'all' }, verification: { mode: 'selective', criticalKinds: ['flag'] }, orchestration: { maxSteps: 3, maxExplore: 3 } })
+  expect((await important.dispatch()).outcomes[0]?.state).toBe('confirmed')
+  expect(important.model.requests.some((r) => JSON.stringify(r.messages).includes('# Sapper verify'))).toBe(true)
+})
+
+it('keeps other collection routes running after a flag and cancels them explicitly without losing that result', async () => {
+  const { ctx, parent, cwd, model } = await setup({ flagValues: ['CTF2{KEEP-A}', 'CTF2{KEEP-B}'], proposals: 2, hangOther: true }, { flags: { completion: 'all' }, verification: { mode: 'none' }, orchestration: { concurrency: 2, maxSteps: 4, maxExplore: 4 } }, true, 1, 'preset', false)
+  const service = ctx.get('sapperPanel') as TaskPanelService, events: import('../src/panel/result.js').TaskResult[] = []
+  ctx.on('session/event', (_s,e) => { const result = resultOfEvent(e); if (result?.phase === 'flag-found') events.push(result) })
+  service.submit(parent, { action: 'start', goal: '持续收集所有 flag' })
+  await waitForRuntime(() => expect(events.some((e) => e.candidates.some((c) => c.description === 'CTF2{KEEP-A}'))).toBe(true))
+  expect((await service.state(String(parent.id))).job?.state).toBe('running')
+  service.submit(parent, { action: 'cancel' }); await service.whenIdle(cwd)
+  const result = (await service.state(String(parent.id))).job!
+  expect(result.state).toBe('cancelled')
+  expect(result.result?.candidates.some((c) => c.description === 'CTF2{KEEP-A}')).toBe(true)
+  expect(model.requests.some((r) => JSON.stringify(r.messages).includes('# Sapper verify'))).toBe(false)
+  expect(ctx.agents.list()).toEqual([parent])
+})
+
+it('carries a main-session request to disable review into the automatically steered follow-up', async () => {
+  const scenario: Scenario = { hang: true }, { ctx, parent, cwd, model } = await setup(scenario, {}, true, 1, 'preset', false)
+  const service = ctx.get('sapperPanel') as TaskPanelService
+  service.submit(parent, { action: 'start', goal: '原独立复核任务' })
+  await waitForRuntime(() => expect(model.requests.some((r) => JSON.stringify(r.messages).includes('# Sapper explore'))).toBe(true))
+  scenario.hang = false; scenario.completesGoal = true
+  service.submit(parent, { action: 'steer', goal: '取消自动复核，继续收集其他 flag', flag_mode: 'all', verification_mode: 'none' })
+  await service.whenIdle(cwd)
+  const state = await service.state(String(parent.id)), store = new GraphStore((await resolveSelectedStore(cwd, resolveConfig()))!, cwd)
+  expect(state.job?.state).toBe('completed')
+  expect((await store.read()).project).toMatchObject({ verification_mode: 'none', flag_policy: { mode: 'all' } })
+  expect(state.runs[0]?.outcomes[0]?.state).toBe('observed')
+  expect(model.requests.some((r) => JSON.stringify(r.messages).includes('# Sapper verify'))).toBe(false)
 })
 
 it('ends on the first evidence-backed flag, immediately reports it, drains competing exploration and never starts verification or another reason', async () => {

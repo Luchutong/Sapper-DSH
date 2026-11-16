@@ -61,3 +61,16 @@ it('reports failed Config saves without claiming a changed reasoning default', a
     expect(view.root.findByProps({ role: 'alert' }).children.join('')).toContain('未接受此次保存')
   } finally { await act(async () => view?.unmount()) }
 })
+it('exposes a fast review default and explicitly saves multi-flag and review defaults', async () => {
+  const { scope, api } = setup()
+  let view!: ReturnType<typeof create>
+  try {
+    await act(async () => { view = create(<SapperSettings scope={scope} api={api} />) })
+    expect(view.root.findByProps({ 'aria-label': '默认自动复核' }).props.value).toBe('lightweight')
+    expect(scope.mutate).not.toHaveBeenCalled()
+    await act(async () => view.root.findByProps({ 'aria-label': '默认自动复核' }).props.onChange({ target: { value: 'none' } }))
+    await act(async () => view.root.findByProps({ 'aria-label': '默认 flag 策略' }).props.onChange({ target: { value: 'all' } }))
+    expect(scope.mutate).toHaveBeenCalledWith([{ op: 'set', path: ['verification', 'mode'], value: 'none' }])
+    expect(scope.mutate).toHaveBeenCalledWith([{ op: 'set', path: ['flags', 'completion'], value: 'all' }])
+  } finally { await act(async () => view?.unmount()) }
+})

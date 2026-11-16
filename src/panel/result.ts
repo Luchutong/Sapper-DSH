@@ -1,4 +1,6 @@
 export interface TaskResult {
+  flag_progress?: import('../orchestration/flag-policy.js').FlagProgress
+  verification_mode?: import('../orchestration/verification-policy.js').VerificationMode
   attachments?: import('../workbench/contracts.js').PublicAttachment[]
   phase?: 'accepted' | 'progress' | 'direction' | 'flag-found' | 'result'
   activity?: Array<{ at: string; stage: string }>
@@ -21,6 +23,7 @@ export interface TaskResult {
     description: string
     kind: string
     status: 'unverified' | 'rejected'
+    evidence_check?: import('../orchestration/verification-policy.js').EvidenceCheck
   }>
   errors: string[]
   stop_reason?: string

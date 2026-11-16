@@ -47,6 +47,7 @@ import { NativeWorkbench } from '../workbench/native.js'
 import { publicAttachments } from '../workbench/attachments.js'
 import { StoreError } from '../store/validation.js'
 import { capabilities } from '../panel/capabilities.js'
+import { flagPolicyLabel } from '../orchestration/flag-policy.js'
 
 interface Job {
   input: PanelAction
@@ -54,7 +55,7 @@ interface Job {
   agentId: string
   goal: string
   taskId?: string
-  next?: { goal: string; purpose: 'solve' | 'writeup' }
+  next?: JobRecord['next']
   activity: Array<{ at: string; stage: string }>
   callId: string
   started: boolean
@@ -89,6 +90,7 @@ export class TaskPanelService extends TypertRemoteService {
       ctx,
       this,
       (cwd) => resolveStorePath(cwd, this.getConfig())!,
+      this.getConfig,
     )
     ctx.on('loader/volatile-update',()=>{void this.pump()})
     ctx.inject(['sessionController'], () => {
@@ -389,7 +391,7 @@ export class TaskPanelService extends TypertRemoteService {
       const nextGoal = `原任务：${current.goal}\n用户调整方向：${args.goal.trim()}`
       if (nextGoal.length > 8000)
         throw new StoreError('合并后的任务目标最多 8000 字符，请缩短新方向')
-      current.next = { goal: nextGoal, purpose: 'solve' }
+      current.next = { goal: nextGoal, purpose: 'solve', ...(args.flag_mode ? { flag_mode: args.flag_mode } : {}), ...(args.flag_count ? { flag_count: args.flag_count } : {}), ...(args.verification_mode ? { verification_mode: args.verification_mode } : {}) }
       current.state = 'cancelling'
       current.controller.abort(new StoreError('用户调整方向，正在停止原路线'))
       void this.persist(current)
@@ -406,6 +408,11 @@ export class TaskPanelService extends TypertRemoteService {
         '当前工作区已有任务运行；用 /sapper job 查看或 /sapper cancel 取消',
       )
     const launchId = this.launches.get(String(agent.id))
+    const launch = launchId ? this.workbench.snapshot().launches[launchId] : undefined
+    if (args.action === 'start' && launch?.input.flag_policy) {
+      args.flag_mode = launch.input.flag_policy.mode; args.flag_count = launch.input.flag_policy.count
+    }
+    if (args.action === 'start' && launch?.input.verification_mode) args.verification_mode = launch.input.verification_mode
     if (launchId && current?.callId === launchId)
       return { accepted: true, job_id: current.callId, state: current.state }
     if (
@@ -553,9 +560,9 @@ export class TaskPanelService extends TypertRemoteService {
     try {
       agent = await this.resolveAgent(job.agentId)
       const execution =
-        args.action === 'run'
+        args.action === 'run' && !args.flag_mode && !args.verification_mode
           ? { name: 'sapper_dispatch', arguments: { mode: 'run' } }
-          : { name: 'sapper_task', arguments: args }
+          : { name: 'sapper_task', arguments: { ...args, action: args.action === 'run' ? 'resume' : args.action } }
       const result = await this.ctx.tools.execute({
         ...execution,
         agent,
@@ -652,8 +659,7 @@ export class TaskPanelService extends TypertRemoteService {
           delete job.next
           this.submit(agent, {
             action: 'continue',
-            goal: next.goal,
-            purpose: next.purpose,
+            ...next,
             ...(job.taskId ? { task_id: job.taskId } : {}),
           })
         }
@@ -739,16 +745,20 @@ export class TaskPanelService extends TypertRemoteService {
       verify: '正在独立复核',
       'flag-found':
         'flag 已回显，可先提交测试；后台收尾不阻塞查看，验证状态见下方',
-      'flag-candidate': '已获取未验证 flag，可先提交测试；后台复核不阻塞此结果',
+      'flag-candidate': '新 flag 已回显，可先提交测试；按当前策略继续收集，不等待独立复核',
+      'flag-target-reached': '已达到指定 flag 数量，候选已即时回显，本轮正在收尾',
+      'evidence-recorded': '已有工具证据，已按快速策略记录观察；未启动独立复核',
     }
     await this.persist(job)
     this.notice(
       agent,
       job,
-      stage === 'flag-found' || stage === 'flag-candidate' ? 'flag-found' : 'progress',
+      ['flag-found', 'flag-candidate', 'flag-target-reached'].includes(stage) ? 'flag-found' : 'progress',
       labels[stage] ?? stage,
       {
         run_id: run.id,
+        ...(run.flag_progress ? { flag_progress: run.flag_progress } : {}),
+        ...(run.verification_mode ? { verification_mode: run.verification_mode } : {}),
         candidates: runCandidates(run),
         confirmed: run.outcomes.filter((o) => o.state === 'confirmed' && o.candidate?.kind === 'flag').map((o) => ({
           id: o.fact_id!, title: o.candidate!.title, description: o.candidate!.description, kind: 'flag',
@@ -802,9 +812,11 @@ export class TaskPanelService extends TypertRemoteService {
         (run?.outcomes ?? []).flatMap((o) => (o.error ? [o.error] : [])),
       ),
     ]
-    const summary = `${run?.stop_reason === 'flag-found' ? '发现 flag，已按约束结束本轮。候选状态与独立复核状态见下方。' : (run ? run.stop_reason === 'goal-completed' : graph.project.status === 'completed') ? '目标已独立复核完成。' : '本轮已结束，目标仍待完成。'}\n${graph.project.goal}\n已确认结果 ${confirmed.length} 项；未确认候选 ${candidates.length} 项。${run?.stop_reason ? '\n停止原因：' + run.stop_reason : ''}`
+    const summary = `${run?.stop_reason === 'flag-target-reached' ? '已收集到指定数量的不同 flag，按策略结束本轮；可先提交测试。' : run?.stop_reason === 'flag-found' ? '发现 flag，已按约束结束本轮。候选状态与独立复核状态见下方。' : run?.stop_reason === 'evidence-goal-reached' ? '已有工具证据，已按快速策略完成本轮取证；未独立复核。' : (run ? run.stop_reason === 'goal-completed' : graph.project.status === 'completed') ? '目标已独立复核完成。' : '本轮已结束，目标仍待完成。'}\n${graph.project.goal}\n${run?.flag_progress ? `${flagPolicyLabel(run.flag_progress.policy)}：已发现 ${run.flag_progress.found} 个，其中独立复核 ${run.flag_progress.confirmed} 个。\n` : ''}已确认结果 ${confirmed.length} 项；未确认候选 ${candidates.length} 项。${run?.stop_reason ? '\n停止原因：' + run.stop_reason : ''}`
     return {
       phase: 'result',
+      ...(run?.flag_progress ? { flag_progress: run.flag_progress } : {}),
+      ...(run?.verification_mode ? { verification_mode: run.verification_mode } : {}),
       ...(wp_path ? { wp_path } : {}),
       job_id: jobId,
       task_id: taskId,

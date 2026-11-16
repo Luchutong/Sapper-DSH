@@ -8,7 +8,7 @@ export interface Frontier {
 export function frontier(graph: GraphSnapshot, access: AccessView = {}): Frontier {
   const result: Frontier = { ready: [], pending_confirmation: [], missing_dependencies: [], in_flight: [], blocked_by_integrity: [] }
   const ids = new Set(graph.facts.map(f => f.id))
-  const open = graph.intents.filter(i => i.to === null).sort((a, b) => Number(a.status !== 'claimed') - Number(b.status !== 'claimed') ||
+  const open = graph.intents.filter(i => i.to === null && i.evidence_completed !== true).sort((a, b) => Number(a.status !== 'claimed') - Number(b.status !== 'claimed') ||
     (a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
   for (const intent of open) {
     if (intent.from.some(id => id === 'goal' || !ids.has(id))) result.missing_dependencies.push(intent)

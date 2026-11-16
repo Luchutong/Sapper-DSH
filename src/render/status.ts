@@ -8,7 +8,7 @@ export function graphStatus(graph: GraphSnapshot, access: AccessView = {}, inclu
   return {
     state: graph.project.status, goal: graph.project.goal,
     counts: { facts: graph.facts.filter(f => f.id !== 'goal').length, intents: graph.intents.length, runs: graph.project.counters.run, verified_facts: graph.facts.filter(f => f.verification_status === 'confirmed').length,
-      open_intents: graph.intents.filter(i => i.to === null).length, hints: graph.hints.length, flags: graph.facts.filter(f => f.kind === 'flag').length },
+      open_intents: graph.intents.filter(i => i.to === null && i.evidence_completed !== true).length, hints: graph.hints.length, flags: graph.facts.filter(f => f.kind === 'flag').length },
     frontier: Object.fromEntries(groups.map(key => [key, { total: view[key].length, ids: view[key].slice(0, 20).map(i => i.id) }])),
     ...(includeRows ? { frontier_rows: Object.fromEntries(groups.map(key => [key, view[key].slice(0, 20).map(({ doc: _doc, ...node }) => node)])) } : {}),
     warnings: graph.warnings, integrity: graph.integrity,

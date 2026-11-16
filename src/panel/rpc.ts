@@ -9,6 +9,7 @@ import type { TaskResult } from './result.js'
 import type { ChildCapabilities } from '../store/runs.js'
 import { z } from 'zod'
 import type { Capabilities } from './capabilities.js'
+import { verificationModeSchema } from '../orchestration/verification-policy.js'
 import { createTypertRemoteInfo } from '@deepseek-ai/dsh-typert-protocol/remote-info'
 import type { TypertRemoteCodecSpec } from '@deepseek-ai/dsh-typert-protocol'
 
@@ -28,6 +29,9 @@ export const actionSchema = z
     purpose: z.enum(['solve', 'writeup']).optional(),
     run_id: z.string().optional(),
     intent_id: z.string().optional(),
+    flag_mode: z.enum(['first', 'count', 'all']).optional(),
+    flag_count: z.number().int().min(1).max(10000).optional(),
+    verification_mode: verificationModeSchema.optional(),
   })
   .strict()
 export type PanelAction = z.infer<typeof actionSchema>

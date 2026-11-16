@@ -19,11 +19,11 @@ export function renderGraphContext(graph: GraphSnapshot, config: Config, extras:
   const budget = config.context.maxChars
   if (header.length > budget) return { text: '', shown: 0, omitted: 0 }
   const blocks: string[] = []
-  const goal = `\nProject: ${line({ goal: graph.project.goal, status: graph.project.status })}`
+  const goal = `\nProject: ${line({ goal: graph.project.goal, status: graph.project.status, ...(graph.project.flag_policy ? { flag_policy: graph.project.flag_policy } : {}), ...(graph.project.verification_mode ? { verification_mode: graph.project.verification_mode } : {}) })}`
   blocks.push(goal)
   if (config.context.scope !== 'goal-only') {
     const view = frontier(graph, extras)
-    blocks.push(`\nCounts: ${line({ facts: graph.facts.filter(f => f.id !== 'goal').length, open_intents: graph.intents.filter(i => i.to === null).length,
+    blocks.push(`\nCounts: ${line({ facts: graph.facts.filter(f => f.id !== 'goal').length, open_intents: graph.intents.filter(i => i.to === null && i.evidence_completed !== true).length,
       ready: view.ready.length, warnings: graph.warnings.length, integrity: graph.integrity.length })}`)
     const categories = ['ready', 'pending_confirmation', 'missing_dependencies', 'in_flight', 'blocked_by_integrity'] as const
     for (const category of categories) for (const intent of view[category]) blocks.push(`\nFrontier/${category}: ${line({

@@ -17,6 +17,9 @@ import { candidateLabel } from './result.js'
 import { launchWithAttachments, type DraftAttachment } from './launch-attachments.js'
 import { EffortSelect } from './capability-settings.js'
 import type { Capabilities } from '../panel/capabilities.js'
+import { PolicyFields, ResumePolicies } from './task-policy.js'
+import type { FlagPolicy } from '../orchestration/flag-policy.js'
+import type { VerificationMode } from '../orchestration/verification-policy.js'
 
 const labels: Record<string, string> = {
   queued: '排队中',
@@ -273,6 +276,8 @@ function NewChallenge({
     ),
     [reasoning, setReasoning] = useState(initial?.input.model?.reasoningEffort ?? saved.model?.reasoningEffort ?? data.defaults.model?.reasoningEffort ?? 'inherit'),
     [capabilities, setCapabilities] = useState<Capabilities>(),
+    [flagPolicy, setFlagPolicy] = useState<FlagPolicy>(initial?.input.flag_policy ?? data.defaults.flagPolicy ?? { mode: 'first', count: 2 }),
+    [verification, setVerification] = useState<VerificationMode>(initial?.input.verification_mode ?? data.defaults.verificationMode ?? 'lightweight'),
     [pending, setPending] = useState(false),
     [error, setError] = useState(initial?.error ?? ''),
     [picking, setPicking] = useState(false),
@@ -292,6 +297,8 @@ function NewChallenge({
       rootDir,
       title,
       goal,
+      flag_policy: flagPolicy,
+      verification_mode: verification,
       ...(files.length ? { attachments: files.map(({ id, name, bytes }) => ({ id, name, bytes })) } : {}),
       ...(permission ? { permissionPreset: permission } : {}),
       ...(preset ? { agentPreset: preset } : {}),
@@ -438,6 +445,7 @@ function NewChallenge({
           <EffortSelect label="任务推理强度" value={reasoning} model={capabilities?.models.find((m) => m.provider === provider && m.id === model)} disabled={pending || Boolean(request)} change={setReasoning} />
         </details>
       </fieldset>
+      <PolicyFields policy={flagPolicy} verification={verification} disabled={pending || Boolean(request)} setPolicy={setFlagPolicy} setVerification={setVerification} />
       <fieldset disabled={pending} className="sp-attachment-picker">
         <legend>题目附件（可选）</legend>
         <p className="sp-muted">ZIP、程序、图片等文件会原样保存到本题 attachments 文件夹；全部保存后才开始任务。</p>
@@ -751,6 +759,9 @@ function Details({
           <>
             <h3>任务目标</h3>
             <p style={{ whiteSpace: 'pre-wrap' }}>{c.goal}</p>
+            {!active(c) && detail && <ResumePolicies policy={detail.flagPolicy ?? { mode: 'first', count: 2 }} verification={detail.verificationMode ?? 'lightweight'} pending={pending}
+              apply={(p, v) => { void act({ action: detail.state.graph?.status === 'completed' ? 'continue' : 'run', flag_mode: p.mode, flag_count: p.count, verification_mode: v }) }} />}
+            {detail?.result?.flag_progress && <p>已发现 {detail.result.flag_progress.found}{detail.result.flag_progress.target ? ` / ${detail.result.flag_progress.target}` : ''} 个不同 flag；独立复核 {detail.result.flag_progress.confirmed} 个。</p>}
             {detail?.result && (
               <div className="sp-card">
                 <h3>本次执行结果</h3>
@@ -899,7 +910,7 @@ function Details({
                 {r.outcomes.map((o) => (
                   <div key={o.intent_id}>
                     <p>
-                      {o.candidate?.title ?? o.intent_id} · {o.state}
+                      {o.candidate?.title ?? o.intent_id} · {o.state === 'observed' ? '已有工具证据（未独立复核）' : o.state}
                     </p>
                     {o.error && (
                       <details>
