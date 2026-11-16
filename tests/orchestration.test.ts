@@ -65,6 +65,8 @@ interface Scenario {
   attack?: boolean
   proposals?: number
   emptyReason?: boolean
+  planningDiscovery?: boolean
+  blockedReason?: string
   hang?: boolean
   completesGoal?: boolean
   denyGoal?: boolean
@@ -152,7 +154,8 @@ class FixtureModel extends LlmAdapter {
     const requiredReads = role === 'verify' ? this.scenario.verifyReads ?? 1 : this.scenario.exploreReads ?? 1
     let name = 'structured_output',
       args: unknown
-    if (role === 'reason') args = { intents: this.scenario.emptyReason || (this.scenario.reasonOnce && this.requests.filter((r) => JSON.stringify(r.messages).includes('# Sapper reason')).length > 1) ? [] : Array.from({ length: this.scenario.proposals ?? 1 }, (_, n) => ({ ...(this.scenario.capabilitiesByRoute?.[n] ? { tool_capabilities: [this.scenario.capabilitiesByRoute[n]] } : {}), title: `Check fixture ${n}`, description: `Read local fixture ${n}`, from: ['f001'], success_criteria: 'Fixture content contains VERIFIED-LOCAL-7C42', completes_goal: !!this.scenario.completesGoal })) }
+    if (role === 'reason' && this.scenario.planningDiscovery && tools.length < 2) { name = 'sapper_tools'; args = tools.length ? { action: 'status' } : { action: 'search', query: 'archive file read list extract rar' } }
+    else if (role === 'reason') args = { ...(this.scenario.blockedReason ? { blocked_reason: this.scenario.blockedReason } : {}), intents: this.scenario.emptyReason || this.scenario.blockedReason || (this.scenario.reasonOnce && this.requests.filter((r) => JSON.stringify(r.messages).includes('# Sapper reason')).length > 1) ? [] : Array.from({ length: this.scenario.proposals ?? 1 }, (_, n) => ({ ...(this.scenario.capabilitiesByRoute?.[n] ? { tool_capabilities: [this.scenario.capabilitiesByRoute[n]] } : {}), title: `Check fixture ${n}`, description: `Read local fixture ${n}`, from: [this.scenario.planningDiscovery ? 'f002' : 'f001'], success_criteria: 'Fixture content contains VERIFIED-LOCAL-7C42', completes_goal: !!this.scenario.completesGoal })) }
     else if (role === 'explore' && route === 0 && tools.length === 1 && this.scenario.resourceRequestAfterRead) { name = 'sapper_resource'; args = { action: 'acquire', capabilities: ['binary.b'] } }
     else if (!tools.length && this.scenario.writeup) { name = role === 'explore' ? 'pwsh' : 'read'; args = role === 'explore' ? { code: 'write-local-wp' } : { path: 'WP.md' } }
     else if (!tools.length && this.scenario.attack) { name = 'sapper_fact'; args = { action: 'create', description: 'BYPASS' } }
@@ -301,6 +304,55 @@ async function setup(
 }
 
 describe('M3 production AgentLoop + SubagentRuntime + ToolRuntime', () => {
+  it('plans attachment inspection with native tools even when no MCP is active and keeps the planner read-only', async () => {
+    const { dispatch, execute, ctx, model, read, store } = await setup({ planningDiscovery: true, writeup: false }, { verification: { mode: 'none' } }, false, 1, 'preset-ptc')
+    expect(await execute('sapper_tools', { action: 'search', query: 'file read archive' })).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'read', kind: 'native', executionRole: 'main' })]))
+    await execute('sapper_fact', { action: 'create', title: '用户上传的题目附件', description: 'Attachment fixture.txt received; content has not been inspected.', doc: JSON.stringify({ source: 'user-upload', files: [{ path: 'fixture.txt' }] }) })
+    const directories: unknown[] = []
+    ctx.on('tools/result', (exec, result) => { if (exec.name === 'sapper_tools' && !result.isError) directories.push(result.value) })
+    const run = await dispatch()
+    expect(run, JSON.stringify(run)).toMatchObject({ state: 'completed', explored: 1, outcomes: [{ state: 'observed' }] })
+    expect(read).toHaveBeenCalledOnce()
+    expect(directories[0]).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'read', kind: 'native', executionRole: 'explore' })]))
+    expect(directories[1]).toMatchObject({ role: 'reason', catalogRole: 'explore', selected: [], availableTools: expect.arrayContaining([expect.objectContaining({ name: 'pwsh' }), expect.objectContaining({ name: 'read' })]) })
+    for (const request of model.requests.filter((r) => JSON.stringify(r.messages).includes('# Sapper reason'))) {
+      expect(request.tools?.map((t) => t.name)).not.toContain('read')
+      expect(request.tools?.map((t) => t.name)).not.toContain('pwsh')
+      expect(JSON.stringify(request.messages)).toContain('execution_tools')
+    }
+    expect((await store.read()).intents[0]?.from).toEqual(['f002'])
+  })
+
+  it('filters the planning directory by parent authorization and explorer selectors without invoking MCP tools', async () => {
+    const denied = 'mcp__ida__read', other = 'mcp__other__read'
+    const { dispatch, ctx, parent, read } = await setup({ planningDiscovery: true, registeredTools: [denied, other], emptyReason: true, writeup: false }, { orchestration: { exploreTools: ['read', 'mcp__ida__*'] } }, false, 1, 'preset')
+    parent.ctx.tools.restrict({ deny: [denied] })
+    const directories: unknown[] = []
+    ctx.on('tools/result', (exec, result) => { if (exec.name === 'sapper_tools' && !result.isError) directories.push(result.value) })
+    const run = await dispatch()
+    expect(directories[0]).toEqual([expect.objectContaining({ name: 'read', kind: 'native' })])
+    expect(directories[1]).toMatchObject({ selected: [], availableTools: [expect.objectContaining({ name: 'read' })] })
+    expect(run).toMatchObject({ state: 'failed', stop_reason: expect.stringContaining('SAPPER_PLANNING_EMPTY'), explored: 0 })
+    expect(read).not.toHaveBeenCalled()
+  })
+
+  it('surfaces an explicit planning blocker in the persisted run and main-session result, and permits resuming', async () => {
+    const scenario: Scenario = { blockedReason: 'Attachment password has not been provided' }
+    const { ctx, cwd, parent, model } = await setup(scenario, { verification: { mode: 'none' } }, true, 1, 'global', false)
+    const service = ctx.get('sapperPanel') as TaskPanelService, events: import('../src/panel/result.js').TaskResult[] = []
+    ctx.on('session/event', (session, event) => { const result = resultOfEvent(event); if (session === parent.session && result) events.push(result) })
+    service.submit(parent, { action: 'start', goal: 'Inspect attachment' })
+    await service.whenIdle(cwd)
+    const first = (await service.state(String(parent.id))).job!
+    expect(first).toMatchObject({ state: 'failed', result: { state: 'failed', stop_reason: expect.stringContaining('Attachment password'), errors: [expect.stringContaining('SAPPER_PLANNING_BLOCKED')] } })
+    expect(events.at(-1)).toMatchObject({ phase: 'result', state: 'failed', errors: [expect.stringContaining('Attachment password')] })
+    expect(model.requests.some((r) => JSON.stringify(r.messages).includes('# Sapper explore'))).toBe(false)
+    delete scenario.blockedReason
+    service.submit(parent, { action: 'resume', task_id: first.result!.task_id })
+    await service.whenIdle(cwd)
+    expect((await service.state(String(parent.id))).job).toMatchObject({ state: 'completed', result: { run_id: 'r002' } })
+  })
+
   it('runs reason → explore → independent verify and atomically confirms an evidence-backed fact', async () => {
     const { dispatch, store, ctx, parent, approval, model } = await setup()
     const run = await dispatch()
@@ -1499,7 +1551,7 @@ it('recovers an accepted upload after a storage failure and cold restart without
   expect(second.model.requests).toHaveLength(0)
   const result = await restored.launch(input)
   await restored.whenIdle(result.cwd)
-  expect(restored.workbench.snapshot().jobs[result.jobId!]?.state).toBe('completed')
+  expect(restored.workbench.snapshot().jobs[result.jobId!]).toMatchObject({ state: 'failed', result: { errors: [expect.stringContaining('SAPPER_PLANNING_EMPTY')] } })
 })
 
 it('refuses foreign upload receipts and preserves existing destination files without starting a model', async () => {
@@ -1640,7 +1692,7 @@ it('recovers an alpha.13 launch blocked by missing commands after cold restart w
   expect((await readdir(first.cwd)).filter((n) => n.startsWith('try it 中文'))).toHaveLength(1)
   await restored.whenIdle(one.cwd)
   await restored.briefs.whenIdle(one.sessionId!)
-  expect(restored.workbench.snapshot().jobs[one.jobId!]?.state).toBe('completed')
+  expect(restored.workbench.snapshot().jobs[one.jobId!]).toMatchObject({ state: 'failed', result: { errors: [expect.stringContaining('SAPPER_PLANNING_EMPTY')] } })
   const count = second.model.requests.length
   await restored.launch(input)
   expect(second.model.requests).toHaveLength(count)
@@ -2011,9 +2063,7 @@ it('restores queued native challenges after a host restart, marks prior runners 
   )
   expect(resolved).not.toHaveProperty('error')
   await waitForRuntime(() =>
-    expect(restored.workbench.snapshot().jobs[launches[2]!.jobId!]?.state).toBe(
-      'completed',
-    ),
+    expect(restored.workbench.snapshot().jobs[launches[2]!.jobId!]).toMatchObject({ state: 'failed', result: { errors: [expect.stringContaining('SAPPER_PLANNING_EMPTY')] } }),
   )
   expect(restored.workbench.snapshot().jobs[launches[0]!.jobId!]?.state).toBe(
     'interrupted',

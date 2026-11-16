@@ -428,8 +428,11 @@ export class Orchestrator {
       }
       const reason = async () => {
         const graph = await store.read()
-        const output = await this.child('reason', { flag_collection: flagContext(), verification_policy: verificationMode, graph: renderGraphContext(graph, { ...config, context: { ...config.context, scope: 'frontier-history' } }, { fullAccess: options.autoConfirm?.() ?? false, actor }).text }, parent, config, signal, guard, onReady, { store, run, options: runOptions, requested: Array.isArray(initial.project.tool_capabilities) ? initial.project.tool_capabilities as string[] : [], purpose: writeup ? 'writeup' : 'solve' })
+        const executionTools = this.broker.catalog(parent, '', { selectors: config.orchestration.exploreTools, purpose: writeup ? 'writeup' : 'solve' }).map(({ schema: _schema, ...tool }) => tool)
+        const output = await this.child('reason', { execution_tools: { role: 'explore', tools: executionTools, note: 'This read-only planner cannot execute these tools. Propose attachment inspection using existing attachment/context facts; the explorer will read files and check installed extraction utilities. A missing dedicated archive MCP is not a blocker when a local command tool is available.' }, flag_collection: flagContext(), verification_policy: verificationMode, graph: renderGraphContext(graph, { ...config, context: { ...config.context, scope: 'frontier-history' } }, { fullAccess: options.autoConfirm?.() ?? false, actor }).text }, parent, config, signal, guard, onReady, { store, run, options: runOptions, requested: Array.isArray(initial.project.tool_capabilities) ? initial.project.tool_capabilities as string[] : [], purpose: writeup ? 'writeup' : 'solve' })
         const proposals = parseProposals(output.value)
+        const blocked = (output.value as { blocked_reason?: unknown }).blocked_reason
+        if (!proposals.length && typeof blocked === 'string' && blocked.trim()) throw new StopRunError('SAPPER_PLANNING_BLOCKED: ' + blocked.trim().slice(0, 2000))
         // Validate the entire batch before creating the first intent.
         const keys = new Set(graph.intents.map(i => normalize(i.description) + ':' + [...i.from].sort().join(',')))
         for (const p of proposals) {
@@ -562,7 +565,10 @@ export class Orchestrator {
           const ready = frontier(graph, { fullAccess: options.autoConfirm?.() ?? false, actor }).ready.filter(i => !attempted.has(i.id))
           if (!ready.length) {
             if (frontier(graph, { fullAccess: options.autoConfirm?.() ?? false, actor }).pending_confirmation.length) { run.stop_reason = 'pending-confirmation'; break }
-            if (reasoning++ >= config.orchestration.maxSteps || !await reason()) { run.stop_reason = 'no-new-intents'; break }
+            if (reasoning++ >= config.orchestration.maxSteps || !await reason()) {
+              if (!run.explored) throw new StopRunError('SAPPER_PLANNING_EMPTY: 规划未产生可执行步骤，尚未进行探索，目标未完成。可检查工具目录或调整方向后继续；附件尚未分析不表示无法分析。')
+              run.stop_reason = 'no-new-intents'; break
+            }
             continue
           }
           const batch = ready.slice(0, Math.min(config.orchestration.concurrency, config.orchestration.maxSteps - run.steps, config.orchestration.maxExplore - run.explored))

@@ -12,6 +12,17 @@ from (nonempty existing fact IDs, never goal), and success_criteria.
 Propose concrete, distinct work that can produce reproducible evidence. Do not
 repeat an existing intent. If there are no source facts or useful new tasks,
 return an empty list. Neither a proposal nor an old observation is confirmed proof.
+Your own tool list is deliberately read-only. Use execution_tools and sapper_tools
+to inspect the EXPLORER's local file/command and MCP tools; do not confuse your own
+execution restriction with a missing explorer capability. Search matches any of
+the supplied terms; use status or an empty query to inspect the directory before
+claiming a capability is absent. An uploaded archive is already an existing input
+fact: propose inspecting its contents and checking installed extraction utilities
+with the available local command tool. Do not require a dedicated archive MCP or
+prior file-content observations before proposing the first inspection step.
+When a concrete missing input/tool truly prevents all useful work, return
+intents=[] with blocked_reason explaining the missing prerequisite. An empty
+search alone is not proof of a missing capability. Never silently call this success.
 Only if an intent's successful independent verification would establish the entire
 project goal, set optional completes_goal=true. Ordinary intermediate work leaves it false.
 

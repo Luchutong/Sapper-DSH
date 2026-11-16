@@ -196,10 +196,11 @@ export async function workbenchBrowser(
             ?.job?.state,
         { timeout: 15000 },
       )
-      .toBe('completed')
+      .toBe('failed')
     const challenge = (await panel.overview()).challenges.find(
       (c) => c.title === title,
     )!
+    expect(challenge.job?.result).toMatchObject({ state: 'failed', errors: [expect.stringContaining('SAPPER_PLANNING_EMPTY')] })
     const project = JSON.parse(await readFile(path.join(challenge.cwd, '.sapper', 'tasks', challenge.taskId, 'project.json'), 'utf8'))
     expect(project.flag_policy).toEqual({ mode: 'all', count: 3 })
     expect(project.verification_mode).toBe('none')

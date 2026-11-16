@@ -11,12 +11,12 @@ export function brokerTools(broker: ToolBroker) {
     defineTool({ name: 'sapper_interact', description: '通过已配置的原生 MCP 适配器管理本 Agent 的 GDB/远程交互会话。每次操作使用稳定 requestId；write 超时不得换 ID 盲目重发。read 的 base64 页按字节游标返回。',
       parameters: { action: { type: 'string', enum: ['start', 'read', 'write', 'interrupt', 'stop', 'snapshot'], required: true }, requestId: { type: 'string', required: true }, profileId: { type: 'string' }, sessionRef: { type: 'string' }, data: { type: 'string' }, encoding: { type: 'string', enum: ['utf-8', 'base64'] }, cursor: { type: 'integer' }, waitMs: { type: 'integer' }, maxBytes: { type: 'integer' } }, output,
       async execute(args, exec) { if (!exec.agent) throw new BrokerError('SCOPE_DENIED', '需要实际 Agent'); return json(await broker.interact(exec.agent, args, exec.signal)) } }),
-    defineTool({ name: 'sapper_tools', description: '只读搜索当前作用域允许的 MCP 工具与资源能力，或展开精确参数；不创建连接、不激活权限、不执行 MCP 业务工具。',
+    defineTool({ name: 'sapper_tools', description: '只读搜索允许的本地文件/命令及 MCP 工具，或展开精确参数。规划角色查看的是探索角色的工具目录，自己仍不能执行。多关键词按相关性匹配；空查询列出目录。搜索无结果不等于没有执行工具，可用 status 查看。不创建连接、不激活权限、不执行业务工具。',
       parameters: { action: { type: 'string', enum: ['search', 'describe', 'status'], required: true }, query: { type: 'string' }, name: { type: 'string' } }, output,
       isConcurrencySafe: () => true,
       async execute(args, exec) {
         if (!exec.agent) throw new BrokerError('SCOPE_DENIED', '需要实际 Agent')
-        if (args.action === 'status') return json(broker.selection(String(exec.agent.id)) ?? { message: '主会话可见目录；执行仍需宿主和连接器授权' })
+        if (args.action === 'status') return json(broker.toolStatus(exec.agent))
         const tools = broker.catalog(exec.agent, args.action === 'describe' ? args.name ?? '' : args.query ?? '')
         return json(args.action === 'describe' ? tools.find((t) => t.name === args.name) ?? { missing: true } : tools.map(({ schema: _schema, ...tool }) => tool))
       } }),

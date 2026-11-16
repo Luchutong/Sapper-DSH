@@ -829,7 +829,7 @@ export class TaskPanelService extends TypertRemoteService {
         : undefined
     const errors = [
       ...new Set(
-        (run?.outcomes ?? []).flatMap((o) => (o.error ? [o.error] : [])),
+        [...(run?.outcomes ?? []).flatMap((o) => (o.error ? [o.error] : [])), ...(run?.state === 'failed' && run.stop_reason ? [run.stop_reason] : [])],
       ),
     ]
     const summary = `${run?.stop_reason === 'flag-target-reached' ? '已收集到指定数量的不同 flag，按策略结束本轮；可先提交测试。' : run?.stop_reason === 'flag-found' ? '发现 flag，已按约束结束本轮。候选状态与独立复核状态见下方。' : run?.stop_reason === 'evidence-goal-reached' ? '已有工具证据，已按快速策略完成本轮取证；未独立复核。' : (run ? run.stop_reason === 'goal-completed' : graph.project.status === 'completed') ? '目标已独立复核完成。' : '本轮已结束，目标仍待完成。'}\n${graph.project.goal}\n${run?.flag_progress ? `${flagPolicyLabel(run.flag_progress.policy)}：已发现 ${run.flag_progress.found} 个，其中独立复核 ${run.flag_progress.confirmed} 个。\n` : ''}已确认结果 ${confirmed.length} 项；未确认候选 ${candidates.length} 项。${run?.stop_reason ? '\n停止原因：' + run.stop_reason : ''}`

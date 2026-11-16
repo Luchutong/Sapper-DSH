@@ -14,7 +14,7 @@ import { BrokerStore } from './store.js'
 import { LeaseScheduler } from './leases.js'
 import type { ResourceRequest } from './leases.js'
 import { mcpTool, resourceKey, routeTool } from './router.js'
-import { matchesTool } from '../orchestration/tool-policy.js'
+import { EXPLORE_TOOLS, matchesTool } from '../orchestration/tool-policy.js'
 import type { ResourceLease } from './contracts.js'
 
 declare module '@deepseek-ai/cordis' { interface Context { sapperToolBroker: ToolBroker } }
@@ -484,14 +484,29 @@ export class ToolBroker extends Service {
   preview(parent: Agent, role: 'explore' | 'verify', name: string) {
     return routeTool(name, { ...this.owner(parent), role }, this.store.snapshot().policy, [], '', (id) => this.providers.has(id))
   }
-  catalog(agent: Agent, query: string) {
+  catalog(agent: Agent, query: string, planning?: { selectors: readonly string[]; purpose?: string }) {
     const session = this.sessions.get(String(agent.id)), owner = session?.context.owner ?? this.owner(agent)
     const parent = session?.context.parent ?? agent, policy = this.store.snapshot().policy
-    return this.ctx.tools.schemas(parent).filter((t) => mcpTool(t.name) && this.ctx.tools.get(t.name, parent) && (!session || matchesTool(session.context.selectors, t.name)))
+    const selectors = planning?.selectors ?? session?.context.selectors ?? EXPLORE_TOOLS
+    const executionRole = planning || owner.role === 'reason' ? 'explore' : owner.role
+    const scope = { ...owner, role: executionRole, ...(planning?.purpose ? { purpose: planning.purpose } : {}) }
+    const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
+    return this.ctx.tools.schemas(parent).filter((t) => this.ctx.tools.get(t.name, parent) && matchesTool(selectors, t.name))
       .flatMap((t) => {
-        const route = routeTool(t.name, owner.role === 'reason' ? { ...owner, role: 'explore' } : owner, { ...policy, selection: 'all' }, [], '', (id) => this.providers.has(id))
+        const route: ReturnType<typeof routeTool> = mcpTool(t.name) ? routeTool(t.name, scope, { ...policy, selection: 'all' }, [], '', (id) => this.providers.has(id)) : { allowed: true, reason: '本地执行工具；服从原生权限检查' }
         if (!route.allowed) return []
-        return [{ name: t.name, description: t.description, capabilities: route.profile?.capabilities ?? [], profileId: route.profile?.id ?? null, isolation: route.profile?.isolation ?? 'generic-exclusive', schema: t }]
-      }).filter((t) => JSON.stringify(t).toLowerCase().includes(query.toLowerCase())).slice(0, 50)
+        return [{ name: t.name, description: t.description, kind: mcpTool(t.name) ? 'mcp' : 'native', executionRole, capabilities: route.profile?.capabilities ?? [], profileId: route.profile?.id ?? null, isolation: mcpTool(t.name) ? route.profile?.isolation ?? 'generic-exclusive' : null, schema: t }]
+      }).map((t) => {
+        const haystack = [t.name, t.description, ...t.capabilities, JSON.stringify(t.schema.parameters)].join(' ').toLowerCase()
+        return { tool: t, score: (t.name.toLowerCase() === query.trim().toLowerCase() ? 1000 : 0) + terms.reduce((score, term) => score + (haystack.includes(term) ? 1 : 0), 0) }
+      }).filter((t) => !terms.length || t.score > 0)
+      .sort((a, b) => b.score - a.score || Number(a.tool.kind === 'mcp') - Number(b.tool.kind === 'mcp') || a.tool.name.localeCompare(b.tool.name))
+      .slice(0, 50).map((t) => t.tool)
+  }
+  toolStatus(agent: Agent) {
+    const session = this.sessions.get(String(agent.id)), role = session?.context.owner.role ?? 'main'
+    return { ...(this.selection(String(agent.id)) ?? {}), role, catalogRole: role === 'reason' ? 'explore' : role,
+      message: role === 'reason' ? '规划角色只读；以下目录是探索角色可申请的执行工具，不代表规划角色可以执行。未列出专用 MCP 不代表本地文件/命令工具不可用。' : '目录仅描述当前作用域；执行仍需宿主、连接器与资源授权。',
+      availableTools: this.catalog(agent, '').map(({ schema: _schema, ...tool }) => tool) }
   }
 }

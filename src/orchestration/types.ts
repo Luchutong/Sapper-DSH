@@ -7,7 +7,7 @@ export type DispatchMode = 'reason' | 'explore' | 'verify' | 'run'
 const str = { type: 'string' } as const
 const evidence = { type: 'array', items: { type: 'object', properties: { receipt_id: str }, required: ['receipt_id'], additionalProperties: false } } satisfies NonNullable<ObjectJsonSchema['properties']>[string]
 export const SCHEMAS: Record<'reason' | 'explore' | 'verify', ObjectJsonSchema> = {
-  reason: { type: 'object', properties: { intents: { type: 'array', items: { type: 'object', properties: {
+  reason: { type: 'object', properties: { blocked_reason: str, intents: { type: 'array', items: { type: 'object', properties: {
     title: str, description: str, from: { type: 'array', items: str }, success_criteria: str, completes_goal: { type: 'boolean' }, tool_capabilities: { type: 'array', items: str },
   }, required: ['title', 'description', 'from', 'success_criteria'], additionalProperties: false } } }, required: ['intents'], additionalProperties: false },
   explore: { type: 'object', properties: { title: str, description: str, kind: { type: 'string', enum: [...FACT_KINDS] }, reproduction: str, goal_achieved: { type: 'boolean' }, evidence }, required: ['title', 'description', 'kind', 'evidence'], additionalProperties: false },

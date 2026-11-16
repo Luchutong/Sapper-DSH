@@ -3,7 +3,9 @@
 将 [sapper-v2](https://github.com/N1nEmAn/sapper-v2) 的事实图与
 `reason → explore → verify` 循环移植为 DSH NEXT 桌面插件。
 
-**当前版本 `0.1.0-alpha.20`：新增按作用域选择的 MCP 工具层、工作流资源租约、原生独立句柄适配、交互会话与版本化测量。多 flag 和可选复核保留；真实 MCP/IDA 环境由用户验收。**
+**当前版本 `0.1.0-alpha.21`：修复规划阶段把空 MCP 搜索误判为没有本地分析工具的问题；工具目录同时展示本地文件/命令与 MCP 能力，未开始探索的空计划明确报错并支持继续。保留 alpha.20 的作用域与资源隔离、多 flag 和可选复核。**
+
+[Misc 附件任务失败复盘与修复](docs/alpha21-validation.md)。
 
 [MCP 工具层使用与实测指南](docs/mcp-tool-layer.md)。共享 IDA 默认串行；独立句柄仅在后端实际支持时并行。仅协调当前宿主中的受管调用，不声明覆盖其他进程或 shell 直连。
 新建题目可选完成/复核策略；已有任务在详情中“调整完成/复核策略并继续”，或在主会话使用 `/sapper collect all`、`/sapper collect 3`。flag 逐个即时回显，已有成功工具回执始终保留。见 [多 flag 与快速策略](docs/alpha19-validation.md)。
@@ -95,7 +97,7 @@ flag 事实是权威记录，`flags/ledger.json` 是可重建索引。详细边�
 在 DSH NEXT 菜单“打开 DSH 终端”，执行后重启应用：
 
 ```powershell
-dsh plugin add "D:\BaiduSyncdisk\sapper移植\sapper-dsh-0.1.0-alpha.20.tgz"
+dsh plugin add "D:\BaiduSyncdisk\sapper移植\sapper-dsh-0.1.0-alpha.21.tgz"
 ```
 
 开发需要 Node.js 22+、pnpm 8.15.4 和 Python 3（仅 golden 测试使用）：
