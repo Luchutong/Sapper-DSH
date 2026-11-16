@@ -31,6 +31,10 @@ import type { CommandClaim } from '@deepseek-ai/dsh-client-ui-conversation/clien
 // Real SDK setup and durable multi-file writes are much slower on cold Windows CI disks.
 // These are harness deadlines, independent of the runtime budgets tested below.
 vi.setConfig({ testTimeout: 20000, hookTimeout: 20000 })
+// These two cases persist several separate runs on the native SDK. Windows
+// Node 24 CI exceeded 20s during cold filesystem writes; keep runtime budgets
+// and all intermediate assertions, but bound the entire multi-run test at 60s.
+const multiRunTestTimeout = process.platform === 'win32' ? 60000 : 20000
 const waitForRuntime: typeof vi.waitFor = (callback) =>
   vi.waitFor(callback, { timeout: 10000 })
 const cleanup: Array<() => Promise<unknown>> = []
@@ -404,7 +408,7 @@ describe('M3 evidence gates, budgets and cancellation', () => {
     const verified = await dispatch('verify', { run_id: explored.id, intent_id: node })
     expect(verified.outcomes[0]?.state).toBe('confirmed')
     expect((await store.read()).integrity).toEqual([])
-  })
+  }, multiRunTestTimeout)
   it('enforces maxVerify across repeated calls referencing the original candidate run', async () => {
     const { dispatch, store, model } = await setup({ reject: true })
     const reason = await dispatch('reason'), node = reason.intent_ids[0]!
@@ -984,7 +988,7 @@ it('reports failed background command admission and permits a later retry withou
   await ctx.commands.execute(parent, '/sapper start Verify local fixture', [], new AbortController().signal)
   await service.whenIdle(cwd)
   expect(await service.state(String(parent.id))).toMatchObject({ job: { state: 'completed' }, tasks: [expect.any(Object)], graph: { verified: 1 } })
-})
+}, multiRunTestTimeout)
 
 it('extends a productive verifier past the old 12-step limit and carries a minimal reproduction recipe', async () => {
   const { dispatch, store, model } = await setup({ verifyReads: 12, recipe: 'Read fixture-0.txt through fixture-11.txt independently; each must contain VERIFIED-LOCAL-7C42.' }, { orchestration: { maxChildSteps: 12, budgetMode: 'adaptive', maxChildStepsCeiling: 36 } })
