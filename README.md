@@ -123,6 +123,7 @@ corepack pnpm pack --pack-destination dist
 - `tests/reference/`：固定 revision/哈希的上游 Store/frontier/history 快照，仅用于测试。
 
 [项目进度](docs/progress.md) · [架构](docs/architecture.md) ·
+[MCP 工具层设计（未实现）](docs/mcp-tool-layer-design.md) ·
 [SDK 契约](docs/sdk-contract.md) · [兼容事故经验](docs/lessons-learned.md) ·
 [原计划快照](docs/plan.html) · [GitHub 阶段跟踪](https://github.com/Luchutong/Sapper-DSH/issues/1)
 

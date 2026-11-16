@@ -1,0 +1,926 @@
+{
+  "note": "Design fixtures. Names, hashes and IDs are synthetic; these do not assert an installed IDA API or grant authority. Negative fixtures validate syntax only, not live authorization.",
+  "cases": [
+    {
+      "name": "profile",
+      "valid": true,
+      "document": {
+        "protocol": "sapper-mcp/1",
+        "kind": "profile",
+        "profileId": "ida-shared",
+        "revision": 1,
+        "connectionRef": "conn-ida",
+        "backendId": "ida-local-shared",
+        "resourcePolicy": {
+          "kind": "ida-database",
+          "isolation": "exclusive-workflow",
+          "assurance": "serialized",
+          "lockScope": "backend",
+          "maxInstances": 1,
+          "maxInFlight": 1,
+          "identityCheck": "required",
+          "fencing": "unsupported",
+          "coordination": "host"
+        },
+        "tools": [
+          {
+            "toolRef": {
+              "connectionRef": "conn-ida",
+              "publicName": "mcp__example_ida__inspect_database",
+              "schemaDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+            },
+            "capability": "binary.inspect",
+            "roles": [
+              "explore",
+              "verify"
+            ],
+            "effect": "read",
+            "binding": "implicit-current",
+            "retry": "idempotent",
+            "invalidates": [
+              "none"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "selection",
+      "valid": true,
+      "document": {
+        "protocol": "sapper-mcp/1",
+        "kind": "selection",
+        "selectionId": "00000000-0000-4000-8000-000000000003",
+        "owner": {
+          "hostInstanceId": "00000000-0000-4000-8000-000000000001",
+          "workspaceId": "workspace-challenge-A",
+          "challengeId": "challenge-A",
+          "taskId": "task-solve-A",
+          "runId": "r001",
+          "agentId": "00000000-0000-4000-8000-000000000002",
+          "role": "explore"
+        },
+        "revisions": {
+          "catalog": 7,
+          "policy": 3,
+          "hostPermissions": "host-revision-4",
+          "connector": "connector-revision-8"
+        },
+        "requiredCapabilities": [
+          "binary.inspect"
+        ],
+        "selected": [
+          {
+            "toolRef": {
+              "connectionRef": "conn-ida",
+              "publicName": "mcp__example_ida__inspect_database",
+              "schemaDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+            },
+            "capability": "binary.inspect",
+            "profileId": "ida-shared",
+            "reason": "可见、目标已绑定；共享 IDA 使用工作流独占"
+          }
+        ],
+        "excluded": [],
+        "missingCapabilities": [],
+        "createdAt": "2026-11-16T11:00:00Z"
+      }
+    },
+    {
+      "name": "lease",
+      "valid": true,
+      "document": {
+        "protocol": "sapper-mcp/1",
+        "kind": "lease",
+        "leaseId": "00000000-0000-4000-8000-000000000004",
+        "requestId": "00000000-0000-4000-8000-000000000005",
+        "owner": {
+          "hostInstanceId": "00000000-0000-4000-8000-000000000001",
+          "workspaceId": "workspace-challenge-A",
+          "challengeId": "challenge-A",
+          "taskId": "task-solve-A",
+          "runId": "r001",
+          "agentId": "00000000-0000-4000-8000-000000000002",
+          "role": "explore"
+        },
+        "resource": {
+          "backendId": "ida-local-shared",
+          "resourceId": "ida-db-copy-A",
+          "kind": "ida-database",
+          "generation": 1
+        },
+        "target": {
+          "assetRefs": [
+            "attachment:challenge-A/binary"
+          ],
+          "assetDigests": [
+            "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+          ],
+          "binding": "attested"
+        },
+        "mode": "exclusive-workflow",
+        "state": "active",
+        "assurance": "serialized",
+        "fence": 11,
+        "epoch": 2,
+        "heartbeatAt": "2026-11-16T11:00:00Z",
+        "expiresAt": "2026-11-16T11:02:00Z",
+        "coordination": "host"
+      }
+    },
+    {
+      "name": "invocation",
+      "valid": true,
+      "document": {
+        "protocol": "sapper-mcp/1",
+        "kind": "invocation",
+        "invocationId": "00000000-0000-4000-8000-000000000006",
+        "callId": "call-A-1",
+        "leaseId": "00000000-0000-4000-8000-000000000004",
+        "owner": {
+          "hostInstanceId": "00000000-0000-4000-8000-000000000001",
+          "workspaceId": "workspace-challenge-A",
+          "challengeId": "challenge-A",
+          "taskId": "task-solve-A",
+          "runId": "r001",
+          "agentId": "00000000-0000-4000-8000-000000000002",
+          "role": "explore"
+        },
+        "toolRef": {
+          "connectionRef": "conn-ida",
+          "publicName": "mcp__example_ida__inspect_database",
+          "schemaDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        },
+        "revisions": {
+          "catalog": 7,
+          "policy": 3,
+          "hostPermissions": "host-revision-4",
+          "connector": "connector-revision-8"
+        },
+        "resource": {
+          "backendId": "ida-local-shared",
+          "resourceId": "ida-db-copy-A",
+          "kind": "ida-database",
+          "generation": 1
+        },
+        "target": {
+          "assetRefs": [
+            "attachment:challenge-A/binary"
+          ],
+          "assetDigests": [
+            "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+          ],
+          "binding": "attested"
+        },
+        "fence": 11,
+        "epoch": 2,
+        "argumentsDigest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+        "requestedAt": "2026-11-16T11:00:00Z"
+      }
+    },
+    {
+      "name": "receipt",
+      "valid": true,
+      "document": {
+        "protocol": "sapper-mcp/1",
+        "kind": "receipt",
+        "receiptId": "00000000-0000-4000-8000-000000000007",
+        "invocationId": "00000000-0000-4000-8000-000000000006",
+        "callId": "call-A-1",
+        "owner": {
+          "hostInstanceId": "00000000-0000-4000-8000-000000000001",
+          "workspaceId": "workspace-challenge-A",
+          "challengeId": "challenge-A",
+          "taskId": "task-solve-A",
+          "runId": "r001",
+          "agentId": "00000000-0000-4000-8000-000000000002",
+          "role": "explore"
+        },
+        "toolRef": {
+          "connectionRef": "conn-ida",
+          "publicName": "mcp__example_ida__inspect_database",
+          "schemaDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        },
+        "resource": {
+          "backendId": "ida-local-shared",
+          "resourceId": "ida-db-copy-A",
+          "kind": "ida-database",
+          "generation": 1
+        },
+        "target": {
+          "assetRefs": [
+            "attachment:challenge-A/binary"
+          ],
+          "assetDigests": [
+            "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+          ],
+          "binding": "attested"
+        },
+        "epoch": 2,
+        "fence": 11,
+        "status": "success",
+        "source": "target",
+        "argumentsDigest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+        "resultDigest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+        "artifacts": [],
+        "startedAt": "2026-11-16T11:00:00Z",
+        "endedAt": "2026-11-16T11:00:01Z"
+      }
+    },
+    {
+      "name": "observation",
+      "valid": true,
+      "document": {
+        "protocol": "sapper-mcp/1",
+        "kind": "observation",
+        "observationId": "00000000-0000-4000-8000-000000000008",
+        "owner": {
+          "hostInstanceId": "00000000-0000-4000-8000-000000000001",
+          "workspaceId": "workspace-challenge-A",
+          "challengeId": "challenge-A",
+          "taskId": "task-solve-A",
+          "runId": "r001",
+          "agentId": "00000000-0000-4000-8000-000000000002",
+          "role": "explore"
+        },
+        "claim": "实际目标数据库中的函数偏移",
+        "value": "0x1234",
+        "unit": "bytes",
+        "basis": "tool-parsed",
+        "state": "observed",
+        "receiptRefs": [
+          "00000000-0000-4000-8000-000000000007"
+        ],
+        "validity": {
+          "scope": "asset",
+          "assetDigests": [
+            "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+          ]
+        },
+        "dependsOn": [],
+        "createdAt": "2026-11-16T11:00:00Z"
+      }
+    },
+    {
+      "name": "receipt-failure",
+      "valid": true,
+      "document": {
+        "protocol": "sapper-mcp/1",
+        "kind": "receipt",
+        "receiptId": "00000000-0000-4000-8000-000000000009",
+        "invocationId": "00000000-0000-4000-8000-000000000006",
+        "callId": "call-A-1",
+        "owner": {
+          "hostInstanceId": "00000000-0000-4000-8000-000000000001",
+          "workspaceId": "workspace-challenge-A",
+          "challengeId": "challenge-A",
+          "taskId": "task-solve-A",
+          "runId": "r001",
+          "agentId": "00000000-0000-4000-8000-000000000002",
+          "role": "explore"
+        },
+        "toolRef": {
+          "connectionRef": "conn-ida",
+          "publicName": "mcp__example_ida__inspect_database",
+          "schemaDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        },
+        "resource": {
+          "backendId": "ida-local-shared",
+          "resourceId": "ida-db-copy-A",
+          "kind": "ida-database",
+          "generation": 1
+        },
+        "target": {
+          "assetRefs": [
+            "attachment:challenge-A/binary"
+          ],
+          "assetDigests": [
+            "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+          ],
+          "binding": "attested"
+        },
+        "epoch": 2,
+        "fence": 11,
+        "status": "error",
+        "source": "target",
+        "argumentsDigest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+        "artifacts": [],
+        "startedAt": "2026-11-16T11:00:00Z",
+        "endedAt": "2026-11-16T11:00:01Z",
+        "errorCode": "TARGET_MISMATCH"
+      }
+    },
+    {
+      "name": "repair-plan",
+      "valid": true,
+      "document": {
+        "protocol": "sapper-mcp/1",
+        "kind": "repair-plan",
+        "planId": "00000000-0000-4000-8000-000000000010",
+        "owner": {
+          "hostInstanceId": "00000000-0000-4000-8000-000000000001",
+          "workspaceId": "workspace-challenge-A",
+          "challengeId": "challenge-A",
+          "taskId": "task-solve-A",
+          "runId": "r001",
+          "agentId": "00000000-0000-4000-8000-000000000002",
+          "role": "explore"
+        },
+        "failureReceiptRefs": [
+          "00000000-0000-4000-8000-000000000009"
+        ],
+        "preserve": [
+          "00000000-0000-4000-8000-000000000008"
+        ],
+        "invalidate": [],
+        "resumeFrom": "fresh-resource",
+        "replaySafeStepRefs": [],
+        "nextCapability": "binary.inspect",
+        "reason": "目标身份不匹配；保留文件级观察，重新绑定独立数据库并重新核验。",
+        "createdAt": "2026-11-16T11:00:00Z"
+      }
+    },
+    {
+      "name": "receipt-gdb",
+      "valid": true,
+      "document": {
+        "protocol": "sapper-mcp/1",
+        "kind": "receipt",
+        "receiptId": "00000000-0000-4000-8000-000000000014",
+        "invocationId": "00000000-0000-4000-8000-000000000015",
+        "callId": "call-A-gdb-1",
+        "owner": {
+          "hostInstanceId": "00000000-0000-4000-8000-000000000001",
+          "workspaceId": "workspace-challenge-A",
+          "challengeId": "challenge-A",
+          "taskId": "task-solve-A",
+          "runId": "r001",
+          "agentId": "00000000-0000-4000-8000-000000000002",
+          "role": "explore"
+        },
+        "toolRef": {
+          "connectionRef": "conn-gdb",
+          "publicName": "mcp__example_gdb__read_state",
+          "schemaDigest": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+        },
+        "resource": {
+          "backendId": "gdb-worker-A",
+          "resourceId": "inferior-A",
+          "kind": "debug-process",
+          "generation": 1
+        },
+        "target": {
+          "assetRefs": [
+            "attachment:challenge-A/binary"
+          ],
+          "assetDigests": [
+            "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+          ],
+          "binding": "attested"
+        },
+        "epoch": 1,
+        "fence": 11,
+        "status": "success",
+        "source": "target",
+        "argumentsDigest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+        "resultDigest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+        "artifacts": [],
+        "startedAt": "2026-11-16T11:00:00Z",
+        "endedAt": "2026-11-16T11:00:01Z"
+      }
+    },
+    {
+      "name": "interactive-request",
+      "valid": true,
+      "document": {
+        "protocol": "sapper-mcp/1",
+        "kind": "interactive-request",
+        "requestId": "00000000-0000-4000-8000-000000000011",
+        "action": "read",
+        "sessionRef": "00000000-0000-4000-8000-000000000012",
+        "cursor": 0,
+        "waitMs": 1000,
+        "maxBytes": 16384
+      }
+    },
+    {
+      "name": "interactive-result",
+      "valid": true,
+      "document": {
+        "protocol": "sapper-mcp/1",
+        "kind": "interactive-result",
+        "requestId": "00000000-0000-4000-8000-000000000011",
+        "sessionRef": "00000000-0000-4000-8000-000000000012",
+        "owner": {
+          "hostInstanceId": "00000000-0000-4000-8000-000000000001",
+          "workspaceId": "workspace-challenge-A",
+          "challengeId": "challenge-A",
+          "taskId": "task-solve-A",
+          "runId": "r001",
+          "agentId": "00000000-0000-4000-8000-000000000002",
+          "role": "explore"
+        },
+        "resource": {
+          "backendId": "gdb-worker-A",
+          "resourceId": "inferior-A",
+          "kind": "debug-process",
+          "generation": 1
+        },
+        "epoch": 1,
+        "state": "stopped",
+        "delivery": "not-applicable",
+        "output": {
+          "cursor": 0,
+          "nextCursor": 15,
+          "hasMore": false,
+          "encoding": "utf-8",
+          "data": "stopped: SIGSEGV"
+        },
+        "receiptRefs": [
+          "00000000-0000-4000-8000-000000000014"
+        ]
+      }
+    },
+    {
+      "name": "queued-before-instance-allocation",
+      "valid": true,
+      "document": {
+        "protocol": "sapper-mcp/1",
+        "kind": "lease",
+        "leaseId": "00000000-0000-4000-8000-000000000004",
+        "requestId": "00000000-0000-4000-8000-000000000005",
+        "owner": {
+          "hostInstanceId": "00000000-0000-4000-8000-000000000001",
+          "workspaceId": "workspace-challenge-A",
+          "challengeId": "challenge-A",
+          "taskId": "task-solve-A",
+          "runId": "r001",
+          "agentId": "00000000-0000-4000-8000-000000000002",
+          "role": "explore"
+        },
+        "target": {
+          "assetRefs": [
+            "attachment:challenge-A/binary"
+          ],
+          "assetDigests": [
+            "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+          ],
+          "binding": "unattested"
+        },
+        "mode": "exclusive-workflow",
+        "state": "queued",
+        "assurance": "serialized",
+        "coordination": "host"
+      }
+    },
+    {
+      "name": "attested-browser-target-without-file",
+      "valid": true,
+      "document": {
+        "protocol": "sapper-mcp/1",
+        "kind": "lease",
+        "leaseId": "00000000-0000-4000-8000-000000000004",
+        "requestId": "00000000-0000-4000-8000-000000000005",
+        "owner": {
+          "hostInstanceId": "00000000-0000-4000-8000-000000000001",
+          "workspaceId": "workspace-challenge-A",
+          "challengeId": "challenge-A",
+          "taskId": "task-solve-A",
+          "runId": "r001",
+          "agentId": "00000000-0000-4000-8000-000000000002",
+          "role": "explore"
+        },
+        "resource": {
+          "backendId": "browser-worker",
+          "resourceId": "context-A",
+          "kind": "browser-context",
+          "generation": 1
+        },
+        "target": {
+          "assetRefs": [],
+          "assetDigests": [],
+          "binding": "attested",
+          "identities": [
+            {
+              "type": "endpoint",
+              "value": "https://challenge.example.invalid"
+            }
+          ]
+        },
+        "mode": "isolated-handle",
+        "state": "active",
+        "assurance": "verified-handle",
+        "fence": 11,
+        "epoch": 2,
+        "heartbeatAt": "2026-11-16T11:00:00Z",
+        "expiresAt": "2026-11-16T11:02:00Z",
+        "coordination": "host"
+      }
+    },
+    {
+      "name": "reject-unknown-authority-field",
+      "valid": false,
+      "document": {
+        "protocol": "sapper-mcp/1",
+        "kind": "lease",
+        "leaseId": "00000000-0000-4000-8000-000000000004",
+        "requestId": "00000000-0000-4000-8000-000000000005",
+        "owner": {
+          "hostInstanceId": "00000000-0000-4000-8000-000000000001",
+          "workspaceId": "workspace-challenge-A",
+          "challengeId": "challenge-A",
+          "taskId": "task-solve-A",
+          "runId": "r001",
+          "agentId": "00000000-0000-4000-8000-000000000002",
+          "role": "explore",
+          "permission": "full-access"
+        },
+        "resource": {
+          "backendId": "ida-local-shared",
+          "resourceId": "ida-db-copy-A",
+          "kind": "ida-database",
+          "generation": 1
+        },
+        "target": {
+          "assetRefs": [
+            "attachment:challenge-A/binary"
+          ],
+          "assetDigests": [
+            "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+          ],
+          "binding": "attested"
+        },
+        "mode": "exclusive-workflow",
+        "state": "active",
+        "assurance": "serialized",
+        "fence": 11,
+        "epoch": 2,
+        "heartbeatAt": "2026-11-16T11:00:00Z",
+        "expiresAt": "2026-11-16T11:02:00Z",
+        "coordination": "host"
+      }
+    },
+    {
+      "name": "reject-attested-without-asset-digest",
+      "valid": false,
+      "document": {
+        "protocol": "sapper-mcp/1",
+        "kind": "lease",
+        "leaseId": "00000000-0000-4000-8000-000000000004",
+        "requestId": "00000000-0000-4000-8000-000000000005",
+        "owner": {
+          "hostInstanceId": "00000000-0000-4000-8000-000000000001",
+          "workspaceId": "workspace-challenge-A",
+          "challengeId": "challenge-A",
+          "taskId": "task-solve-A",
+          "runId": "r001",
+          "agentId": "00000000-0000-4000-8000-000000000002",
+          "role": "explore"
+        },
+        "resource": {
+          "backendId": "ida-local-shared",
+          "resourceId": "ida-db-copy-A",
+          "kind": "ida-database",
+          "generation": 1
+        },
+        "target": {
+          "assetRefs": [
+            "attachment:challenge-A/binary"
+          ],
+          "assetDigests": [],
+          "binding": "attested"
+        },
+        "mode": "exclusive-workflow",
+        "state": "active",
+        "assurance": "serialized",
+        "fence": 11,
+        "epoch": 2,
+        "heartbeatAt": "2026-11-16T11:00:00Z",
+        "expiresAt": "2026-11-16T11:02:00Z",
+        "coordination": "host"
+      }
+    },
+    {
+      "name": "reject-invalid-fence",
+      "valid": false,
+      "document": {
+        "protocol": "sapper-mcp/1",
+        "kind": "invocation",
+        "invocationId": "00000000-0000-4000-8000-000000000006",
+        "callId": "call-A-1",
+        "leaseId": "00000000-0000-4000-8000-000000000004",
+        "owner": {
+          "hostInstanceId": "00000000-0000-4000-8000-000000000001",
+          "workspaceId": "workspace-challenge-A",
+          "challengeId": "challenge-A",
+          "taskId": "task-solve-A",
+          "runId": "r001",
+          "agentId": "00000000-0000-4000-8000-000000000002",
+          "role": "explore"
+        },
+        "toolRef": {
+          "connectionRef": "conn-ida",
+          "publicName": "mcp__example_ida__inspect_database",
+          "schemaDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        },
+        "revisions": {
+          "catalog": 7,
+          "policy": 3,
+          "hostPermissions": "host-revision-4",
+          "connector": "connector-revision-8"
+        },
+        "resource": {
+          "backendId": "ida-local-shared",
+          "resourceId": "ida-db-copy-A",
+          "kind": "ida-database",
+          "generation": 1
+        },
+        "target": {
+          "assetRefs": [
+            "attachment:challenge-A/binary"
+          ],
+          "assetDigests": [
+            "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+          ],
+          "binding": "attested"
+        },
+        "fence": 0,
+        "epoch": 2,
+        "argumentsDigest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+        "requestedAt": "2026-11-16T11:00:00Z"
+      }
+    },
+    {
+      "name": "reject-success-without-final-digest",
+      "valid": false,
+      "document": {
+        "protocol": "sapper-mcp/1",
+        "kind": "receipt",
+        "receiptId": "00000000-0000-4000-8000-000000000007",
+        "invocationId": "00000000-0000-4000-8000-000000000006",
+        "callId": "call-A-1",
+        "owner": {
+          "hostInstanceId": "00000000-0000-4000-8000-000000000001",
+          "workspaceId": "workspace-challenge-A",
+          "challengeId": "challenge-A",
+          "taskId": "task-solve-A",
+          "runId": "r001",
+          "agentId": "00000000-0000-4000-8000-000000000002",
+          "role": "explore"
+        },
+        "toolRef": {
+          "connectionRef": "conn-ida",
+          "publicName": "mcp__example_ida__inspect_database",
+          "schemaDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        },
+        "resource": {
+          "backendId": "ida-local-shared",
+          "resourceId": "ida-db-copy-A",
+          "kind": "ida-database",
+          "generation": 1
+        },
+        "target": {
+          "assetRefs": [
+            "attachment:challenge-A/binary"
+          ],
+          "assetDigests": [
+            "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+          ],
+          "binding": "attested"
+        },
+        "epoch": 2,
+        "fence": 11,
+        "status": "success",
+        "source": "target",
+        "argumentsDigest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+        "artifacts": [],
+        "startedAt": "2026-11-16T11:00:00Z",
+        "endedAt": "2026-11-16T11:00:01Z"
+      }
+    },
+    {
+      "name": "reject-measurement-without-receipt",
+      "valid": false,
+      "document": {
+        "protocol": "sapper-mcp/1",
+        "kind": "observation",
+        "observationId": "00000000-0000-4000-8000-000000000008",
+        "owner": {
+          "hostInstanceId": "00000000-0000-4000-8000-000000000001",
+          "workspaceId": "workspace-challenge-A",
+          "challengeId": "challenge-A",
+          "taskId": "task-solve-A",
+          "runId": "r001",
+          "agentId": "00000000-0000-4000-8000-000000000002",
+          "role": "explore"
+        },
+        "claim": "实际目标数据库中的函数偏移",
+        "value": "0x1234",
+        "unit": "bytes",
+        "basis": "tool-parsed",
+        "state": "observed",
+        "receiptRefs": [],
+        "validity": {
+          "scope": "asset",
+          "assetDigests": [
+            "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+          ]
+        },
+        "dependsOn": [],
+        "createdAt": "2026-11-16T11:00:00Z"
+      }
+    },
+    {
+      "name": "reject-process-value-without-resource-epoch",
+      "valid": false,
+      "document": {
+        "protocol": "sapper-mcp/1",
+        "kind": "observation",
+        "observationId": "00000000-0000-4000-8000-000000000008",
+        "owner": {
+          "hostInstanceId": "00000000-0000-4000-8000-000000000001",
+          "workspaceId": "workspace-challenge-A",
+          "challengeId": "challenge-A",
+          "taskId": "task-solve-A",
+          "runId": "r001",
+          "agentId": "00000000-0000-4000-8000-000000000002",
+          "role": "explore"
+        },
+        "claim": "实际目标数据库中的函数偏移",
+        "value": "0x1234",
+        "unit": "bytes",
+        "basis": "tool-parsed",
+        "state": "observed",
+        "receiptRefs": [
+          "00000000-0000-4000-8000-000000000007"
+        ],
+        "validity": {
+          "scope": "resource-epoch"
+        },
+        "dependsOn": [],
+        "createdAt": "2026-11-16T11:00:00Z"
+      }
+    },
+    {
+      "name": "reject-inferred-as-observed",
+      "valid": false,
+      "document": {
+        "protocol": "sapper-mcp/1",
+        "kind": "observation",
+        "observationId": "00000000-0000-4000-8000-000000000008",
+        "owner": {
+          "hostInstanceId": "00000000-0000-4000-8000-000000000001",
+          "workspaceId": "workspace-challenge-A",
+          "challengeId": "challenge-A",
+          "taskId": "task-solve-A",
+          "runId": "r001",
+          "agentId": "00000000-0000-4000-8000-000000000002",
+          "role": "explore"
+        },
+        "claim": "实际目标数据库中的函数偏移",
+        "value": "0x1234",
+        "unit": "bytes",
+        "basis": "agent-inferred",
+        "state": "observed",
+        "receiptRefs": [
+          "00000000-0000-4000-8000-000000000007"
+        ],
+        "validity": {
+          "scope": "asset",
+          "assetDigests": [
+            "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+          ]
+        },
+        "dependsOn": [],
+        "createdAt": "2026-11-16T11:00:00Z"
+      }
+    },
+    {
+      "name": "reject-wildcard-as-manifest-tool-identity",
+      "valid": false,
+      "document": {
+        "protocol": "sapper-mcp/1",
+        "kind": "profile",
+        "profileId": "ida-shared",
+        "revision": 1,
+        "connectionRef": "conn-ida",
+        "backendId": "ida-local-shared",
+        "resourcePolicy": {
+          "kind": "ida-database",
+          "isolation": "exclusive-workflow",
+          "assurance": "serialized",
+          "lockScope": "backend",
+          "maxInstances": 1,
+          "maxInFlight": 1,
+          "identityCheck": "required",
+          "fencing": "unsupported",
+          "coordination": "host"
+        },
+        "tools": [
+          {
+            "toolRef": {
+              "connectionRef": "conn-ida",
+              "publicName": "mcp__example_ida__inspect_database",
+              "schemaDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+            },
+            "capability": "binary.inspect",
+            "roles": [
+              "explore",
+              "verify"
+            ],
+            "effect": "read",
+            "binding": "implicit-current",
+            "retry": "idempotent",
+            "invalidates": [
+              "none"
+            ],
+            "publicName": "mcp__*"
+          }
+        ]
+      }
+    },
+    {
+      "name": "reject-executable-repair-payload",
+      "valid": false,
+      "document": {
+        "protocol": "sapper-mcp/1",
+        "kind": "repair-plan",
+        "planId": "00000000-0000-4000-8000-000000000010",
+        "owner": {
+          "hostInstanceId": "00000000-0000-4000-8000-000000000001",
+          "workspaceId": "workspace-challenge-A",
+          "challengeId": "challenge-A",
+          "taskId": "task-solve-A",
+          "runId": "r001",
+          "agentId": "00000000-0000-4000-8000-000000000002",
+          "role": "explore"
+        },
+        "failureReceiptRefs": [
+          "00000000-0000-4000-8000-000000000009"
+        ],
+        "preserve": [
+          "00000000-0000-4000-8000-000000000008"
+        ],
+        "invalidate": [],
+        "resumeFrom": "fresh-resource",
+        "replaySafeStepRefs": [],
+        "nextCapability": "binary.inspect",
+        "reason": "目标身份不匹配；保留文件级观察，重新绑定独立数据库并重新核验。",
+        "createdAt": "2026-11-16T11:00:00Z",
+        "shellCommand": "restart everything"
+      }
+    },
+    {
+      "name": "reject-write-without-bytes",
+      "valid": false,
+      "document": {
+        "protocol": "sapper-mcp/1",
+        "kind": "interactive-request",
+        "requestId": "00000000-0000-4000-8000-000000000011",
+        "action": "write",
+        "sessionRef": "00000000-0000-4000-8000-000000000012",
+        "cursor": 0,
+        "waitMs": 1000,
+        "maxBytes": 16384
+      }
+    },
+    {
+      "name": "reject-unexplained-unknown-delivery",
+      "valid": false,
+      "document": {
+        "protocol": "sapper-mcp/1",
+        "kind": "interactive-result",
+        "requestId": "00000000-0000-4000-8000-000000000011",
+        "sessionRef": "00000000-0000-4000-8000-000000000012",
+        "owner": {
+          "hostInstanceId": "00000000-0000-4000-8000-000000000001",
+          "workspaceId": "workspace-challenge-A",
+          "challengeId": "challenge-A",
+          "taskId": "task-solve-A",
+          "runId": "r001",
+          "agentId": "00000000-0000-4000-8000-000000000002",
+          "role": "explore"
+        },
+        "resource": {
+          "backendId": "gdb-worker-A",
+          "resourceId": "inferior-A",
+          "kind": "debug-process",
+          "generation": 1
+        },
+        "epoch": 1,
+        "state": "stopped",
+        "delivery": "unknown",
+        "output": {
+          "cursor": 0,
+          "nextCursor": 15,
+          "hasMore": false,
+          "encoding": "utf-8",
+          "data": "stopped: SIGSEGV"
+        },
+        "receiptRefs": [
+          "00000000-0000-4000-8000-000000000014"
+        ]
+      }
+    }
+  ]
+}

@@ -126,3 +126,7 @@ panel.capabilities 经 owner-only Remote 查询指定主会话或全局的工具
 flag-policy 将 first/count/all 与候选/confirmed 计数分离，模式存于 project 与启动清单，运行快照保存当次进度；多 flag 模式同时约束早停和 GraphStore 的独立目标终态。发现通知仍在成功工具输出时发布，count 达标可先收尾，all 保留其余路线。策略覆盖通过原 Task/Dispatch ToolRuntime 写入，查看和草稿编辑不执行。
 
 verification-policy 默认 lightweight，支持 none/selective/independent。快路径仍校验真实工具回执，保存 observed outcome、证据检查及普通观察 note，不占用第二个 verifier；evidence_completed 标记使本插件 frontier 不自动重做，原意图保留给显式 verify。只有 promoteVerified 可以创建 confirmed 事实与独立目标完成状态。角色提示词携带收集状态及复核策略，重要结论的轻量检查复用调用，并明确区分证据完整性与语义正确性。执行记录和主会话卡片分别展示这些状态。
+
+## 后续设计：MCP 工具层（未实现）
+
+[MCP 工具层设计](mcp-tool-layer-design.md)定义按授权、任务、资源和证据范围选择工具的 ToolBroker，配套 `sapper-mcp/1` JSON Schema。方案包括 IDA 工作流独占/独立实例、交互式调试、租约排空与隔离、版本化观测及失败恢复。alpha.19 仍只有工具范围控制，尚无本文资源隔离；设计保留可选复核与候选即时回显。强保证依赖实际适配器与所有入口接管，不能仅靠前缀或内存锁覆盖外部进程。
