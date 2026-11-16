@@ -2102,11 +2102,11 @@ describe('MCP broker across real AgentLoop and native ToolRuntime', () => {
     const broker = ctx.get('sapperToolBroker')!
     const pending = dispatch()
     try {
-      await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(1))
-      await vi.waitFor(() => expect(broker.snapshot().waiting.length).toBeGreaterThan(0))
+      await waitForRuntime(() => expect(read).toHaveBeenCalledTimes(1))
+      await waitForRuntime(() => expect(broker.snapshot().waiting.length).toBeGreaterThan(0))
       const explorerIds = new Set(model.requests.filter((r) => JSON.stringify(r.messages).includes('# Sapper explore')).map((r) => JSON.stringify(r.messages).match(/Read local fixture \d/)?.[0]))
       expect(explorerIds.size).toBe(1)
-    } finally { release() }
+    } finally { release(); await pending }
     expect((await pending).outcomes.filter((o) => o.state === 'confirmed')).toHaveLength(2)
     expect(broker.snapshot().leases.filter((l) => l.state === 'active')).toEqual([])
   })
@@ -2118,10 +2118,13 @@ describe('MCP broker across real AgentLoop and native ToolRuntime', () => {
     const broker = ctx.get('sapperToolBroker')!
     await broker.configure({ selection: 'all', waitMs: 10000, profiles: [(await import('../src/mcp/contracts.js')).profileSchema.parse({ id: 'ida', label: 'IDA', backendId: 'same-IDA', selectors: ['mcp__ida__*', 'mcp__other_ida__*'] })] }, broker.snapshot().revision)
     const run = dispatch()
-    await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(1))
-    const alias = ctx.tools.execute({ name: b, arguments: { path: 'fixture.txt' }, agent: parent, callId: ToolCallId('alias-direct'), signal: new AbortController().signal })
-    try { await vi.waitFor(() => expect(broker.snapshot().waiting.length).toBeGreaterThan(0)); expect(read).toHaveBeenCalledTimes(1) } finally { release() }
-    expect((await alias).isError).toBe(false); expect((await run).state).toBe('completed')
+    try {
+      await waitForRuntime(() => expect(read).toHaveBeenCalledTimes(1))
+      const alias = ctx.tools.execute({ name: b, arguments: { path: 'fixture.txt' }, agent: parent, callId: ToolCallId('alias-direct'), signal: new AbortController().signal })
+      await waitForRuntime(() => expect(broker.snapshot().waiting.length).toBeGreaterThan(0)); expect(read).toHaveBeenCalledTimes(1)
+      release(); expect((await alias).isError).toBe(false)
+      expect((await run).state).toBe('completed')
+    } finally { release(); await run }
     expect(broker.snapshot().receipts.some((r) => r.owner.role === 'main' && r.toolRef.publicName === b)).toBe(true)
   })
   it('drains a canceled native call, quarantines uncertainty and never reassigns it just because a signal aborted', async () => {
@@ -2131,16 +2134,19 @@ describe('MCP broker across real AgentLoop and native ToolRuntime', () => {
     const { ctx, parent, read } = await setup({ registeredTools: [name], beforeRead: () => gate })
     const broker = ctx.get('sapperToolBroker')!
     const running = ctx.tools.execute({ name, arguments: { path: 'fixture.txt' }, agent: parent, callId: ToolCallId('cancel-running'), signal: controller.signal })
-    await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(1))
-    controller.abort(new Error('user cancelled'))
-    expect(broker.snapshot().leases.some((l) => l.state === 'active')).toBe(true)
-    const queued = ctx.tools.execute({ name, arguments: { path: 'fixture.txt' }, agent: parent, callId: ToolCallId('after-cancel'), signal: new AbortController().signal })
-    await vi.waitFor(() => expect(broker.snapshot().waiting).toHaveLength(1))
-    release(); expect((await running).isError).toBe(true)
-    await vi.waitFor(() => expect(broker.snapshot().leases.some((l) => l.state === 'quarantined')).toBe(true))
-    expect(read).toHaveBeenCalledTimes(1)
-    await broker.reset('unclassified:mcp', true)
-    expect((await queued).isError).toBe(false); expect(read).toHaveBeenCalledTimes(2)
+    let queued: ReturnType<typeof ctx.tools.execute> | undefined
+    try {
+      await waitForRuntime(() => expect(read).toHaveBeenCalledTimes(1))
+      controller.abort(new Error('user cancelled'))
+      expect(broker.snapshot().leases.some((l) => l.state === 'active')).toBe(true)
+      queued = ctx.tools.execute({ name, arguments: { path: 'fixture.txt' }, agent: parent, callId: ToolCallId('after-cancel'), signal: new AbortController().signal })
+      await waitForRuntime(() => expect(broker.snapshot().waiting).toHaveLength(1))
+      release(); expect((await running).isError).toBe(true)
+      await waitForRuntime(() => expect(broker.snapshot().leases.some((l) => l.state === 'quarantined')).toBe(true))
+      expect(read).toHaveBeenCalledTimes(1)
+      await broker.reset('unclassified:mcp', true)
+      expect((await queued).isError).toBe(false); expect(read).toHaveBeenCalledTimes(2)
+    } finally { release(); await running; if (queued) { await broker.reset('unclassified:mcp', true); await queued } }
   })
   it('rechecks final monotonic guards after a queued main call becomes runnable', async () => {
     let release!: () => void
@@ -2148,13 +2154,15 @@ describe('MCP broker across real AgentLoop and native ToolRuntime', () => {
     const { ctx, parent, read } = await setup({ registeredTools: [name], beforeRead: () => gate })
     const broker = ctx.get('sapperToolBroker')!
     const first = ctx.tools.execute({ name, arguments: { path: 'fixture.txt' }, agent: parent, callId: ToolCallId('guard-first'), signal: new AbortController().signal })
-    await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(1))
-    let revoked = false
-    ctx.tools.guard((exec) => revoked && String(exec.callId) === 'guard-waiting' ? 'late permission revoked' : undefined)
-    const second = ctx.tools.execute({ name, arguments: { path: 'fixture.txt' }, agent: parent, callId: ToolCallId('guard-waiting'), signal: new AbortController().signal })
-    await vi.waitFor(() => expect(broker.snapshot().waiting).toHaveLength(1))
-    revoked = true; release(); await first
-    expect((await second).error?.message).toContain('late permission revoked'); expect(read).toHaveBeenCalledTimes(1)
+    try {
+      await waitForRuntime(() => expect(read).toHaveBeenCalledTimes(1))
+      let revoked = false
+      ctx.tools.guard((exec) => revoked && String(exec.callId) === 'guard-waiting' ? 'late permission revoked' : undefined)
+      const second = ctx.tools.execute({ name, arguments: { path: 'fixture.txt' }, agent: parent, callId: ToolCallId('guard-waiting'), signal: new AbortController().signal })
+      await waitForRuntime(() => expect(broker.snapshot().waiting).toHaveLength(1))
+      revoked = true; release(); await first
+      expect((await second).error?.message).toContain('late permission revoked'); expect(read).toHaveBeenCalledTimes(1)
+    } finally { release(); await first }
     expect(broker.snapshot().leases.filter((l) => l.state === 'active')).toEqual([])
   })
   it('performs a real native identity probe and refuses the business call on target mismatch', async () => {
@@ -2199,11 +2207,11 @@ it('MCP providers admit two independent instances concurrently and advertise onl
   await broker.configure(brokerPolicySchema.parse({ profiles: [{ id: 'parallel', label: 'Independent fixture resources', backendId: 'IDA-pool', selectors: ['mcp__ida__*'], isolation: 'explicit-handle', providerId: 'fixture-isolated', maxInstances: 2 }] }), broker.snapshot().revision)
   const pending = dispatch()
   try {
-    await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(2))
+    await waitForRuntime(() => expect(read).toHaveBeenCalledTimes(2))
     const requests = model.requests.filter((r) => JSON.stringify(r.messages).includes('# Sapper explore'))
     expect(requests).toHaveLength(2)
     for (const request of requests) expect(request.tools?.filter((t) => names.includes(t.name))).toHaveLength(1)
-  } finally { release() }
+  } finally { release(); await pending }
   expect((await pending).outcomes.filter((o) => o.state === 'confirmed')).toHaveLength(2)
   expect(close).toHaveBeenCalledTimes(4)
 })
@@ -2215,7 +2223,7 @@ it('MCP capacity handoff never holds backend B while its owner waits for the onl
   const broker = ctx.get('sapperToolBroker')!, { brokerPolicySchema } = await import('../src/mcp/contracts.js')
   await broker.configure(brokerPolicySchema.parse({ profiles: names.map((name, i) => ({ id: 'profile-' + i, label: name, backendId: 'backend-' + i, selectors: [name], capabilities: [i ? 'binary.b' : 'binary.a'] })) }), broker.snapshot().revision)
   const pending = dispatch()
-  try { await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(1)); await vi.waitFor(() => expect(broker.snapshot().leases.some((l) => l.backendId === 'backend-1' && l.state === 'released')).toBe(true)); expect(broker.snapshot().leases.filter((l) => l.backendId === 'backend-1' && l.state === 'active')).toHaveLength(0) } finally { release() }
+  try { await waitForRuntime(() => expect(read).toHaveBeenCalledTimes(1)); await waitForRuntime(() => expect(broker.snapshot().leases.some((l) => l.backendId === 'backend-1' && l.state === 'released')).toBe(true)); expect(broker.snapshot().leases.filter((l) => l.backendId === 'backend-1' && l.state === 'active')).toHaveLength(0) } finally { release(); await pending }
   const run = await pending
   expect(run.state, JSON.stringify(run)).toBe('completed')
   expect(run.outcomes.filter((o) => o.state === 'confirmed')).toHaveLength(2)
