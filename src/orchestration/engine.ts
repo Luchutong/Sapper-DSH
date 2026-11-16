@@ -1,7 +1,7 @@
 import { setTimeout as waitCapacity } from 'node:timers/promises'
 import { randomUUID, createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
-import { readFile } from 'node:fs/promises'
+import { readdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent, AgentOptions } from '@deepseek-ai/dsh-agent'
@@ -30,6 +30,9 @@ import {
 import type { DispatchMode, CapturedCall } from './types.js'
 import { ChildBudget } from './budget.js'
 import { flagLiterals } from './flags.js'
+import { ToolBroker } from '../mcp/broker.js'
+import { mcpTool } from '../mcp/router.js'
+import { atomicJson, safePath } from '../store/io.js'
 import { matchesTool } from './tool-policy.js'
 import { collectedFlags, defaultFlagPolicy, flagProgress, projectFlagPolicy } from './flag-policy.js'
 import { checkCandidateEvidence, verificationModeSchema } from './verification-policy.js'
@@ -51,6 +54,7 @@ function mustStop(error: unknown): boolean {
     (error instanceof AggregateError && error.errors.some(mustStop))
 }
 const require = createRequire(import.meta.url)
+const brokerReadTools = new Set(['sapper_tools', 'sapper_resource', 'sapper_interact', 'sapper_observe'])
 const readTools = new Set(['sapper_status', 'sapper_fact', 'sapper_intent', 'sapper_doc', 'sapper_flag', 'sapper_recall', 'sapper_kb'])
 
 /** Owns exact managed activations. Child identities are reserved before first publication. */
@@ -58,6 +62,7 @@ export class Orchestrator {
   private children = new Map<string, Child>()
   private updatingTools = false
   private active = new Map<string, AbortController>()
+  private broker: ToolBroker
   constructor(
     private ctx: Context,
     private getConfig: () => Config,
@@ -68,7 +73,9 @@ export class Orchestrator {
       run: RunRecord,
       stage: string,
     ) => Promise<void>,
+    broker?: ToolBroker,
   ) {
+    this.broker = broker ?? ctx.get('sapperToolBroker') ?? new ToolBroker(ctx)
     ctx.on('tools/change', () => {
       if (this.updatingTools) return
       for (const [id, child] of this.children) {
@@ -82,11 +89,16 @@ export class Orchestrator {
       // Preset tools live on ancestor scopes, not necessarily the global registry.
       // A child-local native declaration also keeps structured_output callable under a PTC preset.
       agent.ctx.tools.presentAs('native')
+      await this.broker.provision(String(agent.id))
       this.refreshTools(child, agent)
+      await this.broker.activate(agent)
+      const hints = this.broker.info(String(agent.id))?.resourceHints
+      if (hints?.length) agent.inject(createUserMessage({ content: [{ type: 'text', text: 'Sapper resource bindings (data): ' + JSON.stringify(hints) }], source: { kind: 'sapper-dsh', form: 'resources', sections: [{ name: 'Resource bindings', text: JSON.stringify(hints) }] } }))
       agent.ctx.tools.guard(exec => this.denial(exec))
       const tools = ctx.tools.schemas(agent).map(t => t.name)
       const external = tools.filter(name => this.external(child, name))
       child.capabilities = { role: child.role, session_id: String(agent.id), tools, external_tools: external, tool_selectors: child.role === 'reason' ? [] : child.role === 'explore' ? child.config.orchestration.exploreTools : child.config.orchestration.verifyTools, ...(agent.options.provider ? { provider: agent.options.provider } : {}), ...(agent.options.model ? { model: agent.options.model } : {}), ...(agent.options.reasoningEffort ? { reasoning_effort: String(agent.options.reasoningEffort) } : {}), max_output_tokens: child.config.orchestration.maxOutputTokens, state: 'running', steps: 0, step_limit: child.budget.limit, step_ceiling: child.config.orchestration.budgetMode === 'adaptive' && child.role !== 'reason' ? Math.max(child.budget.limit, child.config.orchestration.maxChildStepsCeiling) : child.budget.limit, started_at: new Date().toISOString() }
+      child.capabilities.tool_broker = this.broker.info(String(agent.id))
       await child.onReady(child.capabilities)
       if (child.role !== 'reason' && !external.length) throw new StopRunError(`SAPPER_M3_TOOL_UNAVAILABLE: ${child.role} 未获得白名单中的外部取证工具；可见工具: ${tools.join(', ')}。请检查 DSH preset 与 orchestration.${child.role === 'explore' ? 'exploreTools' : 'verifyTools'}，增加 token 预算无法补齐工具。`)
       return undefined
@@ -94,7 +106,7 @@ export class Orchestrator {
     ctx.tools.guard((exec) => this.denial(exec))
     ctx.on('tools/result', (exec, result) => {
       const child = this.children.get(String(exec.agent?.id))
-      if (!child || result.isError) return
+      if (!child || result.isError || this.broker.isIdentityCall(exec) || this.broker.isCleanupCall(exec)) return
       if (exec.name === 'structured_output' && child.onFlags) {
         const candidate = parseCandidate(exec.arguments, String(exec.agent!.id), child.calls)
         if (candidate.kind === 'flag') this.notifyFlags(child, [candidate])
@@ -105,7 +117,9 @@ export class Orchestrator {
       if (text.trim()) {
         child.progress.add(createHash('sha256').update(exec.name + JSON.stringify(exec.arguments) + text).digest('hex'))
         const receipt_id = 'ev-' + randomUUID()
-        child.calls.set(String(exec.callId), { tool: exec.name, text, receipt_id })
+        const broker = this.broker.receipt(exec)
+        if (mcpTool(exec.name) && (!broker || broker.status !== 'success')) return
+        child.calls.set(String(exec.callId), { tool: exec.name, text, receipt_id, ...(broker ? { broker } : {}) })
         const notice = `Sapper evidence receipt: ${JSON.stringify({ receipt_id, tool: exec.name })}. This receipt certifies this session's successful tool output. To cite it, use evidence: [{"receipt_id":"${receipt_id}"}]. Do not copy or escape the output.`
         exec.agent?.inject(createUserMessage({ content: [{ type: 'text', text: notice }], source: { kind: 'sapper-dsh', form: 'evidence', sections: [{ name: 'Evidence receipt', text: notice }] } }))
         if (child.onFlags) {
@@ -117,21 +131,36 @@ export class Orchestrator {
         }
       }
     })
+    ctx.on('system-prompt/assemble', async (_assembly, context, next) => {
+      const agent = context.agent, child = agent && this.children.get(String(agent.id))
+      if (!agent || !child || child.budget.finalizing) return next()
+      const before = new Set(this.ctx.tools.schemas(agent).map((t) => t.name))
+      await this.broker.refresh(String(agent.id))
+      await this.broker.provision(String(agent.id))
+      this.refreshTools(child, agent)
+      await this.broker.activate(agent)
+      const assembly = await next(), after = this.ctx.tools.schemas(agent), names = new Set(after.map((t) => t.name))
+      const retained = assembly.tools.filter((t) => names.has(t.name)), present = new Set(retained.map((t) => t.name))
+      return { ...assembly, tools: [...retained, ...after.filter((t) => !before.has(t.name) && !present.has(t.name))] }
+    })
     ctx.on('agent/pre-step', async (payload, next) => {
       const child = this.children.get(String(payload.agent.id))
       if (!child) return next()
       try {
         child.guard()
-        if (!child.budget.finalizing) this.refreshTools(child, payload.agent)
+        if (!child.budget.finalizing) { await this.broker.refresh(String(payload.agent.id)); this.refreshTools(child, payload.agent) }
         const budget = child.budget.next(child.progress.size)
         if (budget.exhausted) throw new StopRunError('子代理步数预算耗尽（结构化收尾仍未完成）')
         if (child.capabilities) {
+          child.capabilities.tool_broker = this.broker.info(String(payload.agent.id))
           Object.assign(child.capabilities, { steps: child.budget.steps, step_limit: child.budget.limit, extensions: child.budget.extensions, finalizing: budget.finalizing })
           await child.onReady(child.capabilities)
         }
         if (budget.finalizing) payload.agent.ctx.tools.restrict({ allow: [] })
         const decision = await next()
         if (decision.kind === 'reject') return decision
+        const hints = this.broker.info(String(payload.agent.id))?.resourceHints
+        if (hints?.length) decision.messages = [...decision.messages, createUserMessage({ content: [{ type: 'text', text: 'Sapper resource bindings (data): ' + JSON.stringify(hints) }], source: { kind: 'sapper-dsh', form: 'resources', sections: [{ name: 'Resource bindings', text: JSON.stringify(hints) }] } })]
         if (budget.finalizing) {
           const text = `Sapper finalization: ${child.budget.limit - child.budget.steps + 1} steps remain. Only structured_output is available. Submit your current conclusion NOW using this session's evidence receipts. If verification is incomplete, submit verified=false and explain the missing evidence. Do not claim unobserved success.`
           return { ...decision, messages: [...decision.messages, createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'sapper-dsh', form: 'budget', sections: [{ name: 'Sapper finalization', text }] } })] }
@@ -165,8 +194,10 @@ export class Orchestrator {
   private external(child: Child, name: string): boolean {
     return child.role !== 'reason' && !name.startsWith('sapper_') && name !== 'structured_output' &&
       !!this.ctx.tools.get(name, child.parent) &&
-      matchesTool(child.role === 'explore' ? child.config.orchestration.exploreTools : child.config.orchestration.verifyTools, name)
+      matchesTool(child.role === 'explore' ? child.config.orchestration.exploreTools : child.config.orchestration.verifyTools, name) &&
+      (!mcpTool(name) || this.broker.allowed(child.capabilities?.session_id ?? this.childId(child), name))
   }
+  private childId(child: Child) { return [...this.children].find(([, value]) => value === child)?.[0] ?? '' }
   private refreshTools(child: Child, agent: Agent): void {
     if (this.updatingTools) return
     this.updatingTools = true
@@ -175,7 +206,7 @@ export class Orchestrator {
       // own finite mask cannot hide tools registered since the last boundary.
       const inherited = scopeParentOf(agent)
       const names = this.ctx.tools.schemas(inherited).map((t) => t.name).filter((name) => name !== 'run_code' && this.ctx.tools.get(name, child.parent) &&
-        ((child.role !== 'verify' && readTools.has(name)) || this.external(child, name))).sort()
+        ((brokerReadTools.has(name) && (name !== 'sapper_interact' || child.role !== 'reason')) || (child.role !== 'verify' && readTools.has(name)) || this.external(child, name))).sort()
       const key = names.join('\n')
       if (child.mask?.key === key) return
       const dispose = agent.ctx.tools.restrict({ allow: names }), previous = child.mask
@@ -191,13 +222,14 @@ export class Orchestrator {
     if (name === 'structured_output') return true
     if (child.budget.finalizing) return false
     if (!this.ctx.tools.get(name, child.parent)) return false
+    if (brokerReadTools.has(name)) return name === 'sapper_tools' || (child.role !== 'reason' || ((name === 'sapper_resource' && (args as { action?: string })?.action === 'status') || (name === 'sapper_observe' && ['list', 'require'].includes((args as { action?: string })?.action ?? ''))))
     if (child.role === 'verify') return this.external(child, name)
     return (readTools.has(name) && !isMutation(name, args)) || this.external(child, name)
   }
   denial(exec: Readonly<ToolExecution>): string | undefined {
     const child = this.children.get(String(exec.agent?.id))
     if (!child) return
-    try { child.controller.signal.throwIfAborted(); child.guard(); if (!this.allowed(child, exec.name, exec.arguments)) return `Sapper ${child.role} 角色不允许 ${exec.name}；图写入及递归委派由编排器管理` }
+    try { if (this.broker.isCleanupCall(exec)) { child.guard(); return this.ctx.tools.get(exec.name, child.parent) && matchesTool(child.role === 'explore' ? child.config.orchestration.exploreTools : child.config.orchestration.verifyTools, exec.name) ? undefined : '清理工具已被父会话撤销' } child.controller.signal.throwIfAborted(); child.guard(); if (!this.allowed(child, exec.name, exec.arguments)) return `Sapper ${child.role} 角色不允许 ${exec.name}；图写入及递归委派由编排器管理` }
     catch (error) { child.controller.abort(error); return (error as Error).message }
     return undefined
   }
@@ -215,6 +247,7 @@ export class Orchestrator {
     signal: AbortSignal,
     guard: () => void,
     onReady: Child['onReady'],
+    resources: { store: GraphStore; run: RunRecord; options: WriteOptions; requested?: string[]; purpose?: string },
     onFlags?: Child['onFlags'],
   ) {
     guard()
@@ -242,6 +275,30 @@ export class Orchestrator {
       void activation?.dispose().catch(() => {})
     }
     try {
+      {
+        const cwd = parent.session.header.cwd!, workspace = this.ctx.get('workspaceRegistry')?.list().find((w) => w.path === cwd)
+        const intent = (data as { intent?: { tool_capabilities?: string[] } }).intent
+        const history: unknown[] = []
+        const observationDir = path.join(resources.store.root, 'observations')
+        await safePath(observationDir, resources.store.boundary)
+        let files: string[] = []
+        try { files = await readdir(observationDir) } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+        for (const name of files.filter((n) => /^[a-f0-9-]{36}\.json$/.test(n)).slice(-500)) { const file = path.join(observationDir, name); await safePath(file, resources.store.boundary); try { history.push(JSON.parse(await readFile(file, 'utf8'))) } catch { /* Historical data never grants authority. */ } }
+        await this.broker.prepare({ history, owner: { hostInstanceId: this.broker.hostInstanceId, workspaceId: workspace ? String(workspace.id) : 'session:' + String(parent.id), taskId: path.basename(resources.store.root).startsWith('t-') ? path.basename(resources.store.root) : 'legacy', runId: resources.run.id, agentId: session, role, cwd, ...(resources.purpose ? { purpose: resources.purpose } : {}) },
+          parent, selectors: role === 'verify' ? config.orchestration.verifyTools : config.orchestration.exploreTools,
+          text: JSON.stringify(data), requested: [...new Set([...(resources.requested ?? []), ...(intent?.tool_capabilities ?? [])])], signal: controller.signal, guard,
+          progress: async (stage) => { await this.progress?.(parent, resources.store.root, resources.run, stage) },
+          archiveRecord: async (record) => {
+            const file = path.join(resources.store.root, record.kind === 'observation' ? 'observations' : 'repair-plans', (record.kind === 'observation' ? record.observationId : record.planId) + '.json')
+            resources.options.guard?.(); await safePath(file, resources.store.boundary); await atomicJson(file, record)
+          },
+          archive: async (receipt, result) => {
+            const file = path.join(resources.store.root, 'artifacts', 'tools', receipt.receiptId + '.json')
+            resources.options.guard?.(); await safePath(file, resources.store.boundary)
+            await atomicJson(file, { receipt, result: { isError: result.isError, content: result.content, ...(result.isError ? { error: result.error.message } : { value: result.value }) } })
+          },
+        })
+      }
       const root = path.dirname(require.resolve('sapper-dsh/package.json'))
       const prompt = await readFile(
         path.join(root, 'resources', 'prompts', role + '.md'),
@@ -268,14 +325,16 @@ export class Orchestrator {
       for (;;) {
         try {
           activation = await service.startActivation({ provider: 'spawn', childId: session, label: `Sapper ${role}`, delivery: 'caller', signal: controller.signal,
-        request: { parent, cwd: parent.session.header.cwd!, prompt: [{ type: 'text', text: prompt + '\n\n' + UNTRUSTED_NOTICE + '\n' + JSON.stringify(data) }],
+        request: { parent, cwd: parent.session.header.cwd!, prompt: [{ type: 'text', text: prompt + '\n\n' + UNTRUSTED_NOTICE + '\n' + JSON.stringify(data) + '\nTool resource context: ' + JSON.stringify(this.broker.info(session)?.resourceHints ?? []) }],
           outputSchema: SCHEMAS[role], agentOptions, maxDepth: service.resolveMaxDepth() ?? 1 } })
           break
         } catch (error) {
           if ((error as { code?: string }).code !== 'ACTIVATION_LIMIT_REACHED')
             throw error
-          await waitCapacity(200, undefined, { signal: controller.signal })
+          const yielded = await this.broker.yieldForCapacity(session)
+          await waitCapacity(yielded ? 500 : 200, undefined, { signal: controller.signal })
           guard()
+          if (yielded) await this.broker.refresh(session)
         }
       }
       timer = setTimeout(
@@ -295,7 +354,13 @@ export class Orchestrator {
       await child.notifications.catch(() => {})
       child.closing = true
       if (child.capabilities) { child.capabilities.state ??= 'failed'; if (child.capabilities.state === 'running') child.capabilities.state = child.controller.signal.reason instanceof FlagStop ? 'stopped' : 'failed'; child.capabilities.ended_at = new Date().toISOString(); try { await child.onReady(child.capabilities) } catch {} }
-      try { await activation?.dispose() } finally { controller.signal.removeEventListener('abort', stop); clearTimeout(timer); clearInterval(poll); signal.removeEventListener('abort', onAbort); this.children.delete(session) }
+      try {
+        const final = await this.broker.finish(session)
+        if (child.capabilities && final) { child.capabilities.tool_broker = final; await child.onReady(child.capabilities).catch(() => {}) }
+      } finally {
+        await activation?.dispose()
+        controller.signal.removeEventListener('abort', stop); clearTimeout(timer); clearInterval(poll); signal.removeEventListener('abort', onAbort); this.children.delete(session)
+      }
     }
   }
   async dispatch(
@@ -363,7 +428,7 @@ export class Orchestrator {
       }
       const reason = async () => {
         const graph = await store.read()
-        const output = await this.child('reason', { flag_collection: flagContext(), verification_policy: verificationMode, graph: renderGraphContext(graph, { ...config, context: { ...config.context, scope: 'frontier-history' } }, { fullAccess: options.autoConfirm?.() ?? false, actor }).text }, parent, config, signal, guard, onReady)
+        const output = await this.child('reason', { flag_collection: flagContext(), verification_policy: verificationMode, graph: renderGraphContext(graph, { ...config, context: { ...config.context, scope: 'frontier-history' } }, { fullAccess: options.autoConfirm?.() ?? false, actor }).text }, parent, config, signal, guard, onReady, { store, run, options: runOptions, requested: Array.isArray(initial.project.tool_capabilities) ? initial.project.tool_capabilities as string[] : [], purpose: writeup ? 'writeup' : 'solve' })
         const proposals = parseProposals(output.value)
         // Validate the entire batch before creating the first intent.
         const keys = new Set(graph.intents.map(i => normalize(i.description) + ':' + [...i.from].sort().join(',')))
@@ -382,8 +447,13 @@ export class Orchestrator {
         await store.saveRun(run, runOptions)
         const intent = await store.readNode('intent', outcome.intent_id)
         // No explorer transcript, reasoning, graph history, or unrelated facts are sent.
-        const output = await this.child('verify', { goal: (await store.read()).project.goal, intent: { id: intent.id, description: intent.description, success_criteria: intent.doc, completes_goal: intent.completes_goal === true }, candidate: outcome.candidate }, parent, config, pipelineSignal, guard, onReady)
+        const output = await this.child('verify', { goal: (await store.read()).project.goal, intent: { id: intent.id, description: intent.description, success_criteria: intent.doc, completes_goal: intent.completes_goal === true }, candidate: outcome.candidate }, parent, config, pipelineSignal, guard, onReady, { store, run, options: runOptions, requested: Array.isArray(initial.project.tool_capabilities) ? initial.project.tool_capabilities as string[] : [], purpose: writeup ? 'writeup' : 'solve' })
         outcome.verification = parseVerification(output.value, output.session, output.calls)
+        if (outcome.candidate.kind === 'flag' && outcome.candidate.source === 'unbound' && outcome.verification.verified) {
+          const rebound = outcome.verification.evidence.some((e) => { const call = output.calls.get(e.call_id); return call?.text.includes(outcome.candidate!.description.trim()) && (!call.broker || call.broker.source === 'target') })
+          if (!rebound) throw new StoreError('MCP 目标绑定尚未核实；候选仍可先手动提交测试')
+          outcome.candidate.source = 'target'
+        }
         if (!outcome.verification.verified) throw new StoreError('verify rejected: ' + outcome.verification.issues)
         await store.promoteVerified(run, outcome, actor, { ...managed, signal: pipelineSignal })
         if (outcome.candidate.kind === 'flag') await stopForFlag()
@@ -422,7 +492,7 @@ export class Orchestrator {
               await stopForFlag()
               if (!foundFlag) await this.progress?.(parent, store.root, run, 'flag-candidate')
             }
-            const output = await this.child('explore', { goal: graph.project.goal, flag_collection: flagContext(), verification_policy: verificationMode, intent, facts: graph.facts.filter(f => intent.from.includes(f.id)) }, parent, config, pipelineSignal, guard, onReady, publishFlags)
+            const output = await this.child('explore', { goal: graph.project.goal, flag_collection: flagContext(), verification_policy: verificationMode, intent, facts: graph.facts.filter(f => intent.from.includes(f.id)) }, parent, config, pipelineSignal, guard, onReady, { store, run, options: runOptions, requested: Array.isArray(initial.project.tool_capabilities) ? initial.project.tool_capabilities as string[] : [], purpose: writeup ? 'writeup' : 'solve' }, publishFlags)
             outcome.candidate = parseCandidate(output.value, output.session, output.calls)
             const independent = verificationMode === 'independent' || (verificationMode === 'selective' && config.verification.criticalKinds.includes(outcome.candidate.kind))
             if (mode !== 'explore' && !independent) outcome.evidence_check = checkCandidateEvidence(outcome.candidate, output.calls, verificationMode === 'none' ? 'none' : 'lightweight')
@@ -442,7 +512,7 @@ export class Orchestrator {
             await store.recordEvidence(run, outcome, actor, { ...managed, signal: pipelineSignal })
             await this.progress?.(parent, store.root, run, 'evidence-recorded')
             const intent = await store.readNode('intent', nodeId)
-            if (!collectionMode && intent.completes_goal === true && outcome.candidate?.goal_achieved === true) {
+            if (!collectionMode && outcome.candidate?.source !== 'unbound' && intent.completes_goal === true && outcome.candidate?.goal_achieved === true) {
               foundFlag = true; run.stop_reason = 'evidence-goal-reached'
               for (const other of pipelines) if (other !== pipeline) other.abort(new FlagStop('已有工具证据，快速策略结束本轮'))
             }

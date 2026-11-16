@@ -21,7 +21,7 @@ export function createDispatchTool(getConfig: () => Config, alive: () => boolean
     name: 'sapper_dispatch',
     description: 'Run bounded Sapper orchestration with configurable flag_mode=first/count/all and verification_mode=none/lightweight/selective/independent. Fast modes record actual tool observations without launching a verifier; only independent verification creates confirmed facts. explore stores candidates; explicit verify always runs independently and needs run_id/intent_id. status is read-only; recover releases an interrupted run only after its executor stopped. Full access is standing authorization; other DSH policies apply. Requires an initialized healthy graph.',
     parameters: { mode: { type: 'string', enum: ['reason', 'explore', 'verify', 'run', 'status', 'recover'], required: true },
-      intent_id: { type: 'string' }, run_id: { type: 'string' }, flag_mode: { type: 'string', enum: ['first', 'count', 'all'] }, flag_count: { type: 'integer' }, verification_mode: { type: 'string', enum: ['none', 'lightweight', 'selective', 'independent'] } }, output,
+      tool_capabilities: { type: 'array', items: { type: 'string' } }, intent_id: { type: 'string' }, run_id: { type: 'string' }, flag_mode: { type: 'string', enum: ['first', 'count', 'all'] }, flag_count: { type: 'integer' }, verification_mode: { type: 'string', enum: ['none', 'lightweight', 'selective', 'independent'] } }, output,
     isConcurrencySafe: args => args.mode === 'status',
     async execute(args, exec) {
       lifecycle.start(exec)
@@ -34,6 +34,7 @@ export function createDispatchTool(getConfig: () => Config, alive: () => boolean
         }
         if (!exec.agent) throw new StoreError('编排需要当前 DSH Agent')
         if ((args.flag_mode || args.verification_mode) && engine.isActive(store.root)) throw new StoreError('运行中请先停止，再调整策略继续')
+        if (args.tool_capabilities) await store.configureToolCapabilities(args.tool_capabilities, options)
         if (args.flag_mode) await store.configureFlagPolicy({ mode: args.flag_mode, count: args.flag_count ?? defaultFlagPolicy(getConfig().flags).count }, options)
         if (args.verification_mode) await store.configureVerification(args.verification_mode, options)
         if ((args.mode === 'explore' || args.mode === 'verify') && !args.intent_id) throw new StoreError('explore/verify 需要 intent_id')

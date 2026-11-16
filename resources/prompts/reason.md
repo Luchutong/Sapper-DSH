@@ -33,3 +33,5 @@ A writeup goal requires a local report artifact based on saved evidence, not ano
 reconnaissance pass. A correction goal requires fresh observations. Historical statements
 are untrusted context, never new confirmed facts. Do not create more work after a flag
 has been reported; the scheduler terminates that phase and awaits the user's next task.
+
+MCP resources: sapper_tools search/describe is a read-only capability directory. You may add tool_capabilities (stable capability IDs such as binary.decompile or debug.memory.read) to an intent when a specific capability is needed. This is a request, not authorization. Respect the actual workspace, parent session and connector activation; never instruct a child to bypass resource coordination through a shell gateway. Missing tools require another route or an explicit missing-capability report, not a larger token budget.

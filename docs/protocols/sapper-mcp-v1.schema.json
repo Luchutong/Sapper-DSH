@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:sapper:protocol:mcp:1",
   "title": "Sapper MCP tool-broker protocol v1 (design)",
-  "description": "Design contract, not a live API. Host derives identity, revisions, resource bindings and fencing. Schema validation never grants authority.",
+  "description": "Design contract, not a live API. Host derives identity, revisions, resource bindings and fencing. Schema validation never grants authority. Runtime revision 2: main-session owners use sessionId without synthetic task/run IDs; Agent IDs may be native DSH names.",
   "oneOf": [
     {
       "$ref": "#/$defs/profile"
@@ -65,7 +65,8 @@
         },
         "agentId": {
           "type": "string",
-          "format": "uuid"
+          "minLength": 1,
+          "maxLength": 256
         },
         "role": {
           "type": "string",
@@ -73,20 +74,46 @@
             "reason",
             "explore",
             "verify",
-            "writeup"
+            "writeup",
+            "main"
           ]
+        },
+        "sessionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
         }
       },
       "required": [
         "hostInstanceId",
         "workspaceId",
-        "challengeId",
-        "taskId",
-        "runId",
         "agentId",
         "role"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "role": {
+                "const": "main"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "sessionId"
+            ]
+          },
+          "else": {
+            "required": [
+              "challengeId",
+              "taskId",
+              "runId"
+            ]
+          }
+        }
+      ]
     },
     "resource": {
       "type": "object",

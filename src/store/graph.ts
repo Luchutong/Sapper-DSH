@@ -1,3 +1,4 @@
+import { capabilityId } from '../mcp/contracts.js'
 import { mkdir, readdir, rm, unlink } from 'node:fs/promises'
 import path from 'node:path'
 import { absent, atomicJson, exists, readJson, safePath, serial } from './io.js'
@@ -26,6 +27,7 @@ export interface IntentInput {
   doc?: string | null | undefined
   requires_confirmation?: boolean | undefined
   completes_goal?: boolean
+  tool_capabilities?: string[]
 }
 export type FlagStatus = typeof FLAG_STATUSES[number]
 export interface FlagEntry {
@@ -296,6 +298,7 @@ export class GraphStore {
         status: 'open', worker: null, requires_confirmation: input.requires_confirmation ?? false,
         confirmed_at: null, concluded_at: null, created_at: now(), creator,
       }
+      if (input.tool_capabilities) intent.tool_capabilities = input.tool_capabilities
       if (options?.managedRun) intent.orchestration_run = runId(options.managedRun)
       if (options?.managedRun && input.completes_goal) intent.completes_goal = true
       changes.set(`intents/${intent.id}.json`, intent)
@@ -431,6 +434,11 @@ export class GraphStore {
       return value
     }, options)
   }
+  async configureToolCapabilities(input: string[], options?: WriteOptions): Promise<void> {
+    if (input.length > 32) throw new StoreError('任务最多指定 32 项工具能力')
+    const capabilities = [...new Set(input.map((c) => capabilityId.parse(c)))]
+    await this.mutate(async (changes) => { const graph = await this.healthy(); graph.project.tool_capabilities = capabilities; changes.set('project.json', graph.project) }, options)
+  }
   async configureVerification(mode: VerificationMode, options?: WriteOptions): Promise<void> {
     verificationModeSchema.parse(mode)
     return this.mutate(async (changes) => {
@@ -464,6 +472,7 @@ export class GraphStore {
       const { candidate, verification } = outcome
       if (graph.project.status !== 'active') throw new StoreError('项目已完成，不再晋升其他 M3 候选')
       if (!candidate?.evidence.length || !verification?.verified || !verification.evidence.length || verification.verifier_session === candidate.explorer_session) throw new StoreError('缺少独立复核的有效证据')
+      if (candidate.kind === 'flag' && candidate.source === 'unbound') throw new StoreError('flag 的 MCP 目标绑定尚未核实；保留候选')
       if (intent.orchestration_run !== record.id) throw new StoreError('候选与意图运行归属不一致')
       this.permission(intent, actor, options?.autoConfirm?.())
       if (candidate.kind === 'flag' && this.flagEntries(graph.facts).some(e => e.value === normalizeFlag(candidate.description))) throw new StoreError('候选 flag 已有本地记录，不重复晋升')

@@ -32,6 +32,7 @@ export function createTaskTool(
         required: true,
       },
       goal: { type: 'string' },
+      tool_capabilities: { type: 'array', items: { type: 'string' } },
       task_id: { type: 'string' },
       purpose: { type: 'string', enum: ['solve', 'writeup'] },
       run_id: { type: 'string' },
@@ -68,6 +69,7 @@ export function createTaskTool(
           : await selectTask(base, cwd, args.task_id ?? 'legacy', options)
         const context = args.action === 'start' ? seedContext?.(exec) : undefined
         if (context) await store.addFact(context, creator, options)
+        if (args.tool_capabilities) await store.configureToolCapabilities(args.tool_capabilities, options)
         const project = (await store.read()).project
         if (project.purpose !== 'writeup' && (args.flag_mode || ((args.action === 'start' || args.action === 'continue') && !project.flag_policy)))
           await store.configureFlagPolicy({ mode: args.flag_mode ?? getConfig().flags.completion, count: args.flag_count ?? defaultFlagPolicy(getConfig().flags).count }, options)

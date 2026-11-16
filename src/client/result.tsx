@@ -6,7 +6,7 @@ import { readResult } from '../panel/result-schema.js'
 export function candidateLabel(candidate: TaskResult['candidates'][number]): string {
   if (candidate.status === 'rejected')
     return candidate.kind === 'flag' ? 'flag 复核未通过' : '复核未通过'
-  if (candidate.kind === 'flag') return '未验证 flag · 可先提交测试'
+  if (candidate.kind === 'flag') return '未验证 flag · 可先提交测试' + (candidate.source === 'unbound' ? ' · MCP 目标身份未认证' : '')
   if (candidate.evidence_check) return candidate.evidence_check.mode === 'none' ? '已有工具证据 · 未独立复核' : candidate.evidence_check.passed ? '轻量证据检查通过 · 未独立复核' : '已有工具证据 · 轻量检查待补充'
   if (candidate.kind === 'vuln') return '漏洞候选 · 尚未复核'
   return '候选结果 · 尚未复核'

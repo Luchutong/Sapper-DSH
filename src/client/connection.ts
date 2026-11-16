@@ -50,6 +50,9 @@ export function connectPanel(ctx: BrowserContext) {
       return result.value
     }
     const api: WorkbenchPanelApi = {
+      brokerState: () => invoke('brokerState', {}) as Promise<import('../mcp/contracts.js').BrokerSnapshot>,
+      brokerConfigure: (input) => invoke('brokerConfigure', { input }) as Promise<import('../mcp/contracts.js').BrokerSnapshot>,
+      brokerReset: (input) => invoke('brokerReset', { input }) as Promise<import('../mcp/contracts.js').BrokerSnapshot>,
       capabilities: (input) => invoke('capabilities', { input }) as Promise<import('../panel/capabilities.js').Capabilities>,
       node: (input, id) =>
         invoke('node', { input, id }) as ReturnType<WorkbenchPanelApi['node']>,

@@ -34,3 +34,8 @@ it('preserves all distinct flags from a single tool output instead of silently t
   const values = Array.from({ length: 24 }, (_, i) => `CTF2{MULTI-${i}}`)
   expect(flagLiterals(values.join('\n'))).toEqual(values)
 })
+it('keeps an unbound MCP flag visible but does not count it as a target completion', () => {
+  const run = { id: 'r001', mode: 'run', parent_session: 'main', state: 'completed', created_at: 'now', updated_at: 'now', steps: 1, explored: 1, intent_ids: [], outcomes: [], flag_observations: [{ intent_id: 'i001', candidate: { ...candidate('flag{unbound}'), source: 'unbound' } }] } as RunRecord
+  expect(run.flag_observations).toHaveLength(1)
+  expect(flagProgress({ mode: 'first', count: 1 }, [], [run]).found).toBe(0)
+})

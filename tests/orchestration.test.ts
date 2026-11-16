@@ -38,6 +38,9 @@ afterEach(async () => {
   for (const f of cleanup.splice(0).reverse()) await f()
 })
 interface Scenario {
+  resourceBindings?: boolean
+  capabilitiesByRoute?: string[]
+  resourceRequestAfterRead?: boolean
   externalName?: string
   verifyExternalName?: string
   registeredTools?: string[]
@@ -149,12 +152,20 @@ class FixtureModel extends LlmAdapter {
     const requiredReads = role === 'verify' ? this.scenario.verifyReads ?? 1 : this.scenario.exploreReads ?? 1
     let name = 'structured_output',
       args: unknown
-    if (role === 'reason') args = { intents: this.scenario.emptyReason || (this.scenario.reasonOnce && this.requests.filter((r) => JSON.stringify(r.messages).includes('# Sapper reason')).length > 1) ? [] : Array.from({ length: this.scenario.proposals ?? 1 }, (_, n) => ({ title: `Check fixture ${n}`, description: `Read local fixture ${n}`, from: ['f001'], success_criteria: 'Fixture content contains VERIFIED-LOCAL-7C42', completes_goal: !!this.scenario.completesGoal })) }
+    if (role === 'reason') args = { intents: this.scenario.emptyReason || (this.scenario.reasonOnce && this.requests.filter((r) => JSON.stringify(r.messages).includes('# Sapper reason')).length > 1) ? [] : Array.from({ length: this.scenario.proposals ?? 1 }, (_, n) => ({ ...(this.scenario.capabilitiesByRoute?.[n] ? { tool_capabilities: [this.scenario.capabilitiesByRoute[n]] } : {}), title: `Check fixture ${n}`, description: `Read local fixture ${n}`, from: ['f001'], success_criteria: 'Fixture content contains VERIFIED-LOCAL-7C42', completes_goal: !!this.scenario.completesGoal })) }
+    else if (role === 'explore' && route === 0 && tools.length === 1 && this.scenario.resourceRequestAfterRead) { name = 'sapper_resource'; args = { action: 'acquire', capabilities: ['binary.b'] } }
     else if (!tools.length && this.scenario.writeup) { name = role === 'explore' ? 'pwsh' : 'read'; args = role === 'explore' ? { code: 'write-local-wp' } : { path: 'WP.md' } }
     else if (!tools.length && this.scenario.attack) { name = 'sapper_fact'; args = { action: 'create', description: 'BYPASS' } }
     else if (tools.length < (this.scenario.attack ? requiredReads + 1 : requiredReads) && !(role === 'explore' && (this.scenario.noEvidence || this.scenario.forged))) { name = (role === 'verify' ? this.scenario.verifyExternalName : undefined) ?? this.scenario.externalName ?? 'read'; args = { path: this.scenario.flagValues ? `flag-${route}.txt` : requiredReads > 1 ? `fixture-${tools.length}.txt` : 'fixture.txt' } }
     else if (role === 'explore') args = { title: 'Fixture observation', description: this.scenario.writeup ? 'WP.md: local evidence and reproduction steps saved' : flagValue ?? 'Local fixture contains VERIFIED-LOCAL-7C42', kind: flagValue && !this.scenario.writeup ? 'flag' : 'note', goal_achieved: !!this.scenario.completesGoal, ...(this.scenario.recipe ? { reproduction: this.scenario.recipe } : {}), evidence: this.scenario.noEvidence ? [] : this.scenario.citeAll ? [...new Set(raw.match(/ev-[a-f0-9-]{36}/g) ?? [])].map((receipt_id) => ({ receipt_id })) : [{ receipt_id: this.scenario.forged ? 'invented' : receipt }] }
     else args = { goal_achieved: !!this.scenario.completesGoal && !this.scenario.denyGoal, verified: !this.scenario.reject, issues: this.scenario.reject ? 'REPRODUCTION-MISMATCH' : '', evidence: this.scenario.noVerifyEvidence || this.scenario.reject ? [] : [{ receipt_id: receipt }] }
+    if (name === 'available-mcp') name = options.tools?.find((t) => t.name.startsWith('mcp__ida__slot'))?.name ?? name
+    if (this.scenario.resourceBindings && name.startsWith('mcp__')) {
+      for (const message of options.messages) if (Array.isArray(message.content)) for (const block of message.content) if (block.type === 'text' && block.text.startsWith('Sapper resource bindings (data): ')) {
+        const hints = JSON.parse(block.text.slice('Sapper resource bindings (data): '.length)) as Array<{ bindings: Record<string, string> }>
+        args = { ...(args as Record<string, unknown>), ...hints[0]?.bindings }
+      }
+    }
     yield { type: 'reasoning-delta', index: 1, text: role === 'explore' ? 'EXPLORER-PRIVATE-TRACE' : 'fixture reasoning' }
     yield { type: 'tool-call-delta', index: 0, id: ToolCallId('fixture-' + this.requests.length), name, argumentsDelta: JSON.stringify(args) }
     yield { type: 'finish', reason: { kind: 'tool-calls' } }
@@ -203,7 +214,7 @@ async function setup(
       'utf8',
     )
   })
-  const readDefinition = defineTool({ name: 'read', description: 'Read local fixture', parameters: { path: { type: 'string', required: true } }, output: { schema: { type: 'string' }, render: (_a, v) => [{ type: 'text', text: v }] }, execute: read })
+  const readDefinition = defineTool({ name: 'read', description: 'Read local fixture', parameters: { path: { type: 'string', required: true }, ...(scenario.resourceBindings ? { session_id: { type: 'string' as const } } : {}) }, output: { schema: { type: 'string' }, render: (_a, v) => [{ type: 'text', text: v }] }, execute: read })
   const wpDefinition = defineTool({
     name: 'pwsh',
     description: 'Local fixture WP writer',
@@ -755,6 +766,12 @@ it(
     expect(capabilityList.tools.find((t) => t.name === 'read')).toMatchObject({ available: true, explore: true, verify: true })
     expect(capabilityList.models.find((m) => m.id === 'fixture-model')?.efforts.map((e) => e.id)).toEqual(['fixture-low', 'fixture-max'])
     await expect(ctx.typertGateway.invoke({ namespace: 'sapperPanel', method: 'capabilities', args: { input: { cwd: '/forged' } }, peer })).rejects.toThrow()
+    const brokerState = await connection.getSnapshot().api!.brokerState!()
+    expect(brokerState.providers).toContain('native-handle')
+    const updatedBroker = await connection.getSnapshot().api!.brokerConfigure!({ revision: brokerState.revision, policy: { ...brokerState.policy, waitMs: 2300 } })
+    expect(updatedBroker.revision).toBe(brokerState.revision + 1)
+    expect((await connection.getSnapshot().api!.brokerState!()).policy.waitMs).toBe(2300)
+    await expect(ctx.typertGateway.invoke({ namespace: 'sapperPanel', method: 'brokerConfigure', args: { input: { revision: updatedBroker.revision, policy: updatedBroker.policy, ownerId: 'forged' } }, peer })).rejects.toThrow()
     expect(await invoke('state', { sessionId: String(parent.id) })).toMatchObject({ tasks: [], runs: [] })
     const panelResults: import('../src/panel/result.js').TaskResult[] = []
     ctx.on('session/event', (session, event) => {
@@ -2019,4 +2036,134 @@ it.each(['failed','completed'] as const)('does not replay a %s automatic brief l
   await panel.workbench.change(d=>{d.briefs.old={jobId:'old',sessionId:String(parent.id),messageId:String(message.id),state}})
   parent.followup(message);await parent.whenIdle()
   expect(model.requests).toHaveLength(0);expect(panel.workbench.snapshot().briefs.old?.state).toBe(state)
+})
+
+describe('MCP broker across real AgentLoop and native ToolRuntime', () => {
+  it('holds a shared workflow before starting a second child, without spending its model steps', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    const name = 'mcp__ida__decompile'
+    const scenario: Scenario = { externalName: name, registeredTools: [name], proposals: 2, beforeRead: () => gate }
+    const { ctx, dispatch, model, read } = await setup(scenario, { orchestration: { maxExplore: 2, maxSteps: 2, concurrency: 2 } })
+    const broker = ctx.get('sapperToolBroker')!
+    const pending = dispatch()
+    try {
+      await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(1))
+      await vi.waitFor(() => expect(broker.snapshot().waiting.length).toBeGreaterThan(0))
+      const explorerIds = new Set(model.requests.filter((r) => JSON.stringify(r.messages).includes('# Sapper explore')).map((r) => JSON.stringify(r.messages).match(/Read local fixture \d/)?.[0]))
+      expect(explorerIds.size).toBe(1)
+    } finally { release() }
+    expect((await pending).outcomes.filter((o) => o.state === 'confirmed')).toHaveLength(2)
+    expect(broker.snapshot().leases.filter((l) => l.state === 'active')).toEqual([])
+  })
+  it('coordinates a main-session alias with an occupied child workflow using the same physical backend', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    const a = 'mcp__ida__decompile', b = 'mcp__other_ida__decompile'
+    const { ctx, parent, dispatch, read } = await setup({ externalName: a, registeredTools: [a, b], beforeRead: () => gate })
+    const broker = ctx.get('sapperToolBroker')!
+    await broker.configure({ selection: 'all', waitMs: 10000, profiles: [(await import('../src/mcp/contracts.js')).profileSchema.parse({ id: 'ida', label: 'IDA', backendId: 'same-IDA', selectors: ['mcp__ida__*', 'mcp__other_ida__*'] })] }, broker.snapshot().revision)
+    const run = dispatch()
+    await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(1))
+    const alias = ctx.tools.execute({ name: b, arguments: { path: 'fixture.txt' }, agent: parent, callId: ToolCallId('alias-direct'), signal: new AbortController().signal })
+    try { await vi.waitFor(() => expect(broker.snapshot().waiting.length).toBeGreaterThan(0)); expect(read).toHaveBeenCalledTimes(1) } finally { release() }
+    expect((await alias).isError).toBe(false); expect((await run).state).toBe('completed')
+    expect(broker.snapshot().receipts.some((r) => r.owner.role === 'main' && r.toolRef.publicName === b)).toBe(true)
+  })
+  it('drains a canceled native call, quarantines uncertainty and never reassigns it just because a signal aborted', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r }), controller = new AbortController()
+    const name = 'mcp__ida__run'
+    const { ctx, parent, read } = await setup({ registeredTools: [name], beforeRead: () => gate })
+    const broker = ctx.get('sapperToolBroker')!
+    const running = ctx.tools.execute({ name, arguments: { path: 'fixture.txt' }, agent: parent, callId: ToolCallId('cancel-running'), signal: controller.signal })
+    await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(1))
+    controller.abort(new Error('user cancelled'))
+    expect(broker.snapshot().leases.some((l) => l.state === 'active')).toBe(true)
+    const queued = ctx.tools.execute({ name, arguments: { path: 'fixture.txt' }, agent: parent, callId: ToolCallId('after-cancel'), signal: new AbortController().signal })
+    await vi.waitFor(() => expect(broker.snapshot().waiting).toHaveLength(1))
+    release(); expect((await running).isError).toBe(true)
+    await vi.waitFor(() => expect(broker.snapshot().leases.some((l) => l.state === 'quarantined')).toBe(true))
+    expect(read).toHaveBeenCalledTimes(1)
+    await broker.reset('unclassified:mcp', true)
+    expect((await queued).isError).toBe(false); expect(read).toHaveBeenCalledTimes(2)
+  })
+  it('rechecks final monotonic guards after a queued main call becomes runnable', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r }), name = 'mcp__ida__decompile'
+    const { ctx, parent, read } = await setup({ registeredTools: [name], beforeRead: () => gate })
+    const broker = ctx.get('sapperToolBroker')!
+    const first = ctx.tools.execute({ name, arguments: { path: 'fixture.txt' }, agent: parent, callId: ToolCallId('guard-first'), signal: new AbortController().signal })
+    await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(1))
+    let revoked = false
+    ctx.tools.guard((exec) => revoked && String(exec.callId) === 'guard-waiting' ? 'late permission revoked' : undefined)
+    const second = ctx.tools.execute({ name, arguments: { path: 'fixture.txt' }, agent: parent, callId: ToolCallId('guard-waiting'), signal: new AbortController().signal })
+    await vi.waitFor(() => expect(broker.snapshot().waiting).toHaveLength(1))
+    revoked = true; release(); await first
+    expect((await second).error?.message).toContain('late permission revoked'); expect(read).toHaveBeenCalledTimes(1)
+    expect(broker.snapshot().leases.filter((l) => l.state === 'active')).toEqual([])
+  })
+  it('performs a real native identity probe and refuses the business call on target mismatch', async () => {
+    const business = 'mcp__ida__decompile', probe = 'mcp__ida__identity'
+    const { ctx, dispatch, read } = await setup({ externalName: business, registeredTools: [business] })
+    const checked = vi.fn(async () => ({ database: 'wrong-target' }))
+    ctx.tools.register(defineTool({ name: probe, description: 'Identity fixture', parameters: {}, output: { schema: { type: 'json' }, render: (_a, v) => [{ type: 'text', text: JSON.stringify(v) }] }, execute: checked }))
+    const broker = ctx.get('sapperToolBroker')!, { brokerPolicySchema } = await import('../src/mcp/contracts.js')
+    await broker.configure(brokerPolicySchema.parse({ profiles: [{ id: 'ida', label: 'IDA', backendId: 'IDA', selectors: ['mcp__ida__*'], identity: { tool: probe, resultPath: 'database', expected: 'right-target' } }] }), broker.snapshot().revision)
+    expect((await dispatch()).state).toBe('failed'); expect(checked).toHaveBeenCalled(); expect(read).not.toHaveBeenCalled()
+    expect(broker.snapshot().receipts.some((r) => r.toolRef.publicName === business && r.status === 'error')).toBe(true)
+  })
+})
+
+it('MCP native-handle factory creates distinct explorer/verifier resources through native policy and confirms their closure', async () => {
+  const readName = 'mcp__factory__read', openName = 'mcp__factory__open', verifyName = 'mcp__factory__identity', closeName = 'mcp__factory__close'
+  const { ctx, dispatch, cwd, store } = await setup({ externalName: readName, registeredTools: [readName], resourceBindings: true })
+  const live = new Set<string>(), created: string[] = [], closed: string[] = []
+  const jsonOutput = { schema: { type: 'json' as const }, render: (_a: unknown, v: unknown) => [{ type: 'text' as const, text: JSON.stringify(v) }] }
+  ctx.tools.register(defineTool({ name: openName, description: 'Create independent fixture handle', parameters: {}, output: jsonOutput, execute: async () => { const id = 'handle-' + created.length; created.push(id); live.add(id); return { id, incidental: 'flag{BOOTSTRAP_IS_NOT_TARGET_EVIDENCE}' } } }))
+  ctx.tools.register(defineTool({ name: verifyName, description: 'Fixture resource identity', parameters: { session_id: { type: 'string', required: true } }, output: jsonOutput, execute: async (args) => ({ target: live.has(args.session_id) ? cwd : 'closed' }) }))
+  ctx.tools.register(defineTool({ name: closeName, description: 'Close owned fixture resource', parameters: { session_id: { type: 'string', required: true } }, output: jsonOutput, execute: async (args) => { live.delete(args.session_id); closed.push(args.session_id); return { closed: true } } }))
+  const broker = ctx.get('sapperToolBroker')!, { brokerPolicySchema } = await import('../src/mcp/contracts.js')
+  await broker.configure(brokerPolicySchema.parse({ profiles: [{ id: 'factory', label: 'Native handle', backendId: 'factory', selectors: ['mcp__factory__*'], isolation: 'explicit-handle', providerId: 'native-handle', maxInstances: 2,
+    native: { open: { tool: openName }, close: { tool: closeName, arguments: { session_id: '{{session}}' } }, verify: { tool: verifyName, arguments: { session_id: '{{session}}' } }, handlePath: 'id', argumentPath: 'session_id', identityPath: 'target', closeConfirmedPath: 'closed', expectedIdentity: '{{cwd}}', tools: [readName] }, effects: { [readName]: 'read' } }] }), broker.snapshot().revision)
+  const run = await dispatch()
+  expect(run.state, JSON.stringify(run)).toBe('completed'); expect(run.outcomes[0]?.state).toBe('confirmed')
+  expect(created).toHaveLength(2); expect(new Set(created).size).toBe(2); expect(closed.sort()).toEqual(created.sort()); expect(live.size).toBe(0)
+  expect(run.flag_observations ?? []).toEqual([])
+  expect(run.children?.filter((c) => c.role !== 'reason').every((c) => c.tool_broker?.leases.every((l) => l.state === 'released'))).toBe(true)
+  expect((await store.readRun(run.id)).outcomes[0]?.candidate?.evidence[0]?.broker?.target.binding).toBe('attested')
+})
+
+it('MCP providers admit two independent instances concurrently and advertise only each instance native tools', async () => {
+  let release!: () => void
+  const gate = new Promise<void>((r) => { release = r })
+  const names = ['mcp__ida__slot0', 'mcp__ida__slot1']
+  const { ctx, dispatch, read, model } = await setup({ externalName: 'available-mcp', registeredTools: names, proposals: 2, beforeRead: () => gate }, { orchestration: { maxSteps: 2, maxExplore: 2, concurrency: 2 } })
+  const broker = ctx.get('sapperToolBroker')!, { brokerPolicySchema } = await import('../src/mcp/contracts.js')
+  const close = vi.fn(async () => {})
+  broker.registerProvider('fixture-isolated', { open: async ({ slot, owner, fence }) => ({ resourceId: owner.agentId + ':resource', generation: fence, assurance: 'verified-handle', tools: [names[slot]!], bindings: { path: 'fixture.txt' }, verify: async () => true, close }) })
+  await broker.configure(brokerPolicySchema.parse({ profiles: [{ id: 'parallel', label: 'Independent fixture resources', backendId: 'IDA-pool', selectors: ['mcp__ida__*'], isolation: 'explicit-handle', providerId: 'fixture-isolated', maxInstances: 2 }] }), broker.snapshot().revision)
+  const pending = dispatch()
+  try {
+    await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(2))
+    const requests = model.requests.filter((r) => JSON.stringify(r.messages).includes('# Sapper explore'))
+    expect(requests).toHaveLength(2)
+    for (const request of requests) expect(request.tools?.filter((t) => names.includes(t.name))).toHaveLength(1)
+  } finally { release() }
+  expect((await pending).outcomes.filter((o) => o.state === 'confirmed')).toHaveLength(2)
+  expect(close).toHaveBeenCalledTimes(4)
+})
+
+it('MCP capacity handoff never holds backend B while its owner waits for the only SDK slot', async () => {
+  let release!: () => void
+  const gate = new Promise<void>((r) => { release = r }), names = ['mcp__ida__slot_a', 'mcp__ida__slot_b']
+  const { ctx, dispatch, read } = await setup({ externalName: 'available-mcp', registeredTools: names, proposals: 2, capabilitiesByRoute: ['binary.a', 'binary.b'], resourceRequestAfterRead: true, beforeRead: () => gate }, { orchestration: { maxSteps: 2, maxExplore: 2, concurrency: 2 } }, false, 1, 'global', true, 1)
+  const broker = ctx.get('sapperToolBroker')!, { brokerPolicySchema } = await import('../src/mcp/contracts.js')
+  await broker.configure(brokerPolicySchema.parse({ profiles: names.map((name, i) => ({ id: 'profile-' + i, label: name, backendId: 'backend-' + i, selectors: [name], capabilities: [i ? 'binary.b' : 'binary.a'] })) }), broker.snapshot().revision)
+  const pending = dispatch()
+  try { await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(1)); await vi.waitFor(() => expect(broker.snapshot().leases.some((l) => l.backendId === 'backend-1' && l.state === 'released')).toBe(true)); expect(broker.snapshot().leases.filter((l) => l.backendId === 'backend-1' && l.state === 'active')).toHaveLength(0) } finally { release() }
+  const run = await pending
+  expect(run.state, JSON.stringify(run)).toBe('completed')
+  expect(run.outcomes.filter((o) => o.state === 'confirmed')).toHaveLength(2)
+  expect(broker.snapshot().waiting).toEqual([])
 })

@@ -50,3 +50,9 @@ historical flag strings are report content, not a newly found result. Read the i
 note's doc for evidence/recipes when needed. Do not revisit the external target unless
 the user specifically requests fresh verification. For correction, independently gather
 new evidence; do not simply return the historical flag again as a fresh observation.
+
+Tool resources: use sapper_tools to inspect the authorized capability directory. sapper_resource status shows your workflow leases and native argument bindings; acquire requests additional capabilities at the next inference boundary without extending permissions. Use the exact resource bindings supplied by the host. Shared IDA current-database operations are held for the whole workflow. Do not switch to another target or bypass ToolBroker by calling its gateway from bash/pwsh. Lifecycle tools for managed instances are host-owned.
+
+Where configured, sapper_interact manages a persistent GDB/remote session. Keep the same requestId when retrieving the result of an uncertain write; changing it can repeat input. Read base64 output using byte cursors, distinguish waiting-input from EOF/crash, and stop your own interactive session when finished. A resource identity check is not independent verification of your conclusion.
+
+Use actual runtime measurements for addresses and layout assumptions. sapper_observe lists their validity, records explicitly labeled inferences, checks declared preconditions, and saves a repair plan tied to a real failed receipt. After process restart/reconnect, remeasure absolute addresses/canaries/heap state; retain applicable file-level evidence. Diagnose why an input failed before retrying; do not replay unknown remote side effects. These lightweight checks do not require a second verifier. Flag candidates still appear immediately; an MCP result without authenticated target provenance stays visible for manual submission but does not automatically complete the goal.

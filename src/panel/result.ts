@@ -22,6 +22,7 @@ export interface TaskResult {
     title: string
     description: string
     kind: string
+    source?: 'target' | 'unbound'
     status: 'unverified' | 'rejected'
     evidence_check?: import('../orchestration/verification-policy.js').EvidenceCheck
   }>

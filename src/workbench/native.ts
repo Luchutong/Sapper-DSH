@@ -711,6 +711,14 @@ export class NativeWorkbench {
         if (stat.isFile() && !stat.isSymbolicLink())
           result.push({ name, size: stat.size, file, snapshot })
       } catch {}
+    if (id) {
+      const run = await store.readRun(id)
+      const receipts = [...new Set(run.children?.flatMap((c) => c.tool_broker?.receipts.map((r) => r.receiptId) ?? []) ?? [])]
+      for (const receipt of receipts) if (/^[a-f0-9-]{36}$/.test(receipt)) {
+        const file = path.join(store.root, 'artifacts', 'tools', receipt + '.json')
+        try { await safePath(file, cwd); const stat = await lstat(file); if (stat.isFile() && !stat.isSymbolicLink()) result.push({ name: 'tools/' + receipt + '.json', size: stat.size, file, snapshot: true }) } catch {}
+      }
+    }
     return result
   }
   async file(input: TaskAddress, name: string) {

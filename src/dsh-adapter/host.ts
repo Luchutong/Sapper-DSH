@@ -1,3 +1,5 @@
+import { ToolBroker } from '../mcp/broker.js'
+import { brokerTools } from '../mcp/tools.js'
 import type { Context } from '@deepseek-ai/cordis'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { UserMessage } from '@deepseek-ai/dsh-llm'
@@ -50,14 +52,15 @@ export function registerRuntime(ctx: Context, getConfig: () => Config): void {
     return permission.fullAccess
   }
   const fullAccess = (exec: Pick<ToolExecution, 'agent'>) => hasFullAccess(ctx, exec)
+  const broker = ctx.get('sapperToolBroker') ?? new ToolBroker(ctx, () => alive && getConfig().enabled)
   const taskPanel = registerTaskPanel(ctx, getConfig, () => alive)
-  const dispatcher = new Orchestrator(ctx, getConfig, () => alive, async (parent, root, run, stage) => { try { await taskPanel.progress(parent, root, run, stage) } catch (error) { ctx.logger.warn('Sapper 进度回传失败：%s', (error as Error).message) } })
+  const dispatcher = new Orchestrator(ctx, getConfig, () => alive, async (parent, root, run, stage) => { try { await taskPanel.progress(parent, root, run, stage) } catch (error) { ctx.logger.warn('Sapper 进度回传失败：%s', (error as Error).message) } }, broker)
   const dispatching = new Set<symbol>()
   const lifecycle = {
     start: (exec: ToolExecution) => { dispatching.add(exec.token); taskPanel.executionStarted(exec) }, finish: (exec: ToolExecution) => { dispatching.delete(exec.token); bindings.delete(exec.token); taskPanel.executionFinished(exec) },
   }
   const tools = [...createGraphTools(getConfig, () => alive, authorize, fullAccess), ...createRecallTools(getConfig, () => alive),
-    createDispatchTool(getConfig, () => alive, authorize, dispatcher, lifecycle), createTaskTool(getConfig, () => alive, authorize, dispatcher, lifecycle, (exec) => taskPanel.native.attachmentContext(String(exec.callId), String(exec.agent?.id), exec.agent?.session.header.cwd ?? '')), createControlTool(taskPanel)]
+    createDispatchTool(getConfig, () => alive, authorize, dispatcher, lifecycle), createTaskTool(getConfig, () => alive, authorize, dispatcher, lifecycle, (exec) => taskPanel.native.attachmentContext(String(exec.callId), String(exec.agent?.id), exec.agent?.session.header.cwd ?? '')), createControlTool(taskPanel), ...brokerTools(broker)]
   const syncCommand = registerSapperCommand(ctx, getConfig, () => alive, taskPanel)
   const kb = new KnowledgeBase()
   let unregister: (() => void) | undefined

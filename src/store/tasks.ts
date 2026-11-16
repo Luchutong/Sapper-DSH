@@ -61,6 +61,7 @@ export async function createTask(base: string, cwd: string, goal: string, actor:
       const brief = JSON.stringify({ goal: graph.project.goal, facts: graph.facts.filter(f => f.id !== 'goal').slice(-6).map(f => ({ id: f.id, description: f.description.slice(0, 300) })), candidates: runs?.flatMap(r => r.outcomes).filter(o => o.candidate).slice(-4).map(o => ({ description: o.candidate!.description.slice(0, 300), status: o.state })) })
       await store.configurePhase(followup.task_id, followup.purpose, followup.purpose === 'solve' ? goal : typeof graph.project.solve_goal === 'string' ? graph.project.solve_goal : graph.project.goal, options)
       const policy = projectFlagPolicy(graph.project)
+      if (Array.isArray(graph.project.tool_capabilities)) await store.configureToolCapabilities(graph.project.tool_capabilities as string[], options)
       if (policy && followup.purpose === 'solve') await store.configureFlagPolicy(policy, options)
       if (typeof graph.project.verification_mode === 'string') await store.configureVerification(graph.project.verification_mode as import('../orchestration/verification-policy.js').VerificationMode, options)
       await store.addFact({ title: '前序任务与证据线索', kind: 'note', description: `前序目录：${source!.root}\n历史 flag 不代表本轮成功。纠错时必须重新取证；编写 WP 时引用保存的证据，默认不重新访问外部目标。\n${brief.slice(0, 1800)}`, doc: history.slice(0, 160000) }, actor, options)

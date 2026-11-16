@@ -17,6 +17,7 @@ import { candidateLabel } from './result.js'
 import { launchWithAttachments, type DraftAttachment } from './launch-attachments.js'
 import { EffortSelect } from './capability-settings.js'
 import type { Capabilities } from '../panel/capabilities.js'
+import { ResourceSettings } from './resource-settings.js'
 import { PolicyFields, ResumePolicies } from './task-policy.js'
 import type { FlagPolicy } from '../orchestration/flag-policy.js'
 import type { VerificationMode } from '../orchestration/verification-policy.js'
@@ -262,6 +263,7 @@ function NewChallenge({
     [rootDir, setRoot] = useState(initial?.input.rootDir ?? saved.rootDir),
     [title, setTitle] = useState(initial?.input.title ?? ''),
     [goal, setGoal] = useState(initial?.input.goal ?? ''),
+    [requestedTools, setRequestedTools] = useState(initial?.input.tool_capabilities?.join(', ') ?? ''),
     [permission, setPermission] = useState(
       initial?.input.permissionPreset ?? saved.permissionPreset ?? data.defaults.permissionPreset ?? '',
     ),
@@ -299,6 +301,7 @@ function NewChallenge({
       goal,
       flag_policy: flagPolicy,
       verification_mode: verification,
+      ...(requestedTools.trim() ? { tool_capabilities: requestedTools.split(/[,，\n]/).map((s) => s.trim()).filter(Boolean) } : {}),
       ...(files.length ? { attachments: files.map(({ id, name, bytes }) => ({ id, name, bytes })) } : {}),
       ...(permission ? { permissionPreset: permission } : {}),
       ...(preset ? { agentPreset: preset } : {}),
@@ -483,6 +486,7 @@ function NewChallenge({
       )}
       {!data.available && <p role="status">等待 DSH 原生工作区与会话服务…</p>}
       {!data.durable && <p role="status">等待持久化存储，连接完成后可创建。</p>}
+      <details><summary>本题工具能力（可选）</summary><p>默认按实际工作区、父会话、角色和意图自动匹配。填写能力 ID 可指定本题需求；不扩大宿主或连接器权限。资源映射在设置 → Sapper → 工具与资源隔离中配置。</p><input aria-label="本题工具能力" value={requestedTools} disabled={pending || Boolean(request)} onChange={(e) => setRequestedTools(e.target.value)} placeholder="例如：binary.decompile, debug.memory.read" /></details>
       <div className="sp-actions">
         <button
           className="sp-primary"
@@ -693,7 +697,7 @@ function Details({
           )}
         </div>
         <nav className="sp-tabs" role="tablist">
-          {['概览', '执行记录', '证据', '事实图', '文件'].map((t) => (
+          {['概览', '执行记录', '证据', '工具与资源', '事实图', '文件'].map((t) => (
             <button
               role="tab"
               aria-selected={tab === t}
@@ -956,6 +960,7 @@ function Details({
             ))}
           </>
         )}
+        {tab === '工具与资源' && <ResourceSettings api={api} readOnly address={detail?.address} history={detail?.state.runs.filter((r) => !detail.address.runId || r.id === detail.address.runId).flatMap((r) => r.children ?? [])} ownerIds={detail?.state.runs.flatMap((r) => r.children?.map((c) => c.session_id) ?? [])} />}
         {tab === '事实图' && (
           <GraphPreview
             inspect={inspect}

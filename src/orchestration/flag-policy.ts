@@ -12,8 +12,8 @@ export function defaultFlagPolicy(flags: { completion: FlagPolicy['mode']; targe
 export function collectedFlags(facts: Fact[], runs: RunRecord[]): Map<string, 'unverified' | 'confirmed' | 'rejected'> {
   const values = new Map<string, 'unverified' | 'confirmed' | 'rejected'>()
   for (const run of runs) {
-    for (const o of run.flag_observations ?? []) if (o.candidate.kind === 'flag' && !values.has(o.candidate.description.trim())) values.set(o.candidate.description.trim(), 'unverified')
-    for (const o of run.outcomes) if (o.candidate?.kind === 'flag') {
+    for (const o of run.flag_observations ?? []) if (o.candidate.kind === 'flag' && o.candidate.source !== 'unbound' && !values.has(o.candidate.description.trim())) values.set(o.candidate.description.trim(), 'unverified')
+    for (const o of run.outcomes) if (o.candidate?.kind === 'flag' && o.candidate.source !== 'unbound') {
       const value = o.candidate.description.trim()
       if (o.state === 'confirmed') values.set(value, 'confirmed')
       else if (o.verification?.verified === false && values.get(value) !== 'confirmed') values.set(value, 'rejected')

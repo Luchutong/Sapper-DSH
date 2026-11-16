@@ -1,6 +1,6 @@
 # 架构与边界
 
-当前交付为 0.1.0-alpha.19，目标 DSH 0.2.1-rc.2。后文 M0–M3 为早期设计，当前增量见各 alpha 小节。M0/M1 已获用户验收。
+当前工程版本为 0.1.0-alpha.20，目标 DSH 0.2.1-rc.2。后文 M0–M3 为早期设计，当前增量见各 alpha 小节。M0/M1 已获用户验收。
 原计划保留在 docs/plan.html，SDK 和实现细节以当前代码与 sdk-contract.md 为准。
 
 ```text
@@ -127,6 +127,10 @@ flag-policy 将 first/count/all 与候选/confirmed 计数分离，模式存于 
 
 verification-policy 默认 lightweight，支持 none/selective/independent。快路径仍校验真实工具回执，保存 observed outcome、证据检查及普通观察 note，不占用第二个 verifier；evidence_completed 标记使本插件 frontier 不自动重做，原意图保留给显式 verify。只有 promoteVerified 可以创建 confirmed 事实与独立目标完成状态。角色提示词携带收集状态及复核策略，重要结论的轻量检查复用调用，并明确区分证据完整性与语义正确性。执行记录和主会话卡片分别展示这些状态。
 
-## 后续设计：MCP 工具层（未实现）
+## alpha.20：MCP 工具层与资源协调
 
-[MCP 工具层设计](mcp-tool-layer-design.md)定义按授权、任务、资源和证据范围选择工具的 ToolBroker，配套 `sapper-mcp/1` JSON Schema。方案包括 IDA 工作流独占/独立实例、交互式调试、租约排空与隔离、版本化观测及失败恢复。alpha.19 仍只有工具范围控制，尚无本文资源隔离；设计保留可选复核与候选即时回显。强保证依赖实际适配器与所有入口接管，不能仅靠前缀或内存锁覆盖外部进程。
+[MCP 工具层设计](mcp-tool-layer-design.md)的首个实现位于 `src/mcp/`，工具选择取父会话/角色/工作区/能力需求交集；相同能力后端自动优先低负载者。根服务在原 ToolRuntime pre-execute 排队，最终 guard 在恢复后运行；around-dispatch 核对目标与参数，最终结果保存协议回执。工作流租约保护隐式 current 状态，调用槽按读写调度，重启遗留资源隔离，fence 单独持久化。策略独立于 Config，不误杀无关任务。
+
+内置 native-handle 通过真实原生 MCP 创建/校验/关闭 API 提供独立资源；新资源的 native 参数仍受父/子作用域和原审批约束。`sapper_interact` 映射已有服务的持久 I/O，`sapper_observe` 保存实际工具解析的版本化测量与明确的代理推断、失败恢复建议。旧运行保留，原始工具输出按 UUID 保存为题目产物。未认证 MCP 来源仍回显，但不自动计为目标完成。
+
+[使用与验证边界](mcp-tool-layer.md)：当前宿主协调不能覆盖外部脚本/其他 DSH 进程；没有内置可凭空启动 IDA 的进程提供者，专属进程仍须真实扩展；真实 MCP/IDA 行为由用户实际验收。

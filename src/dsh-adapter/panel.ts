@@ -46,6 +46,7 @@ import { writePermission } from './permissions.js'
 import { NativeWorkbench } from '../workbench/native.js'
 import { publicAttachments } from '../workbench/attachments.js'
 import { StoreError } from '../store/validation.js'
+import { brokerPolicySchema, type BrokerPolicy } from '../mcp/contracts.js'
 import { capabilities } from '../panel/capabilities.js'
 import { flagPolicyLabel } from '../orchestration/flag-policy.js'
 
@@ -104,6 +105,22 @@ export class TaskPanelService extends TypertRemoteService {
       }
       await Promise.allSettled([...this.jobs.values()].map((j) => j.done))
     })
+  }
+  @Remote
+  async brokerState() { this.owner(); const broker = this.ctx.get('sapperToolBroker'); if (!broker) throw new StoreError('工具层尚未就绪'); await broker.store.ready; return broker.snapshot() }
+  @Remote
+  async brokerConfigure(input: { revision: number; policy: BrokerPolicy }) {
+    this.owner()
+    const data = z.object({ revision: z.number().int().min(1), policy: brokerPolicySchema }).strict().parse(input)
+    const broker = this.ctx.get('sapperToolBroker'); if (!broker) throw new StoreError('工具层尚未就绪')
+    return broker.configure(data.policy, data.revision)
+  }
+  @Remote
+  async brokerReset(input: { key: string; confirmed: true }) {
+    this.owner()
+    const data = z.object({ key: z.string().min(1).max(512), confirmed: z.literal(true) }).strict().parse(input)
+    const broker = this.ctx.get('sapperToolBroker'); if (!broker) throw new StoreError('工具层尚未就绪')
+    return broker.reset(data.key, data.confirmed)
   }
   @Remote
   async capabilities(input: { sessionId?: string }) {
@@ -412,6 +429,7 @@ export class TaskPanelService extends TypertRemoteService {
     if (args.action === 'start' && launch?.input.flag_policy) {
       args.flag_mode = launch.input.flag_policy.mode; args.flag_count = launch.input.flag_policy.count
     }
+    if (args.action === 'start' && launch?.input.tool_capabilities) args.tool_capabilities = launch.input.tool_capabilities
     if (args.action === 'start' && launch?.input.verification_mode) args.verification_mode = launch.input.verification_mode
     if (launchId && current?.callId === launchId)
       return { accepted: true, job_id: current.callId, state: current.state }
@@ -740,6 +758,8 @@ export class TaskPanelService extends TypertRemoteService {
       ).project.goal
     job.taskId = root === base ? 'legacy' : root.split(/[\\/]/).at(-1)!
     const labels: Record<string, string> = {
+      'resource-waiting': '等待共享工具资源，尚未启动子代理',
+      'resources-ready': '工具资源已就绪',
       reason: '正在规划下一步',
       explore: '正在探索并收集证据',
       verify: '正在独立复核',

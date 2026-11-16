@@ -1,6 +1,6 @@
 # MCP 工具层设计：按作用域选择、资源隔离与执行反馈
 
-状态：设计稿，可据此分阶段实现；**alpha.19 尚未实现本文的租约、交互会话与资源隔离**。基线为 `e6dbcb8`，宿主仍为 **DSH NEXT 0.2.1-rc.2**。本文不修改当前安装包或复核默认值。
+状态：设计及实施基线。alpha.20 已落地工具作用域、工作流租约、原生句柄/交互适配和观测记录，具体行为与当前边界见 [实施指南](mcp-tool-layer.md)。专属 worker 需要真实实例提供者，跨进程强隔离需要统一入口；真实服务验收由用户完成。设计基线为 `e6dbcb8`，宿主仍为 **DSH NEXT 0.2.1-rc.2**。复核默认值保持轻量。
 
 ## 1. 依据与设计决定
 
@@ -150,7 +150,7 @@ owner = hostInstanceId / workspaceId / taskId / runId / agentId
 
 多资源请求必须声明完整 bundle，按 backend/resource 稳定顺序原子分配；不持有 A 等待 B，也不允许工作中无限升级资源集合。新增需求在安全点释放/重排，或者拆成下一意图。按物理资源 FIFO 排队，读写队列避免写者饥饿；不同 backend 可以并行。实例上限服从提供者与 DSH 子代理容量。
 
-协调器优先在启动昂贵模型轮次前申请资源；等待期间不启动子代理、不消耗模型 token/步数。实际执行时仍需调用槽，等待以宿主状态显示，不让模型轮询。调度必须避免“占模型槽等资源、占资源等模型槽”的循环：容量与资源由同一个协调请求统一发放，或取得资源后无法启动时归还资源重排。等待时间单独计量，默认等待上限 5 分钟，可配置；仍服从任务总墙钟期限，不偷偷延长无限运行。
+协调器优先在启动昂贵模型轮次前申请资源；等待期间不启动子代理、不消耗模型 token/步数。实际执行时仍需调用槽，等待以宿主状态显示，不让模型轮询。调度必须避免“占模型槽等资源、占资源等模型槽”的循环：容量与资源由同一个协调请求统一发放，或取得资源后无法启动时归还资源重排。等待时间单独计量；alpha.20 的工作流初始排队只服从整轮总期限，保持 FIFO，不因单次五分钟等待而宣判失败。单次调用/调用槽默认等待上限 5 分钟，可配置。所有等待仍服从取消和授权，不延长任务总墙钟期限。
 
 单次等待到期返回 RESOURCE_BUSY 并保留待办，不直接宣判整题失败；调度器可以先推进无需该资源的路线或在宿主队列等待下一次资源通知。不得让模型反复调用 acquire 维持排队。需要长期占用的 current DB 工作流可以在导出安全快照后让出资源，不能在未保存的中间状态被抢占。
 
@@ -285,7 +285,7 @@ schema 中 owner 是任务内归档上下文；主会话临时直调使用宿主
 
 ## 12. 实施顺序与验收
 
-建议新增 `src/mcp/`：`catalog.ts`、`scope.ts`、`router.ts`、`broker.ts`、`resources.ts`、`leases.ts`、`protocol.ts` 和 `adapters/`。这些路径是待实现模块，当前并不存在。现有 `engine.ts` 改为消费 router 的有限工具视图、在激活前申请资源并保存 broker 回执；`panel/capabilities.ts` 增加排除原因；`workbench` 对接资源等待与取消；`store/runs.ts` 只增加可选协议引用，保留旧运行可读。不要先在每个子代理内各写一个 Map 锁，随后再尝试合并。
+实施模块位于 `src/mcp/`，设计拆分为：`catalog.ts`、`scope.ts`、`router.ts`、`broker.ts`、`resources.ts`、`leases.ts`、`protocol.ts` 和 `adapters/`。实际实现可按职责合并模块，具体文件以源码为准。现有 `engine.ts` 改为消费 router 的有限工具视图、在激活前申请资源并保存 broker 回执；`panel/capabilities.ts` 增加排除原因；`workbench` 对接资源等待与取消；`store/runs.ts` 只增加可选协议引用，保留旧运行可读。不要先在每个子代理内各写一个 Map 锁，随后再尝试合并。
 
 | 阶段 | 交付 | 退出条件 |
 | --- | --- | --- |
@@ -309,7 +309,7 @@ schema 中 owner 是任务内归档上下文；主会话临时直调使用宿主
 - 新 flag 在资源清理和可选 verifier 前回显；多 flag、none/lightweight/selective/independent、定向复核、WP/纠错及历史快照全部保持。
 - 使用真实 DSH 0.2.1-rc.2 ToolRuntime/AgentLoop/会话/Gateway/插槽测试，验证 around hook 不改身份/参数，不绕原权限，不更换工具 schema；再补真实 IDA/GDB provider 的隔离测试，不能只用 fake mutex 测试宣称服务隔离成功。
 
-本次设计交付的 JSON Schema draft 2020-12 校验通过，**24/24 个结构样例**（13 正例、11 反例）与文档本地链接检查通过；**尚未执行上述运行时验收，也未发布新的插件版本**。schema 只检验对象结构；跨消息引用、owner/lease 实时归属、receipt 成功状态、target 一致性、epoch/fence 新鲜度、preserve 与 invalidate 不相交、游标单调和时间顺序均需宿主的语义验证器，不能用 JSON Schema 代替。
+本次设计交付的 JSON Schema draft 2020-12 校验通过，**24/24 个结构样例**（13 正例、11 反例）与文档本地链接检查通过；**真实 IDA/MCP 隔离与线上行为仍待用户验收；alpha.20 为此准备可安装包**。schema 只检验对象结构；跨消息引用、owner/lease 实时归属、receipt 成功状态、target 一致性、epoch/fence 新鲜度、preserve 与 invalidate 不相交、游标单调和时间顺序均需宿主的语义验证器，不能用 JSON Schema 代替。
 
 ## 13. 参考与边界
 

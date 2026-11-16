@@ -18,7 +18,7 @@ export function runCandidates(run: RunRecord): TaskResult['candidates'] {
     const matches = run.outcomes.filter((o) => o.candidate?.kind === candidate.kind && o.candidate.description === candidate.description)
     if (matches.some((o) => o.state === 'confirmed')) continue
     candidates.set(candidate.kind + ':' + candidate.description, {
-      title: candidate.title, description: candidate.description, kind: candidate.kind,
+      ...(candidate.source ? { source: candidate.source } : {}), title: candidate.title, description: candidate.description, kind: candidate.kind,
       status: matches.some((o) => o.verification?.verified === false) ? 'rejected' : 'unverified',
       ...(matches.find((o) => o.evidence_check)?.evidence_check ? { evidence_check: matches.find((o) => o.evidence_check)!.evidence_check! } : {}),
     })

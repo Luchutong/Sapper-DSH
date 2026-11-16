@@ -37,6 +37,7 @@ const schema = z
         description: z.string(),
         kind: z.string(),
         status: z.enum(['unverified', 'rejected']),
+        source: z.enum(['target', 'unbound']).optional(),
         evidence_check: z.object({ mode: z.enum(['none', 'lightweight']), passed: z.boolean(), checks: z.array(z.string()), issues: z.array(z.string()) }).optional(),
       }),
     ),

@@ -4,6 +4,8 @@ import { Config, validateConfig } from './settings.js'
 import type { RuntimeConfig } from './settings.js'
 import { registerRuntime } from './dsh-adapter/host.js'
 
+export { ToolBroker } from './mcp/broker.js'
+export type { ResourceProvider, ResourceInstance, ProviderNativeInvoke, BrokerReceipt } from './mcp/contracts.js'
 export { Config }
 export { GraphStore } from './store/graph.js'
 export { KnowledgeBase } from './kb/index.js'

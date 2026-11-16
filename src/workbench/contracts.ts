@@ -1,3 +1,4 @@
+import { capabilityId } from '../mcp/contracts.js'
 import { z } from 'zod'
 import type { PanelState, PanelAction } from '../panel/rpc.js'
 import type { TaskResult } from '../panel/result.js'
@@ -43,6 +44,7 @@ export const launchSchema = z
     title: z.string().max(120).default(''),
     goal: z.string().min(1).max(8000),
     flag_policy: flagPolicySchema.optional(),
+    tool_capabilities: z.array(capabilityId).max(32).optional(),
     verification_mode: verificationModeSchema.optional(),
     model: modelSchema.optional(),
     agentPreset: z.string().optional(),

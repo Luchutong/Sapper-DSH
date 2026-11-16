@@ -1,3 +1,4 @@
+import { capabilityId } from '../mcp/contracts.js'
 import {
   addressSchema,
   launchSchema,
@@ -8,6 +9,7 @@ import type { WorkbenchApi } from '../workbench/contracts.js'
 import type { TaskResult } from './result.js'
 import type { ChildCapabilities } from '../store/runs.js'
 import { z } from 'zod'
+import { brokerPolicySchema, type BrokerPolicy, type BrokerSnapshot } from '../mcp/contracts.js'
 import type { Capabilities } from './capabilities.js'
 import { verificationModeSchema } from '../orchestration/verification-policy.js'
 import { createTypertRemoteInfo } from '@deepseek-ai/dsh-typert-protocol/remote-info'
@@ -30,6 +32,7 @@ export const actionSchema = z
     run_id: z.string().optional(),
     intent_id: z.string().optional(),
     flag_mode: z.enum(['first', 'count', 'all']).optional(),
+    tool_capabilities: z.array(capabilityId).max(32).optional(),
     flag_count: z.number().int().min(1).max(10000).optional(),
     verification_mode: verificationModeSchema.optional(),
   })
@@ -50,6 +53,9 @@ export const PANEL_REMOTE = createTypertRemoteInfo(
   {
     package: 'sapper-dsh',
     methods: {
+      'sapperPanel/brokerState': { service: 'sapperPanel', invocation: { kind: 'direct' }, parameters: [], result },
+      'sapperPanel/brokerConfigure': { service: 'sapperPanel', invocation: { kind: 'direct' }, parameters: [param('input', codec('BrokerConfigure', () => z.object({ revision: z.number().int().min(1), policy: brokerPolicySchema }).strict()))], result },
+      'sapperPanel/brokerReset': { service: 'sapperPanel', invocation: { kind: 'direct' }, parameters: [param('input', codec('BrokerReset', () => z.object({ key: z.string().min(1).max(512), confirmed: z.literal(true) }).strict()))], result },
       'sapperPanel/capabilities': {
         service: 'sapperPanel', invocation: { kind: 'direct' }, parameters: [param('input', codec('CapabilitiesInput', () => z.object({ sessionId: z.string().min(1).max(256).optional() }).strict()))], result,
       },
@@ -238,6 +244,9 @@ export interface PanelState {
   }>
 }
 export interface PanelApi {
+  brokerState?(): Promise<BrokerSnapshot>
+  brokerConfigure?(input: { revision: number; policy: BrokerPolicy }): Promise<BrokerSnapshot>
+  brokerReset?(input: { key: string; confirmed: true }): Promise<BrokerSnapshot>
   capabilities?(input: { sessionId?: string }): Promise<Capabilities>
   targets(): Promise<PanelTarget[]>
   state(sessionId: string): Promise<PanelState>

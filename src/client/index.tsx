@@ -11,6 +11,7 @@ import { resultDefinition, ResultNode } from './result.js'
 import { VERSION } from '../constants.js'
 import { CapabilitySettings, type SettingValue } from './capability-settings.js'
 import type { WorkbenchPanelApi } from '../panel/rpc.js'
+import { ResourceSettings, type BrokerApi } from './resource-settings.js'
 import { verificationLabels } from './task-policy.js'
 
 export const name = 'sapper-dsh'
@@ -35,7 +36,7 @@ function BudgetNumber({ label, value, min, max, disabled, save }: { label: strin
   }} />
 }
 
-export function SapperSettings({ scope, api }: { scope: BrowserSettingsScope; api?: Pick<WorkbenchPanelApi, 'capabilities'> | undefined }) {
+export function SapperSettings({ scope, api }: { scope: BrowserSettingsScope; api?: Pick<WorkbenchPanelApi, 'capabilities'> & BrokerApi | undefined }) {
   const state = useSyncExternalStore(
     listener => scope.subscribe(listener),
     () => scope.getSnapshot(),
@@ -133,6 +134,7 @@ export function SapperSettings({ scope, api }: { scope: BrowserSettingsScope; ap
         <p>默认轻量模式不启动第二个代理；关闭自动复核仍保留成功工具证据检查。每题可覆盖这些默认值。调整默认值会停止当前编排，原阶段策略与历史记录保留。</p>
       </fieldset>
       <p>工具范围、模型和推理强度保存后会停止正在运行的编排，请在发起任务前设置。</p>
+      <ResourceSettings api={api} />
       <CapabilitySettings api={api} orchestration={orchestration} disabled={state.status !== 'ready' || !state.writable || pending} save={save} />
       <fieldset
         style={{

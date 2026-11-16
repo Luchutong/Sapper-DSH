@@ -14,7 +14,7 @@ export interface Capabilities {
   sessions: Array<{ id: string; cwd: string }>
   sessionId?: string
   currentModel?: { provider: string; model: string; reasoningEffort?: string }
-  tools: Array<{ name: string; description: string; prefix?: string; available: boolean; explore: boolean; verify: boolean }>
+  tools: Array<{ name: string; description: string; prefix?: string; available: boolean; explore: boolean; verify: boolean; resource?: { profileId: string | null; isolation: string } }>
   models: ModelCapability[]
   warnings: string[]
 }
@@ -49,7 +49,8 @@ export async function capabilities(ctx: Context, config: Config, sessionId?: str
     ...(selected?.provider && selected.model ? { currentModel: { provider: selected.provider, model: selected.model, ...(selected.reasoningEffort ? { reasoningEffort: String(selected.reasoningEffort) } : {}) } } : {}),
     tools: [...schemas.values()].filter((t) => externalTool(t.name)).map((t) => {
       const available = !!ctx.tools.get(t.name, parent), prefix = mcpPrefix(t.name)
-      return { name: t.name, description: t.description.slice(0, 600), available, ...(prefix ? { prefix } : {}),
-        explore: available && matchesTool(config.orchestration.exploreTools, t.name), verify: available && matchesTool(config.orchestration.verifyTools, t.name) }
+      const profile = ctx.get('sapperToolBroker')?.snapshot().policy.profiles.find((p) => matchesTool(p.selectors, t.name))
+      return { ...(t.name.startsWith('mcp__') ? { resource: { profileId: profile?.id ?? null, isolation: profile?.isolation ?? 'generic-exclusive' } } : {}), name: t.name, description: t.description.slice(0, 600), available, ...(prefix ? { prefix } : {}),
+        explore: available && matchesTool(config.orchestration.exploreTools, t.name) && (!parent || !t.name.startsWith('mcp__') || ctx.get('sapperToolBroker')?.preview(parent, 'explore', t.name).allowed !== false), verify: available && matchesTool(config.orchestration.verifyTools, t.name) && (!parent || !t.name.startsWith('mcp__') || ctx.get('sapperToolBroker')?.preview(parent, 'verify', t.name).allowed !== false) }
     }).sort((a, b) => a.name.localeCompare(b.name)), models: models.sort((a,b) => (a.provider + a.id).localeCompare(b.provider + b.id)), warnings }
 }
