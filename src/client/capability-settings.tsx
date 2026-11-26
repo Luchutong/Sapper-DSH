@@ -17,9 +17,10 @@ export function EffortSelect({ label, value, model, disabled, inherited = '沿�
     </select>
   </label>
 }
-export function CapabilitySettings({ api, orchestration, disabled, save }: {
+export function CapabilitySettings({ api, orchestration, disabled, save, skillMode = false }: {
   api?: Pick<WorkbenchPanelApi, 'capabilities'> | undefined; orchestration: Record<string, unknown>; disabled: boolean
   save(path: string[], value: SettingValue): Promise<boolean>
+  skillMode?: boolean
 }) {
   const [catalog, setCatalog] = useState<Capabilities>(), [session, setSession] = useState(''), [error, setError] = useState(''), [loading, setLoading] = useState(false)
   const load = async (id = session) => {
@@ -45,10 +46,10 @@ export function CapabilitySettings({ api, orchestration, disabled, save }: {
       {error && <p role="alert">{error}</p>}
       {!api?.capabilities && <p role="status">正在连接 Sapper 工具目录…</p>}
       {catalog?.warnings.map((w) => <p key={w}>{w}</p>)}
-      <p>连接、凭据、工作区范围和按会话启用仍在 MCP 连接器中管理。Sapper 只配置子代理使用范围，不会启用被宿主或连接器拒绝的工具。</p>
+      {!skillMode && <><p>连接、凭据、工作区范围和按会话启用仍在 MCP 连接器中管理。Sapper 只配置子代理使用范围，不会启用被宿主或连接器拒绝的工具。</p>
       {(['explore', 'verify'] as const).map((role) => <ToolRange key={role} role={role} catalog={catalog} disabled={disabled}
         selected={(orchestration[role + 'Tools'] as string[] | undefined) ?? (role === 'explore' ? EXPLORE_TOOLS : VERIFY_TOOLS)}
-        save={(value) => save(['orchestration', role + 'Tools'], value)} />)}
+        save={(value) => save(['orchestration', role + 'Tools'], value)} />)}</>}
     </fieldset>
     <fieldset style={box}><legend>模型与默认推理强度</legend>
       <p>选项来自 DSH 模型适配器。角色设置优先于下方默认值；默认值为“沿用”时由父会话或模型决定。更换模型后不沿用其他模型的档位。</p>

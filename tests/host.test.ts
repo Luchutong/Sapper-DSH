@@ -86,7 +86,7 @@ async function seed(cwd: string, content: string) {
 async function preStep(ctx: Context, cwd: string, messages: UserMessage[] = [createUserMessage({ content: [{ type: 'text', text: '继续' }], source: { kind: 'user' } })]) {
   const decision = await ctx.waterfall('agent/pre-step', {
     agent: { session: { header: { cwd } } } as Agent, messages, turn: 1, step: 1,
-    signal: new AbortController().signal,
+    signal: new AbortController().signal, modelSelection: { provider: 'fixture', model: 'fixture-model' },
   }, async () => ({ kind: 'enter', messages }))
   if (decision.kind === 'reject') throw new Error('unexpected rejected test step')
   return decision
@@ -133,7 +133,7 @@ describe('host lifecycle integration', () => {
     expect((await preStep(ctx, cwd, [])).messages).toHaveLength(0)
     const result = await ctx.waterfall('agent/pre-step', {
       agent: { session: { header: { cwd } } } as Agent, messages: [], turn: 1, step: 1,
-      signal: AbortSignal.abort(),
+      signal: AbortSignal.abort(), modelSelection: { provider: 'fixture', model: 'fixture-model' },
     }, async () => ({ kind: 'reject' }))
     expect(result).toEqual({ kind: 'reject' })
   })

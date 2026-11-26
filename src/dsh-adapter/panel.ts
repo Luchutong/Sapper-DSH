@@ -1,3 +1,4 @@
+import { isRootAgent, executeTool } from './runtime.js'
 import type { Context } from '@deepseek-ai/cordis'
 import { z } from 'zod'
 import {
@@ -207,7 +208,7 @@ export class TaskPanelService extends TypertRemoteService {
     const agent = this.ctx.agents.get(SessionId(sessionId))
     if (
       !agent ||
-      !this.ctx.agents.roots().includes(agent) ||
+      !isRootAgent(agent) ||
       !agent.session.header.cwd
     )
       throw new StoreError('请在 DSH 打开一个普通工作区会话，然后在面板选择它')
@@ -217,7 +218,7 @@ export class TaskPanelService extends TypertRemoteService {
   async targets() {
     this.owner()
     return this.ctx.agents
-      .roots()
+      .list().filter(isRootAgent)
       .filter((a) => a.session.header.cwd)
       .map((a) => ({ id: String(a.id), cwd: a.session.header.cwd! }))
   }
@@ -370,7 +371,7 @@ export class TaskPanelService extends TypertRemoteService {
     this.owner()
     if (
       this.ctx.agents.get(agent.id) !== agent ||
-      !this.ctx.agents.roots().includes(agent)
+      !isRootAgent(agent)
     )
       throw new StoreError('需要当前工作区的普通 DSH 会话')
     const args = actionSchema.parse(input),
@@ -523,7 +524,7 @@ export class TaskPanelService extends TypertRemoteService {
       else if (found && 'error' in found)
         throw new StoreError('恢复主会话失败：' + found.error.message)
     }
-    if (!agent || !this.ctx.agents.roots().includes(agent))
+    if (!agent || !isRootAgent(agent))
       throw new StoreError('主会话不可用，请重新打开')
     return agent
   }
@@ -581,7 +582,7 @@ export class TaskPanelService extends TypertRemoteService {
         args.action === 'run' && !args.flag_mode && !args.verification_mode
           ? { name: 'sapper_dispatch', arguments: { mode: 'run' } }
           : { name: 'sapper_task', arguments: { ...args, action: args.action === 'run' ? 'resume' : args.action } }
-      const result = await this.ctx.tools.execute({
+      const result = await executeTool(this.ctx.tools, {
         ...execution,
         agent,
         callId: ToolCallId(job.callId),

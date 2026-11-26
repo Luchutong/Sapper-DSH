@@ -10,6 +10,7 @@ import { scopeParentOf } from '@deepseek-ai/dsh-scope'
 import { createUserMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-subagent'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
+import { NativeToolExecutor } from '@deepseek-ai/dsh-tool-executor-native'
 import type { Config } from '../settings.js'
 import { validateConfig } from '../settings.js'
 import { GraphStore } from '../store/graph.js'
@@ -36,6 +37,8 @@ import { atomicJson, safePath } from '../store/io.js'
 import { matchesTool } from './tool-policy.js'
 import { collectedFlags, defaultFlagPolicy, flagProgress, projectFlagPolicy } from './flag-policy.js'
 import { checkCandidateEvidence, verificationModeSchema } from './verification-policy.js'
+import { isIdaSkillRequest } from '../dsh-adapter/ida-skill.js'
+import { IDA_METADATA_TOOL } from '../constants.js'
 
 interface Child {
   role: 'reason' | 'explore' | 'verify'; controller: AbortController; calls: Map<string, CapturedCall>
@@ -44,6 +47,8 @@ interface Child {
   onFlags?: ((candidates: Candidate[]) => Promise<void>) | undefined
   notifications: Promise<void>
   parent: Agent
+  idaSkill: boolean
+  finishedResources?: ReturnType<ToolBroker['info']>
   closing?: boolean
   mask?: { key: string; dispose(): void }
 }
@@ -80,7 +85,7 @@ export class Orchestrator {
       if (this.updatingTools) return
       for (const [id, child] of this.children) {
         const agent = ctx.agents.get(id as SessionId)
-        if (agent && !child.closing && !child.budget.finalizing) try { this.refreshTools(child, agent) } catch (error) { child.controller.abort(error) }
+        if (agent && agent.ctx.fiber.uid !== null && !child.closing && !child.budget.finalizing) try { this.refreshTools(child, agent) } catch (error) { child.controller.abort(error) }
       }
     })
     ctx.on('agent/created', async ({ agent }) => {
@@ -88,7 +93,22 @@ export class Orchestrator {
       if (!child) return
       // Preset tools live on ancestor scopes, not necessarily the global registry.
       // A child-local native declaration also keeps structured_output callable under a PTC preset.
-      agent.ctx.tools.presentAs('native')
+      const native = new NativeToolExecutor(agent.ctx)
+      agent.ctx.tools.setExecutor({
+        describe: (tools) => native.describe(child.budget.willFinalize(child.progress.size) ? tools.filter((tool) => tool.name === 'structured_output') : tools),
+        execute: async (input) => {
+          const result = await native.execute(input)
+          // The SDK resolves the next step's tools before pre-step and prompt
+          // callbacks. Apply completed batch requests before that resolution.
+          if (input.log && !input.signal.aborted && !result.concluded && !child.budget.finalizing && !child.closing) {
+            await this.broker.refresh(String(agent.id))
+            await this.broker.provision(String(agent.id))
+            this.refreshTools(child, agent)
+            await this.broker.activate(agent)
+          }
+          return result
+        },
+      })
       await this.broker.provision(String(agent.id))
       this.refreshTools(child, agent)
       await this.broker.activate(agent)
@@ -100,7 +120,11 @@ export class Orchestrator {
       child.capabilities = { role: child.role, session_id: String(agent.id), tools, external_tools: external, tool_selectors: child.role === 'reason' ? [] : child.role === 'explore' ? child.config.orchestration.exploreTools : child.config.orchestration.verifyTools, ...(agent.options.provider ? { provider: agent.options.provider } : {}), ...(agent.options.model ? { model: agent.options.model } : {}), ...(agent.options.reasoningEffort ? { reasoning_effort: String(agent.options.reasoningEffort) } : {}), max_output_tokens: child.config.orchestration.maxOutputTokens, state: 'running', steps: 0, step_limit: child.budget.limit, step_ceiling: child.config.orchestration.budgetMode === 'adaptive' && child.role !== 'reason' ? Math.max(child.budget.limit, child.config.orchestration.maxChildStepsCeiling) : child.budget.limit, started_at: new Date().toISOString() }
       child.capabilities.tool_broker = this.broker.info(String(agent.id))
       await child.onReady(child.capabilities)
-      if (child.role !== 'reason' && !external.length) throw new StopRunError(`SAPPER_M3_TOOL_UNAVAILABLE: ${child.role} 未获得白名单中的外部取证工具；可见工具: ${tools.join(', ')}。请检查 DSH preset 与 orchestration.${child.role === 'explore' ? 'exploreTools' : 'verifyTools'}，增加 token 预算无法补齐工具。`)
+      if (child.role !== 'reason' && !external.length) {
+        const quarantine = child.capabilities.tool_broker?.selection.excluded.find((tool) => tool.reason.startsWith('RESOURCE_QUARANTINED:'))
+        if (quarantine) throw new StopRunError(quarantine.reason)
+        throw new StopRunError(`SAPPER_M3_TOOL_UNAVAILABLE: ${child.role} 未获得白名单中的外部取证工具；可见工具: ${tools.join(', ')}。请检查 DSH preset 与 orchestration.${child.role === 'explore' ? 'exploreTools' : 'verifyTools'}，增加 token 预算无法补齐工具。`)
+      }
       return undefined
     })
     ctx.tools.guard((exec) => this.denial(exec))
@@ -122,7 +146,7 @@ export class Orchestrator {
         child.calls.set(String(exec.callId), { tool: exec.name, text, receipt_id, ...(broker ? { broker } : {}) })
         const notice = `Sapper evidence receipt: ${JSON.stringify({ receipt_id, tool: exec.name })}. This receipt certifies this session's successful tool output. To cite it, use evidence: [{"receipt_id":"${receipt_id}"}]. Do not copy or escape the output.`
         exec.agent?.inject(createUserMessage({ content: [{ type: 'text', text: notice }], source: { kind: 'sapper-dsh', form: 'evidence', sections: [{ name: 'Evidence receipt', text: notice }] } }))
-        if (child.onFlags) {
+        if (child.onFlags && exec.name !== IDA_METADATA_TOOL) {
           const candidates = flagLiterals(text).map((value) => parseCandidate({
             title: '工具输出中的 flag 候选', description: value, kind: 'flag', evidence: [{ receipt_id }],
             reproduction: `Independently reproduce the successful ${exec.name} observation. Original arguments: ${JSON.stringify(exec.arguments).slice(0, 10000)}`,
@@ -131,24 +155,26 @@ export class Orchestrator {
         }
       }
     })
-    ctx.on('system-prompt/assemble', async (_assembly, context, next) => {
-      const agent = context.agent, child = agent && this.children.get(String(agent.id))
-      if (!agent || !child || child.budget.finalizing) return next()
-      const before = new Set(this.ctx.tools.schemas(agent).map((t) => t.name))
-      await this.broker.refresh(String(agent.id))
-      await this.broker.provision(String(agent.id))
-      this.refreshTools(child, agent)
-      await this.broker.activate(agent)
-      const assembly = await next(), after = this.ctx.tools.schemas(agent), names = new Set(after.map((t) => t.name))
-      const retained = assembly.tools.filter((t) => names.has(t.name)), present = new Set(retained.map((t) => t.name))
-      return { ...assembly, tools: [...retained, ...after.filter((t) => !before.has(t.name) && !present.has(t.name))] }
+    ctx.on('tools/post-execute', async (exec, result, next) => {
+      const decision = await next()
+      const child = this.children.get(String(exec.agent?.id))
+      if (child && exec.name === 'structured_output' && !result.isError && result.concludesTurn && decision.kind === 'accept') {
+        // DSH rejects every subsequent tool call once structured output commits.
+        // Close owned handles with the same Agent identity before that commit.
+        await this.finishChild(child, String(exec.agent!.id))
+      }
+      return decision
+    })
+    ctx.on('agent/turn-stopping', async ({ agent }) => {
+      const child = this.children.get(String(agent.id))
+      if (!child || agent.inbox.nextStep.length || agent.inbox.nextTurn.length) return
+      await this.finishChild(child, String(agent.id))
     })
     ctx.on('agent/pre-step', async (payload, next) => {
       const child = this.children.get(String(payload.agent.id))
       if (!child) return next()
       try {
         child.guard()
-        if (!child.budget.finalizing) { await this.broker.refresh(String(payload.agent.id)); this.refreshTools(child, payload.agent) }
         const budget = child.budget.next(child.progress.size)
         if (budget.exhausted) throw new StopRunError('子代理步数预算耗尽（结构化收尾仍未完成）')
         if (child.capabilities) {
@@ -156,7 +182,6 @@ export class Orchestrator {
           Object.assign(child.capabilities, { steps: child.budget.steps, step_limit: child.budget.limit, extensions: child.budget.extensions, finalizing: budget.finalizing })
           await child.onReady(child.capabilities)
         }
-        if (budget.finalizing) payload.agent.ctx.tools.restrict({ allow: [] })
         const decision = await next()
         if (decision.kind === 'reject') return decision
         const hints = this.broker.info(String(payload.agent.id))?.resourceHints
@@ -179,6 +204,11 @@ export class Orchestrator {
   isChild(agent: Agent): boolean {
     return this.children.has(String(agent.id))
   }
+  private async finishChild(child: Child, session: string) {
+    if (child.closing) return
+    child.closing = true
+    child.finishedResources = await this.broker.finish(session)
+  }
   private notifyFlags(child: Child, candidates: Candidate[]) {
     // tools/result is a synchronous observation seam. Own the asynchronous
     // persistence/publication here and drain it before any verification starts.
@@ -192,10 +222,11 @@ export class Orchestrator {
     this.active.get(root)?.abort(new StoreError('用户取消任务'))
   }
   private external(child: Child, name: string): boolean {
-    return child.role !== 'reason' && !name.startsWith('sapper_') && name !== 'structured_output' &&
+    if (name === IDA_METADATA_TOOL) return child.idaSkill && !!this.ctx.tools.get(name, child.parent) && !!this.ctx.tools.get('skill', child.parent)
+    return child.role !== 'reason' && (name !== 'skill' || child.config.mcpMode === 'legacy') && !name.startsWith('sapper_') && name !== 'structured_output' &&
       !!this.ctx.tools.get(name, child.parent) &&
       matchesTool(child.role === 'explore' ? child.config.orchestration.exploreTools : child.config.orchestration.verifyTools, name) &&
-      (!mcpTool(name) || this.broker.allowed(child.capabilities?.session_id ?? this.childId(child), name))
+      (!mcpTool(name) || (child.config.mcpMode === 'legacy' && this.broker.allowed(child.capabilities?.session_id ?? this.childId(child), name)))
   }
   private childId(child: Child) { return [...this.children].find(([, value]) => value === child)?.[0] ?? '' }
   private refreshTools(child: Child, agent: Agent): void {
@@ -206,7 +237,7 @@ export class Orchestrator {
       // own finite mask cannot hide tools registered since the last boundary.
       const inherited = scopeParentOf(agent)
       const names = this.ctx.tools.schemas(inherited).map((t) => t.name).filter((name) => name !== 'run_code' && this.ctx.tools.get(name, child.parent) &&
-        ((brokerReadTools.has(name) && (name !== 'sapper_interact' || child.role !== 'reason')) || (child.role !== 'verify' && readTools.has(name)) || this.external(child, name))).sort()
+        ((name === 'skill' && child.idaSkill) || (brokerReadTools.has(name) && (name !== 'sapper_interact' || child.role !== 'reason')) || (child.role !== 'verify' && readTools.has(name)) || this.external(child, name))).sort()
       const key = names.join('\n')
       if (child.mask?.key === key) return
       const dispose = agent.ctx.tools.restrict({ allow: names }), previous = child.mask
@@ -222,6 +253,7 @@ export class Orchestrator {
     if (name === 'structured_output') return true
     if (child.budget.finalizing) return false
     if (!this.ctx.tools.get(name, child.parent)) return false
+    if (name === 'skill' && child.config.mcpMode === 'skill') return child.idaSkill && isIdaSkillRequest(args)
     if (brokerReadTools.has(name)) return name === 'sapper_tools' || (child.role !== 'reason' || ((name === 'sapper_resource' && (args as { action?: string })?.action === 'status') || (name === 'sapper_observe' && ['list', 'require'].includes((args as { action?: string })?.action ?? ''))))
     if (child.role === 'verify') return this.external(child, name)
     return (readTools.has(name) && !isMutation(name, args)) || this.external(child, name)
@@ -258,7 +290,7 @@ export class Orchestrator {
       onAbort = () => controller.abort(signal.reason)
     signal.addEventListener('abort', onAbort, { once: true })
     if (signal.aborted) onAbort()
-    const child: Child = { role, controller, config, guard, calls: new Map(), budget: new ChildBudget(config.orchestration, config.orchestration.budgetMode === 'adaptive' && role !== 'reason'), progress: new Set(), onReady, onFlags, notifications: Promise.resolve(), parent }
+    const child: Child = { role, controller, config, guard, calls: new Map(), budget: new ChildBudget(config.orchestration, config.orchestration.budgetMode === 'adaptive' && role !== 'reason'), progress: new Set(), onReady, onFlags, notifications: Promise.resolve(), parent, idaSkill: config.mcpMode === 'skill' && role !== 'reason' && resources.purpose !== 'writeup' }
     this.children.set(session, child)
     let timer: ReturnType<typeof setTimeout> | undefined
     const poll = setInterval(() => {
@@ -275,7 +307,7 @@ export class Orchestrator {
       void activation?.dispose().catch(() => {})
     }
     try {
-      {
+      if (config.mcpMode === 'legacy') {
         const cwd = parent.session.header.cwd!, workspace = this.ctx.get('workspaceRegistry')?.list().find((w) => w.path === cwd)
         const intent = (data as { intent?: { tool_capabilities?: string[] } }).intent
         const history: unknown[] = []
@@ -325,8 +357,8 @@ export class Orchestrator {
       for (;;) {
         try {
           activation = await service.startActivation({ provider: 'spawn', childId: session, label: `Sapper ${role}`, delivery: 'caller', signal: controller.signal,
-        request: { parent, cwd: parent.session.header.cwd!, prompt: [{ type: 'text', text: prompt + '\n\n' + UNTRUSTED_NOTICE + '\n' + JSON.stringify(data) + '\nTool resource context: ' + JSON.stringify(this.broker.info(session)?.resourceHints ?? []) }],
-          outputSchema: SCHEMAS[role], agentOptions, maxDepth: service.resolveMaxDepth() ?? 1 } })
+            parent, cwd: parent.session.header.cwd!, prompt: [{ type: 'text', text: prompt + '\n\n' + UNTRUSTED_NOTICE + '\n' + JSON.stringify(data) + '\nTool resource context: ' + JSON.stringify(this.broker.info(session)?.resourceHints ?? []) }],
+            outputSchema: SCHEMAS[role], agentOptions, maxDepth: service.resolveMaxDepth() ?? 1 })
           break
         } catch (error) {
           if ((error as { code?: string }).code !== 'ACTIVATION_LIMIT_REACHED')
@@ -355,7 +387,7 @@ export class Orchestrator {
       child.closing = true
       if (child.capabilities) { child.capabilities.state ??= 'failed'; if (child.capabilities.state === 'running') child.capabilities.state = child.controller.signal.reason instanceof FlagStop ? 'stopped' : 'failed'; child.capabilities.ended_at = new Date().toISOString(); try { await child.onReady(child.capabilities) } catch {} }
       try {
-        const final = await this.broker.finish(session)
+        const final = child.finishedResources ?? await this.broker.finish(session)
         if (child.capabilities && final) { child.capabilities.tool_broker = final; await child.onReady(child.capabilities).catch(() => {}) }
       } finally {
         await activation?.dispose()
@@ -428,7 +460,8 @@ export class Orchestrator {
       }
       const reason = async () => {
         const graph = await store.read()
-        const executionTools = this.broker.catalog(parent, '', { selectors: config.orchestration.exploreTools, purpose: writeup ? 'writeup' : 'solve' }).map(({ schema: _schema, ...tool }) => tool)
+        const selectors = config.orchestration.exploreTools.filter((name) => config.mcpMode === 'legacy' || !mcpTool(name))
+        const executionTools = this.broker.catalog(parent, '', { selectors, purpose: writeup ? 'writeup' : 'solve' }).map(({ schema: _schema, ...tool }) => tool)
         const output = await this.child('reason', { execution_tools: { role: 'explore', tools: executionTools, note: 'This read-only planner cannot execute these tools. Propose attachment inspection using existing attachment/context facts; the explorer will read files and check installed extraction utilities. A missing dedicated archive MCP is not a blocker when a local command tool is available.' }, flag_collection: flagContext(), verification_policy: verificationMode, graph: renderGraphContext(graph, { ...config, context: { ...config.context, scope: 'frontier-history' } }, { fullAccess: options.autoConfirm?.() ?? false, actor }).text }, parent, config, signal, guard, onReady, { store, run, options: runOptions, requested: Array.isArray(initial.project.tool_capabilities) ? initial.project.tool_capabilities as string[] : [], purpose: writeup ? 'writeup' : 'solve' })
         const proposals = parseProposals(output.value)
         const blocked = (output.value as { blocked_reason?: unknown }).blocked_reason

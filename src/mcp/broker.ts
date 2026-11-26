@@ -1,3 +1,4 @@
+import { executeTool } from '../dsh-adapter/runtime.js'
 import { receiptWireSchema } from './protocol.js'
 import { nativeHandleProvider } from './adapters/native-handle.js'
 import { ObservationLedger } from './observations.js'
@@ -8,12 +9,13 @@ import { createHash, randomUUID } from 'node:crypto'
 import { Service, type Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
+import { TOOL_ABORTED_BEFORE_DISPATCH } from '@deepseek-ai/dsh-tools'
 import type { ToolExecution, ToolExecutionResult, ToolDispatchExecution, ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { BrokerError, atPath, type BrokerOwner, type BrokerReceipt, type BrokerSnapshot, type ManagedContext, type ResourceInstance, type ResourceProvider, type Selection, type ToolProfile } from './contracts.js'
 import { BrokerStore } from './store.js'
 import { LeaseScheduler } from './leases.js'
 import type { ResourceRequest } from './leases.js'
-import { mcpTool, resourceKey, routeTool } from './router.js'
+import { legacyMcpResourceKey, mcpTool, resourceKey, routeTool } from './router.js'
 import { EXPLORE_TOOLS, matchesTool } from '../orchestration/tool-policy.js'
 import type { ResourceLease } from './contracts.js'
 
@@ -22,6 +24,7 @@ interface SessionBinding {
   context: ManagedContext; policy: ReturnType<BrokerStore['snapshot']>; selection: Selection
   profiles: Map<string, ToolProfile | undefined>; leases: ResourceLease[]; instances: Map<string, ResourceInstance>
   ledger: ObservationLedger; calls: Set<Promise<unknown>>; receipts: BrokerReceipt[]; saves: Promise<void>; refresh: boolean; closed: boolean; activated: boolean
+  finishing?: Promise<ReturnType<ToolBroker['info']>>
 }
 interface ExecutionBinding {
   session: SessionBinding; lease: ResourceLease; profile?: ToolProfile | undefined; instance?: ResourceInstance | undefined
@@ -30,6 +33,16 @@ interface ExecutionBinding {
 }
 const hash = (value: unknown) => 'sha256:' + createHash('sha256').update(JSON.stringify(value) ?? 'null').digest('hex')
 const errorText = (e: unknown) => e instanceof Error ? e.message : String(e)
+
+function resourceRequest(name: string, profile?: ToolProfile): ResourceRequest {
+  const key = resourceKey(profile, name)
+  return {
+    key,
+    backendId: profile?.backendId ?? key,
+    capacity: profile && ['dedicated-instance', 'explicit-handle'].includes(profile.isolation) ? profile.maxInstances : 1,
+    exclusive: !profile || profile.isolation === 'exclusive-workflow',
+  }
+}
 
 /** One root service for all workspaces, including native main-session MCP calls. */
 export class ToolBroker extends Service {
@@ -50,7 +63,7 @@ export class ToolBroker extends Service {
   private policyUpdates: Promise<unknown> = Promise.resolve()
   private persistence: Promise<void> = Promise.resolve()
   private persistenceError?: string
-  constructor(ctx: Context, private enabled: () => boolean = () => true) {
+  constructor(ctx: Context, private enabled: () => boolean = () => true, private nativeMode: () => boolean = () => false) {
     super(ctx, 'sapperToolBroker')
     this.interactions = new InteractiveSessions((agent, name, args, signal) => this.invoke(agent, name, args, signal, 'business'))
     this.providers.set('native-handle', nativeHandleProvider((agent, name, args, signal, purpose) => this.invoke(agent, name, args, signal, purpose)))
@@ -62,7 +75,7 @@ export class ToolBroker extends Service {
       if (ticket && ticket.agent === exec.agent && ticket.callId === String(exec.callId) && ticket.name === exec.name && ticket.digest === hash(exec.arguments)) this.internalKinds.set(exec, ticket.purpose)
       if (this.internalKinds.get(exec) === 'identity') {
         const session = this.sessions.get(String(exec.agent?.id)), profile = session?.profiles.get(exec.name)
-        const lease = session?.leases.find((l) => l.key === resourceKey(profile)), definition = this.ctx.tools.get(exec.name, exec.agent)
+        const lease = session?.leases.find((l) => l.key === resourceKey(profile, exec.name)), definition = this.ctx.tools.get(exec.name, exec.agent)
         if (session && lease && definition) this.calls.set(exec, { session, lease, profile, instance: session.instances.get(lease.key), schemaDigest: hash({ name: definition.name, description: definition.description, parameters: definition.parameters }), invocationId: randomUUID(), startedAt: new Date().toISOString(), temporary: false, target: { assetRefs: [], assetDigests: [], binding: 'unattested' }, slots: [], released: false, bodyEntered: false, definition })
         return next()
       }
@@ -70,7 +83,9 @@ export class ToolBroker extends Service {
       try {
         await this.reserve(exec)
         const decision = await next()
-        if (decision.kind !== 'allow') this.releaseCall(exec)
+        // DSH resolves ask after this hook. Keep the reservation until approval
+        // and dispatch finish, or until the final denied/cancelled result arrives.
+        if (decision.kind !== 'allow' && decision.kind !== 'ask') this.releaseCall(exec)
         return decision
       } catch (error) { this.releaseCall(exec); throw error }
     })
@@ -88,7 +103,11 @@ export class ToolBroker extends Service {
       return this.execute(exec, next)
     })
     ctx.on('tools/result', (exec, result) => { try { this.record(exec, result) } finally { this.releaseCall(exec) } return undefined })
-    const heartbeat = setInterval(() => { this.scheduler.heartbeat(); void this.persist().catch(() => {}) }, 15000)
+    const heartbeat = setInterval(() => {
+      if (!this.scheduler.snapshot().some((lease) => lease.state === 'active')) return
+      this.scheduler.heartbeat()
+      void this.persist().catch(() => {})
+    }, 15000)
     heartbeat.unref()
     ctx.effect(() => async () => {
       this.closed = true; clearInterval(heartbeat); this.scheduler.close(); this.slots.close()
@@ -96,7 +115,10 @@ export class ToolBroker extends Service {
       await this.persist().catch(() => {})
     })
   }
-  private passive() { return !this.enabled() && !this.sessions.size && !this.scheduler.snapshot().some((l) => l.state !== 'released') }
+  private passive() {
+    if (this.enabled() || this.sessions.size || this.slots.snapshot().some((l) => l.state === 'active')) return false
+    return !this.scheduler.snapshot().some((l) => l.state === 'active' || l.state === 'draining' || (!this.nativeMode() && l.state === 'quarantined'))
+  }
   registerProvider(id: string, provider: ResourceProvider): () => void {
     if (this.providers.has(id)) throw new Error('资源提供者已注册：' + id)
     this.providers.set(id, provider)
@@ -135,7 +157,21 @@ export class ToolBroker extends Service {
   }
   async reset(key: string, confirmed: boolean) {
     if (!confirmed) throw new BrokerError('RESOURCE_QUARANTINED', '必须先确认实际后端已重置/旧操作已停止')
+    await this.store.ready
+    if ([...this.sessions.values()].some((session) => session.leases.some((lease) => lease.key === key)) ||
+      this.slots.snapshot().some((slot) => slot.state === 'active' && slot.key.slice(0, slot.key.lastIndexOf(':call:')) === key))
+      throw new BrokerError('RESOURCE_BUSY', '该资源仍有调用或工作流正在清理')
     this.scheduler.reset(key); await this.persist(); return this.snapshot()
+  }
+  private quarantineError(name: string, profile?: ToolProfile) {
+    const request = resourceRequest(name, profile)
+    // The previous format did not record a connector. It needs one confirmed
+    // reset before its unknown backend can be used through the new namespaces.
+    if (!profile) {
+      const legacy = this.scheduler.quarantineError({ ...request, key: legacyMcpResourceKey })
+      if (legacy) return legacy
+    }
+    return this.scheduler.quarantineError(request)
   }
   private owner(agent: Agent): BrokerOwner {
     const cwd = agent.session.header.cwd ?? ''
@@ -173,6 +209,8 @@ export class ToolBroker extends Service {
       if (!mcpTool(tool.name) || !matchesTool(context.selectors, tool.name)) continue
       const route = routeTool(tool.name, context.owner, policy.policy, context.requested, context.text, (id) => this.providers.has(id))
       if (!route.allowed) { selection.excluded.push({ name: tool.name, reason: route.reason }); continue }
+      const quarantine = this.quarantineError(tool.name, route.profile)
+      if (quarantine) { selection.excluded.push({ name: tool.name, reason: quarantine.message }); continue }
       selection.selected.push(tool.name); session.profiles.set(tool.name, route.profile)
       for (const cap of route.profile?.capabilities ?? []) capabilities.add(cap)
     }
@@ -200,11 +238,18 @@ export class ToolBroker extends Service {
     this.select(session)
     session.activated = false
     const requests: ResourceRequest[] = []
-    for (const profile of session.profiles.values()) if (profile?.isolation !== 'stateless') requests.push({ key: resourceKey(profile), backendId: profile?.backendId ?? 'unclassified:mcp', capacity: profile && ['dedicated-instance', 'explicit-handle'].includes(profile.isolation) ? profile.maxInstances : 1, exclusive: !profile || profile.isolation === 'exclusive-workflow' })
+    for (const [name, profile] of session.profiles) if (profile?.isolation !== 'stateless') requests.push(resourceRequest(name, profile))
     const pending = this.scheduler.acquire(session.context.owner.agentId, requests, session.context.signal, 0)
     void pending.catch(() => {})
-    if (this.scheduler.waiting().some((w) => w.ownerId === session.context.owner.agentId)) await session.context.progress('resource-waiting')
-    session.leases = await pending
+    try {
+      if (this.scheduler.waiting().some((w) => w.ownerId === session.context.owner.agentId)) await session.context.progress('resource-waiting')
+      session.leases = await pending
+    } catch (error) {
+      this.scheduler.cancelOwner(session.context.owner.agentId, error)
+      // Progress publication can fail after the scheduler already granted the bundle.
+      session.leases = await pending.catch(() => [])
+      throw error
+    }
     await this.persist()
     await session.context.progress('resources-ready')
   }
@@ -213,7 +258,7 @@ export class ToolBroker extends Service {
     if (!session) return
     for (const lease of session.leases) {
       if (session.instances.has(lease.key)) continue
-      const profile = [...session.profiles.values()].find((p) => resourceKey(p) === lease.key)
+      const profile = [...session.profiles].find(([name, p]) => resourceKey(p, name) === lease.key)?.[1]
       if (!profile?.providerId) continue
       const provider = this.providers.get(profile.providerId)
       if (!provider) throw new BrokerError('ADAPTER_UNAVAILABLE', '实例提供者已退出')
@@ -236,7 +281,7 @@ export class ToolBroker extends Service {
       // Newly registered tools in an already-reserved domain can appear at a later boundary.
       const route = routeTool(name, session.context.owner, session.policy.policy, session.context.requested, session.context.text, (id) => this.providers.has(id))
       if (!route.allowed || route.profile?.providerId || !this.ctx.tools.get(name, session.context.parent) || !matchesTool(session.context.selectors, name)) return false
-      if (route.profile?.isolation !== 'stateless' && !session.leases.some((l) => l.key === resourceKey(route.profile))) return false
+      if (route.profile?.isolation !== 'stateless' && !session.leases.some((l) => l.key === resourceKey(route.profile, name))) return false
       session.profiles.set(name, route.profile); session.selection.selected.push(name)
     }
     try { this.check(session, name); return true } catch { return false }
@@ -258,7 +303,8 @@ export class ToolBroker extends Service {
   private checkArguments(session: SessionBinding, exec: Readonly<ToolExecution>) {
     const profile = session.profiles.get(exec.name)
     const privateCall = this.internalKinds.has(exec) || this.isCleanupCall(exec)
-    const lifecycle = session.instances.get(resourceKey(profile))?.lifecycleTools ?? []
+    const key = resourceKey(profile, exec.name)
+    const lifecycle = session.instances.get(key)?.lifecycleTools ?? []
     if (lifecycle.includes(exec.name) && !privateCall) throw new BrokerError('SCOPE_DENIED', '资源创建/关闭工具由宿主统一管理')
     if (privateCall) return
     for (const [key, expected] of Object.entries(profile?.bindings[exec.name] ?? {})) if (atPath(exec.arguments, key) !== expected.replaceAll('{{cwd}}', session.context.owner.cwd).replaceAll('{{taskId}}', session.context.owner.taskId)) throw new BrokerError('TARGET_MISMATCH', '调用参数越过已配置目标绑定：' + key)
@@ -266,7 +312,7 @@ export class ToolBroker extends Service {
       const handle = atPath(exec.arguments, profile.handleArgument)
       if (!this.interactions.ownedHandles(session.context.owner.agentId).some((h) => h.profileId === profile.id && h.handle === handle)) throw new BrokerError('TARGET_MISMATCH', '交互句柄不属于当前工作流')
     }
-    const instance = session.instances.get(resourceKey(profile))
+    const instance = session.instances.get(key)
     for (const [key, value] of Object.entries(instance?.bindings ?? {})) if (atPath(exec.arguments, key) !== value) throw new BrokerError('TARGET_MISMATCH', '原生工具参数未绑定本工作流资源：' + key)
   }
   async yieldForCapacity(agentId: string) {
@@ -277,12 +323,12 @@ export class ToolBroker extends Service {
   }
   async refresh(agentId: string) {
     const session = this.sessions.get(agentId)
-    if (!session) return
+    if (!session || session.closed || session.context.owner.role === 'reason') return
     if (!session.refresh) {
       session.refresh = this.ctx.tools.schemas(session.context.parent).some((t) => {
         if (!mcpTool(t.name) || session.profiles.has(t.name) || !matchesTool(session.context.selectors, t.name)) return false
         const route = routeTool(t.name, session.context.owner, session.policy.policy, session.context.requested, session.context.text, (id) => this.providers.has(id))
-        return route.allowed && route.profile?.isolation !== 'stateless' && !session.leases.some((l) => l.key === resourceKey(route.profile))
+        return route.allowed && !this.quarantineError(t.name, route.profile) && route.profile?.isolation !== 'stateless' && !session.leases.some((l) => l.key === resourceKey(route.profile, t.name))
       })
     }
     if (!session.refresh) return
@@ -300,7 +346,7 @@ export class ToolBroker extends Service {
   private async invoke(agent: Agent, name: string, args: unknown, signal: AbortSignal, purpose: 'identity' | 'business' | 'cleanup') {
     if (!this.ctx.tools.get(name, agent)) throw new BrokerError('SCOPE_DENIED', '资源校验工具在当前 Agent 不可见')
     const callId = ToolCallId('sapper-broker-' + randomUUID())
-    return this.internal.run({ callId: String(callId), agent, name, digest: hash(args), purpose }, () => this.ctx.tools.execute({ agent, name, arguments: args, callId, signal }))
+    return this.internal.run({ callId: String(callId), agent, name, digest: hash(args), purpose }, () => executeTool(this.ctx.tools, { agent, name, arguments: args, callId, signal }))
   }
   private async target(binding: ExecutionBinding, exec: Readonly<ToolExecution>) {
     const { profile, instance, session } = binding
@@ -329,23 +375,28 @@ export class ToolBroker extends Service {
       const owner = this.owner(exec.agent), policy = this.store.snapshot()
       const route = routeTool(exec.name, owner, policy.policy, [], '', (id) => this.providers.has(id))
       if (!route.allowed || route.profile?.providerId) throw new BrokerError('SCOPE_DENIED', route.reason + '；隔离实例通过 Sapper 工作流使用')
+      const quarantine = this.quarantineError(exec.name, route.profile)
+      if (quarantine) throw quarantine
       session = { context: { owner, parent: exec.agent, selectors: [exec.name], text: '', requested: [], signal: exec.signal, guard: () => {}, progress: async () => {} }, policy, selection: { revision: policy.revision, selected: [exec.name], excluded: [], requiredCapabilities: [], missingCapabilities: [] }, profiles: new Map([[exec.name, route.profile]]), leases: [], instances: new Map(), ledger: new ObservationLedger(), calls: new Set(), receipts: [], saves: Promise.resolve(), refresh: false, closed: false, activated: false }
       temporary = true
       if (route.profile?.identity && this.ctx.tools.get(route.profile.identity.tool, exec.agent)) session.profiles.set(route.profile.identity.tool, route.profile)
       if (route.profile?.isolation !== 'stateless') {
-        session.leases = await this.scheduler.acquire(owner.agentId + ':' + randomUUID(), [{ key: resourceKey(route.profile), backendId: route.profile?.backendId ?? 'unclassified:mcp', capacity: 1, exclusive: true }], exec.signal, policy.policy.waitMs)
+        session.leases = await this.scheduler.acquire(owner.agentId + ':' + randomUUID(), [{ ...resourceRequest(exec.name, route.profile), capacity: 1, exclusive: true }], exec.signal, policy.policy.waitMs)
       }
     }
     const current = session, profile = session.profiles.get(exec.name)
     let slots: ResourceLease[] = []
     try {
       if (!temporary) { this.check(session, exec.name, exec.agent, this.isCleanupCall(exec)); this.checkArguments(session, exec) }
-      const slotKey = resourceKey(profile) + ':call:' + (profile?.providerId ? session.leases.find((l) => l.key === resourceKey(profile))?.slot : 'shared')
-      slots = await this.slots.acquire(String(exec.agent.id), [{ key: slotKey, backendId: profile?.backendId ?? 'unclassified:mcp', capacity: profile?.maxInFlight ?? 1, exclusive: (profile?.effects[exec.name] ?? 'unknown') !== 'read' }], exec.signal, current.policy.policy.waitMs)
-      const lease = current.leases.find((l) => l.key === resourceKey(profile)) ?? slots[0]!
+      const { key, backendId } = resourceRequest(exec.name, profile)
+      const workflowLease = current.leases.find((l) => l.key === key)
+      if (workflowLease) this.scheduler.active(workflowLease, this.isCleanupCall(exec))
+      const slotKey = key + ':call:' + (profile?.providerId ? workflowLease?.slot : 'shared')
+      slots = await this.slots.acquire(String(exec.agent.id), [{ key: slotKey, backendId, capacity: profile?.maxInFlight ?? 1, exclusive: (profile?.effects[exec.name] ?? 'unknown') !== 'read' }], exec.signal, current.policy.policy.waitMs)
+      const lease = workflowLease ?? slots[0]!
       const schemaDigest = hash({ name: definition.name, description: definition.description, parameters: definition.parameters })
       if (exec.schema && hash({ name: exec.schema.name, description: exec.schema.description, parameters: exec.schema.parameters }) !== schemaDigest) throw new BrokerError('SCHEMA_CHANGED', '工具 schema 在排队期间已变化')
-      this.calls.set(exec, { session: current, lease, profile, instance: current.instances.get(resourceKey(profile)), schemaDigest, invocationId: randomUUID(), startedAt: new Date().toISOString(), temporary, target: { assetRefs: [], assetDigests: [], binding: 'unattested' }, slots, released: false, bodyEntered: false, definition })
+      this.calls.set(exec, { session: current, lease, profile, instance: current.instances.get(key), schemaDigest, invocationId: randomUUID(), startedAt: new Date().toISOString(), temporary, target: { assetRefs: [], assetDigests: [], binding: 'unattested' }, slots, released: false, bodyEntered: false, definition })
       await this.persist()
     } catch (error) {
       this.slots.release(slots)
@@ -372,7 +423,7 @@ export class ToolBroker extends Service {
         const route = routeTool(exec.name, session.context.owner, this.store.snapshot().policy, [], '', (id) => this.providers.has(id))
         if (!route.allowed || JSON.stringify(route.profile) !== JSON.stringify(profile)) throw new BrokerError('LEASE_REVOKED', '排队期间资源范围或策略已经变化')
       }
-      if (session.leases.includes(lease)) this.scheduler.active(lease)
+      if (session.leases.includes(lease)) this.scheduler.active(lease, this.isCleanupCall(exec))
       const rebinding = !binding.instance && profile?.identity && ['write', 'control'].includes(profile.effects[exec.name] ?? '') && Object.keys(profile.bindings[exec.name] ?? {}).length > 0
       if (!this.isCleanupCall(exec) && !rebinding) binding.target = await this.target(binding, exec)
       exec.signal.throwIfAborted()
@@ -382,6 +433,10 @@ export class ToolBroker extends Service {
       binding.bodyEntered = true
       try {
         const result = await next()
+        if (session.leases.includes(lease) && result.isError && result.error.info?.code !== TOOL_ABORTED_BEFORE_DISPATCH &&
+          (exec.signal.aborted || /timeout|timed.out|超时|disconnect|ECONNRESET|EPIPE/i.test(result.error.message))) {
+          this.scheduler.quarantine(lease, `${exec.name} 调用取消、超时或连接中断，远端是否停止尚未核实`)
+        }
         if (!result.isError && !this.isCleanupCall(exec) && (binding.instance || profile?.identity)) {
           await this.target(binding, exec)
           if (!binding.instance && !profile?.targetTools.includes(exec.name)) binding.target = { assetRefs: [], assetDigests: [], binding: 'unattested' }
@@ -397,15 +452,12 @@ export class ToolBroker extends Service {
     const binding = this.calls.get(exec)
     if (!binding) return
     const { session, lease, profile, instance } = binding, owner = session.context.owner
-    if (binding.bodyEntered && result.isError && (exec.signal.aborted || /timeout|timed.out|超时|disconnect|ECONNRESET|EPIPE/i.test(result.error.message))) {
-      if (session.leases.includes(lease)) this.scheduler.quarantine(lease, '调用取消/连接中断，远端是否停止尚未核实')
-    }
     const identityRead = this.internalKinds.get(exec) === 'identity' && (exec.name === profile?.identity?.tool || exec.name === profile?.native?.verify.tool)
     if (binding.bodyEntered && !identityRead && (profile?.effects[exec.name] ?? 'unknown') !== 'read') lease.epoch++
     const receipt: BrokerReceipt = {
       protocol: 'sapper-mcp/1', kind: 'receipt', receiptId: randomUUID(), invocationId: binding.invocationId, callId: String(exec.callId),
       owner: { hostInstanceId: owner.hostInstanceId, workspaceId: owner.workspaceId, agentId: owner.agentId, role: owner.role, ...(owner.role === 'main' ? { sessionId: owner.agentId } : { challengeId: owner.taskId, taskId: owner.taskId, runId: owner.runId }) },
-      toolRef: { connectionRef: profile?.id ?? 'unclassified:mcp', publicName: exec.name, schemaDigest: binding.schemaDigest },
+      toolRef: { connectionRef: profile?.id ?? resourceKey(profile, exec.name), publicName: exec.name, schemaDigest: binding.schemaDigest },
       argumentsDigest: hash(exec.arguments), resultDigest: hash(result.content), resource: { backendId: lease.backendId, resourceId: instance?.resourceId ?? 'lease:' + hash([lease.key, lease.slot]).slice(7), kind: profile?.isolation === 'stateless' ? 'stateless' : 'generic', generation: instance?.generation ?? lease.fence },
       target: binding.target, fence: lease.fence, epoch: lease.epoch,
       status: result.isError ? exec.signal.aborted ? 'cancelled' : 'error' : 'success', source: binding.target.binding === 'attested' ? 'target' : 'unbound', artifacts: [],
@@ -429,12 +481,28 @@ export class ToolBroker extends Service {
   async finish(agentId: string) {
     const session = this.sessions.get(agentId)
     if (!session) return
-    this.scheduler.cancelOwner(agentId, new BrokerError('LEASE_REVOKED', '资源申请已取消'))
-    await this.closeInteractions(agentId)
+    session.finishing ??= this.finishSession(agentId, session)
+    return session.finishing
+  }
+  private async finishSession(agentId: string, session: SessionBinding) {
     session.closed = true
-    const info = this.info(agentId)
-    try { await this.drain(session) }
-    finally { const leases = await this.release(session); this.sessions.delete(agentId); if (info) { info.leases = leases; info.receipts = structuredClone(session.receipts) } await session.saves }
+    this.scheduler.cancelOwner(agentId, new BrokerError('LEASE_REVOKED', '资源申请已取消'))
+    let info: ReturnType<ToolBroker['info']>
+    try {
+      await this.closeInteractions(agentId)
+    } finally {
+      try {
+        await this.drain(session)
+      } finally {
+        try {
+          info = this.info(agentId)
+          const leases = await this.release(session)
+          if (info) info.leases = leases
+        } finally {
+          this.sessions.delete(agentId)
+        }
+      }
+    }
     return info
   }
   async interact(agent: Agent, input: unknown, signal: AbortSignal) {
@@ -451,7 +519,7 @@ export class ToolBroker extends Service {
     const failures = await this.interactions.close(agentId, AbortSignal.timeout(10000), (agent, name, args, signal) => this.invoke(agent, name, args, signal, 'cleanup'))
     for (const failure of failures) {
       const profile = [...session.profiles.values()].find((p) => p?.id === failure.profileId)
-      const lease = session.leases.find((l) => l.key === resourceKey(profile))
+      const lease = profile && session.leases.find((l) => l.key === resourceKey(profile, ''))
       if (lease) this.scheduler.quarantine(lease, '交互会话未确认关闭：' + failure.error)
     }
   }

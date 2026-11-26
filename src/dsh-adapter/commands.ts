@@ -1,3 +1,4 @@
+import { executeTool } from './runtime.js'
 import type { Context } from '@deepseek-ai/cordis'
 import { CommandDefinitionId } from '@deepseek-ai/dsh-commands/brand'
 import type {
@@ -83,7 +84,7 @@ export function registerSapperCommand(
       }
       if (command === 'runs') {
         if (tail.length) return { kind: 'error', text: USAGE }
-        const result = await ctx.tools.execute({ name: 'sapper_dispatch', arguments: { mode: 'status' }, agent: invocation.agent, callId: randomUUID() as never, signal: invocation.signal })
+        const result = await executeTool(ctx.tools, { name: 'sapper_dispatch', arguments: { mode: 'status' }, agent: invocation.agent, callId: randomUUID() as never, signal: invocation.signal })
         return result.isError ? { kind: 'error', text: result.error.message } : { kind: 'success', text: UNTRUSTED_NOTICE + '\n' + JSON.stringify(result.value, null, 2) }
       }
       if (command === 'kb') {

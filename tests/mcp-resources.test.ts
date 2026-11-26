@@ -37,8 +37,8 @@ describe('MCP resource coordination', () => {
     expect(s.snapshot().find((x) => x.id === first[0]!.id)?.state).toBe('active')
     s.quarantine(first[0]!, 'remote unknown'); s.release(first)
     expect(s.snapshot()[0]?.state).toBe('quarantined')
-    const replacement = s.acquire('third', [resource('IDA')], signal(), 1000)
-    s.reset('IDA'); const last = await replacement
+    await expect(s.acquire('third', [resource('IDA')], signal(), 0)).rejects.toThrow('RESOURCE_QUARANTINED')
+    s.reset('IDA'); const last = await s.acquire('third', [resource('IDA')], signal(), 1000)
     expect(last[0]!.fence).toBeGreaterThan(first[0]!.fence)
     s.release(last); s.close()
   })

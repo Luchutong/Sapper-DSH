@@ -70,6 +70,7 @@ export function SapperSettings({ scope, api }: { scope: BrowserSettingsScope; ap
   const orchestration = (state.value as { orchestration?: Record<string, unknown> } | undefined)?.orchestration ?? {}
   const flags = (state.value as { flags?: { completion?: string; targetCount?: number } } | undefined)?.flags ?? {}
   const verification = (state.value as { verification?: { mode?: string; criticalKinds?: string[] } } | undefined)?.verification ?? {}
+  const mcpMode = (state.value as { mcpMode?: string } | undefined)?.mcpMode ?? 'legacy'
   return (
     <section
       aria-label="Sapper 设置"
@@ -134,8 +135,12 @@ export function SapperSettings({ scope, api }: { scope: BrowserSettingsScope; ap
         <p>默认轻量模式不启动第二个代理；关闭自动复核仍保留成功工具证据检查。每题可覆盖这些默认值。调整默认值会停止当前编排，原阶段策略与历史记录保留。</p>
       </fieldset>
       <p>工具范围、模型和推理强度保存后会停止正在运行的编排，请在发起任务前设置。</p>
-      <ResourceSettings api={api} />
-      <CapabilitySettings api={api} orchestration={orchestration} disabled={state.status !== 'ready' || !state.writable || pending} save={save} />
+      <label>MCP 模式{' '}<select aria-label="MCP 模式" value={mcpMode} disabled={!state.writable || pending} onChange={(e) => { void save(['mcpMode'], e.target.value) }}>
+        <option value="legacy">兼容模式（资源协调）</option>
+        <option value="skill">按需 Skill（本地 IDA 元数据）</option>
+      </select></label>
+      {mcpMode === 'legacy' ? <ResourceSettings api={api} /> : <p>普通对话使用 DSH 的 MCP 连接。Sapper 子代理可按需读取已打开的本地 IDA 数据库元数据。</p>}
+      <CapabilitySettings api={api} orchestration={orchestration} disabled={state.status !== 'ready' || !state.writable || pending} save={save} skillMode={mcpMode === 'skill'} />
       <fieldset
         style={{
           marginTop: 20,

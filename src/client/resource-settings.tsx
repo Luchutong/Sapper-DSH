@@ -30,7 +30,7 @@ export function ResourceSettings({ api, readOnly = false, ownerIds, address, his
   if (address) ownerIds = [...new Set([...(ownerIds ?? []), ...(snapshot?.owners ?? []).filter((o) => o.workspaceId === address.workspaceId && o.taskId === address.taskId && (!address.runId || o.runId === address.runId)).map((o) => o.agentId)])]
   const leases = snapshot?.leases.filter((l) => !ownerIds || ownerIds.includes(l.ownerId)) ?? []
   return <fieldset style={box}><legend>工具与资源隔离</legend>
-    <p>按当前工作区、父会话与角色选取工具；共享状态按整个工作流协调。未分类 MCP 共用一个保守串行域。</p>
+    <p>未分类工具按连接器分别排队。指向同一服务的连接别名应使用同一个物理后端 ID。</p>
     {!api?.brokerState && <p>正在连接工具资源服务…</p>}
     <button type="button" disabled={busy || !api?.brokerState} onClick={() => { void load(true) }}>刷新并重新载入策略</button>
     {error && <p role="alert">{error}</p>}

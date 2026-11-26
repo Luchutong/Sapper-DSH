@@ -1,3 +1,4 @@
+import { isRootAgent } from '../dsh-adapter/runtime.js'
 import type { Context } from '@deepseek-ai/cordis'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { scopeParentOf } from '@deepseek-ai/dsh-scope'
@@ -19,7 +20,7 @@ export interface Capabilities {
   warnings: string[]
 }
 export async function capabilities(ctx: Context, config: Config, sessionId?: string): Promise<Capabilities> {
-  const roots = ctx.agents.roots(), parent = sessionId ? roots.find((a) => a.id === SessionId(sessionId)) : undefined
+  const roots = ctx.agents.list().filter(isRootAgent), parent = sessionId ? roots.find((a) => a.id === SessionId(sessionId)) : undefined
   if (sessionId && !parent) throw new StoreError('该主会话尚未打开，请在 DSH 打开后刷新工具范围')
   const selected = parent?.session.requestHeader()?.config ?? parent?.options ?? ctx.get('agentDefaultModel')?.currentSelection()
   const warnings: string[] = [], llm = ctx.get('llm'), models: ModelCapability[] = []

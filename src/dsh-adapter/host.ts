@@ -8,7 +8,7 @@ import type {} from '@deepseek-ai/cordis-plugin-loader'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
 import type {} from './message.js'
 import type { Config } from '../settings.js'
-import { PLUGIN_NAME } from '../constants.js'
+import { IDA_METADATA_TOOL, PLUGIN_NAME } from '../constants.js'
 import { resolveSelectedStore } from '../store/tasks.js'
 import { readProjectSummary } from '../store/project.js'
 import { renderProjectContext } from '../render/context.js'
@@ -26,6 +26,7 @@ import { createDispatchTool } from '../tools/dispatch.js'
 import { createTaskTool } from '../tools/task.js'
 import { createControlTool } from '../tools/control.js'
 import { registerTaskPanel } from './panel.js'
+import { createIdaMetadataTool } from './ida-skill.js'
 
 function isOwnSnapshot(message: unknown): boolean {
   const source = (message as UserMessage).source
@@ -52,7 +53,7 @@ export function registerRuntime(ctx: Context, getConfig: () => Config): void {
     return permission.fullAccess
   }
   const fullAccess = (exec: Pick<ToolExecution, 'agent'>) => hasFullAccess(ctx, exec)
-  const broker = ctx.get('sapperToolBroker') ?? new ToolBroker(ctx, () => alive && getConfig().enabled)
+  const broker = ctx.get('sapperToolBroker') ?? new ToolBroker(ctx, () => alive && getConfig().enabled && getConfig().mcpMode === 'legacy', () => getConfig().mcpMode === 'skill')
   const taskPanel = registerTaskPanel(ctx, getConfig, () => alive)
   const dispatcher = new Orchestrator(ctx, getConfig, () => alive, async (parent, root, run, stage) => { try { await taskPanel.progress(parent, root, run, stage) } catch (error) { ctx.logger.warn('Sapper 进度回传失败：%s', (error as Error).message) } }, broker)
   const dispatching = new Set<symbol>()
@@ -60,10 +61,14 @@ export function registerRuntime(ctx: Context, getConfig: () => Config): void {
     start: (exec: ToolExecution) => { dispatching.add(exec.token); taskPanel.executionStarted(exec) }, finish: (exec: ToolExecution) => { dispatching.delete(exec.token); bindings.delete(exec.token); taskPanel.executionFinished(exec) },
   }
   const tools = [...createGraphTools(getConfig, () => alive, authorize, fullAccess), ...createRecallTools(getConfig, () => alive),
-    createDispatchTool(getConfig, () => alive, authorize, dispatcher, lifecycle), createTaskTool(getConfig, () => alive, authorize, dispatcher, lifecycle, (exec) => taskPanel.native.attachmentContext(String(exec.callId), String(exec.agent?.id), exec.agent?.session.header.cwd ?? '')), createControlTool(taskPanel), ...brokerTools(broker)]
+    createDispatchTool(getConfig, () => alive, authorize, dispatcher, lifecycle), createTaskTool(getConfig, () => alive, authorize, dispatcher, lifecycle, (exec) => taskPanel.native.attachmentContext(String(exec.callId), String(exec.agent?.id), exec.agent?.session.header.cwd ?? '')), createControlTool(taskPanel)]
+  const legacyTools = brokerTools(broker)
+  const idaTool = createIdaMetadataTool(ctx, getConfig)
   const syncCommand = registerSapperCommand(ctx, getConfig, () => alive, taskPanel)
   const kb = new KnowledgeBase()
   let unregister: (() => void) | undefined
+  let unregisterMode: (() => void) | undefined
+  let mode: Config['mcpMode'] | undefined
   const syncTool = () => {
     if (getConfig().enabled && !unregister) {
       const disposers = tools.map(tool => ctx.tools.register(tool))
@@ -73,13 +78,23 @@ export function registerRuntime(ctx: Context, getConfig: () => Config): void {
       unregister()
       unregister = undefined
     }
+    const nextMode = getConfig().enabled ? getConfig().mcpMode : undefined
+    if (mode !== nextMode) {
+      unregisterMode?.()
+      unregisterMode = undefined
+      mode = nextMode
+      if (mode) {
+        const disposers = (mode === 'legacy' ? legacyTools : [idaTool]).map(tool => ctx.tools.register(tool))
+        unregisterMode = () => { for (const dispose of disposers.reverse()) dispose() }
+      }
+    }
     syncCommand()
   }
   syncTool()
   ctx.on('loader/volatile-update', syncTool)
 
   ctx.tools.guard(exec => {
-    if (!tools.some(tool => tool.name === exec.name)) return
+    if (!tools.some(tool => tool.name === exec.name) && !legacyTools.some(tool => tool.name === exec.name) && exec.name !== IDA_METADATA_TOOL) return
     try {
       ensureBinding(exec)
       if (isMutation(exec.name, exec.arguments)) {
@@ -93,7 +108,7 @@ export function registerRuntime(ctx: Context, getConfig: () => Config): void {
   ctx.on('tools/pre-execute', async (exec, next) => {
     const roleDenial = dispatcher.denial(exec)
     if (roleDenial) return { kind: 'deny', reason: roleDenial }
-    if (!tools.some(tool => tool.name === exec.name)) return next()
+    if (!tools.some(tool => tool.name === exec.name) && !legacyTools.some(tool => tool.name === exec.name) && exec.name !== IDA_METADATA_TOOL) return next()
     const binding: { config: string; cwd: string | undefined; root?: string | undefined; permission?: string } = {
       config: JSON.stringify(getConfig()), cwd: exec.agent?.session.header.cwd,
     }

@@ -2,6 +2,7 @@ import type { ObjectJsonSchema } from '@deepseek-ai/dsh-tools'
 import { FACT_KINDS, object, text, StoreError, id } from '../store/validation.js'
 import type { Evidence, Candidate, Verification } from '../store/runs.js'
 import { createHash } from 'node:crypto'
+import { IDA_METADATA_TOOL } from '../constants.js'
 
 export type DispatchMode = 'reason' | 'explore' | 'verify' | 'run'
 const str = { type: 'string' } as const
@@ -41,7 +42,7 @@ export function parseCandidate(value: unknown, session: string, calls: Map<strin
   if (!FACT_KINDS.includes(v.kind as never)) throw new StoreError('候选 kind 无效')
   if (v.kind === 'flag') {
     const value = text(v.description, 'description').trim(), evidence = checkedEvidence(v.evidence, calls)
-    if (!evidence.some((e) => calls.get(e.call_id)?.text.includes(value))) throw new StoreError('flag 候选值必须实际出现在引用的成功工具输出中')
+    if (!evidence.some((e) => e.tool !== IDA_METADATA_TOOL && calls.get(e.call_id)?.text.includes(value))) throw new StoreError('flag 候选值必须实际出现在引用的成功工具输出中；IDA 数据库元数据仅可用于核对数据库身份')
   }
   const cited = checkedEvidence(v.evidence, calls), matching = cited.map((e) => calls.get(e.call_id)).filter((c) => c?.text.includes(String(v.description).trim()))
   const source = matching.some((c) => c?.broker) ? matching.some((c) => !c?.broker || c.broker.source === 'target') ? 'target' as const : 'unbound' as const : undefined

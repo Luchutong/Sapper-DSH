@@ -1,8 +1,10 @@
+import { executeTool } from '../src/dsh-adapter/runtime.js'
 import { mkdtemp, readdir, rm } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import { ToolRuntime } from '@deepseek-ai/dsh-tools'
+import { NativeToolExecutor } from '@deepseek-ai/dsh-tool-executor-native'
 import { SandboxPolicyService } from '@deepseek-ai/dsh-sandbox-policy'
 import type { SandboxMode } from '@deepseek-ai/dsh-sandbox'
 import type { ToolExecutionResult } from '@deepseek-ai/dsh-tools'
@@ -20,16 +22,17 @@ async function setup(outcome: string | undefined = 'allowed-once', approval: 'se
   cleanup.push(() => ctx.fiber.dispose())
   ctx.provide('systemPrompt', { tools: () => () => {}, section: () => () => {}, context: () => () => {}, getContextOrder: () => 0 })
   let mode = initialMode
-  ctx.provide('sessionProjections', { register: () => () => {}, stateOf: () => mode })
+  ctx.provide('sessionProjections', { register: () => ({ stateOf: () => mode }) })
   const policyFiber = await ctx.plugin(SandboxPolicyService, { mode: initialMode, workspaceRoot: cwd })
   await ctx.plugin(ToolRuntime)
+  ctx.tools.setExecutor(new NativeToolExecutor(ctx))
   let config = resolveConfig({ store: { approval }, orchestration: { requireApproval: true } })
   registerRuntime(ctx, () => config)
   const request = vi.fn(async (_input: unknown) => outcome)
   if (outcome !== undefined) ctx.provide('approval', { request })
   const agent = { id: 'test-session', session: { id: 'test-session', header: { cwd } } } as unknown as Agent
   let call = 0
-  const execute = (name: string, args: unknown, signal = new AbortController().signal) => ctx.tools.execute({
+  const execute = (name: string, args: unknown, signal = new AbortController().signal) => executeTool(ctx.tools, {
     name, arguments: args, agent, callId: `tool-${++call}` as never, signal,
   })
   const setConfig = (input: Parameters<typeof resolveConfig>[0]) => { config = resolveConfig(input) }

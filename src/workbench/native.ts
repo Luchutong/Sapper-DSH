@@ -1,3 +1,4 @@
+import { isRootAgent } from '../dsh-adapter/runtime.js'
 import path from 'node:path'
 import {
   mkdir,
@@ -88,7 +89,7 @@ export class NativeWorkbench {
       const agent = this.ctx.agents.get(SessionId(id.slice(8)))
       if (
         agent &&
-        this.ctx.agents.roots().includes(agent) &&
+        isRootAgent(agent) &&
         agent.session.header.cwd
       )
         return {
@@ -140,8 +141,9 @@ export class NativeWorkbench {
       const agent = await this.panel.resolveAgent(record.sessionId)
       if (await realpath(agent.session.header.cwd!) !== await realpath(record.cwd)) throw new StoreError('附件会话目录不匹配')
       const uploads = this.ctx.get('fileUploads')
-      const source = uploads?.resolve(agent, input.receiptId as FileUploadReceiptId)
-      if (!source) throw new StoreError('附件上传凭证无效或不属于本题会话，请重新上传')
+      const staged = uploads?.resolve(agent, input.receiptId as FileUploadReceiptId)
+      if (staged?.type !== 'file') throw new StoreError('附件上传凭证无效或不属于本题会话，请重新上传原始文件')
+      const source = staged.attachment
       if (source.bytes !== file.bytes) throw new StoreError('附件大小与创建清单不一致')
       if (file.source && (file.source.attachmentId !== source.attachmentId || file.source.name !== source.name || file.source.bytes !== source.bytes)) throw new StoreError('同一附件不能更换已上传的内容')
       file.source = { ...source }
@@ -329,7 +331,7 @@ export class NativeWorkbench {
           title: w.title,
           sessions: w.sessionIds.map(String),
         })) ?? []
-    for (const agent of this.ctx.agents.roots())
+    for (const agent of this.ctx.agents.list().filter(isRootAgent))
       if (
         agent.session.header.cwd &&
         !known.some((w) => w.cwd === agent.session.header.cwd)

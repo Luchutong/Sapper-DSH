@@ -1,3 +1,4 @@
+import { isRootAgent, executeTool } from '../src/dsh-adapter/runtime.js'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -14,6 +15,8 @@ import SubagentRuntime from '@deepseek-ai/dsh-subagent'
 import * as Spawn from '@deepseek-ai/dsh-subagent-spawn-in-process'
 import { SandboxPolicyService } from '@deepseek-ai/dsh-sandbox-policy'
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import { PtcExecutor } from '@deepseek-ai/dsh-tool-executor-ptc'
+import { NativeToolExecutor } from '@deepseek-ai/dsh-tool-executor-native'
 import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { registerRuntime } from '../src/dsh-adapter/host.js'
@@ -241,10 +244,11 @@ async function setup(
   if (topology === 'global') { ctx.tools.register(readDefinition); for (const name of scenario.registeredTools ?? []) ctx.tools.register({ ...readDefinition, name }); if ('writeup' in scenario) ctx.tools.register(wpDefinition) }
   else {
     await ctx.plugin(Loader)
+    if (topology === 'preset-ptc') ctx.provide('ptcRuntime', { language: 'typescript', programFormat: 'module' })
     await ctx.plugin(AgentPresetRegistry, { default: 'fixture' })
     ctx.loader.builtins.fixtureTools = { inject: ['tools', 'systemPrompt'], apply(scoped: Context) {
       scoped.tools.register(readDefinition); for (const name of scenario.registeredTools ?? []) scoped.tools.register({ ...readDefinition, name }); if ('writeup' in scenario) scoped.tools.register(wpDefinition)
-      if (topology === 'preset-ptc') scoped.tools.presentAs('ptc')
+      if (topology === 'preset-ptc') scoped.tools.setExecutor(new PtcExecutor(scoped))
     } }
     await ctx.agentPresets.register({ id: 'fixture', plugins: [{ name: 'cordis:fixtureTools' }] })
   }
@@ -268,7 +272,7 @@ async function setup(
       ? {
           setup: async (childCtx: Context) => {
             await ctx.agentPresets.mount(childCtx, 'fixture')
-            if (topology === 'preset-ptc') childCtx.tools.presentAs('native')
+            if (topology === 'preset-ptc') childCtx.tools.setExecutor(new NativeToolExecutor(childCtx))
           },
         }
       : {}),
@@ -277,7 +281,7 @@ async function setup(
 
   let count = 0
   const execute = async (name: string, args: unknown, signal = new AbortController().signal) => {
-    const result = await ctx.tools.execute({ name, arguments: args, agent: parent, callId: ToolCallId('parent-' + ++count), signal })
+    const result = await executeTool(ctx.tools, { name, arguments: args, agent: parent, callId: ToolCallId('parent-' + ++count), signal })
     if (result.isError) throw new Error(result.error.message)
     return result.value
   }
@@ -648,12 +652,12 @@ it('inherits preset-scoped file tools into fresh explore/verify sessions', async
 
 it('keeps preset PTC presentation intact while M3 children use native evidence and structured tools', async () => {
   const { dispatch, ctx, parent, model, read } = await setup({}, {}, false, 1, 'preset-ptc')
-  const preset = scopeParentOf(parent)
-  expect(ctx.tools.get('run_code', preset)).toBeDefined()
+  const preset = scopeParentOf(parent)!
+  expect((await ctx.systemPrompt.assemble({ scope: preset })).tools.map(tool => tool.name)).toContain('run_code')
   const run = await dispatch()
   expect(run, JSON.stringify(run)).toMatchObject({ state: 'completed', outcomes: [{ state: 'confirmed' }] })
   expect(read).toHaveBeenCalledTimes(2)
-  expect(ctx.tools.get('run_code', preset)).toBeDefined()
+  expect((await ctx.systemPrompt.assemble({ scope: preset })).tools.map(tool => tool.name)).toContain('run_code')
   for (const request of model.requests) {
     expect(request.tools?.map(t => t.name)).toContain('structured_output')
     expect(request.tools?.map(t => t.name)).not.toContain('run_code')
@@ -1587,7 +1591,7 @@ it.each(['workspace', 'session', 'title', 'command'] as const)(
     )
     const panel = await mountNative(ctx, cwd)
     await disposeParent()
-    expect(ctx.agents.roots()).toHaveLength(0)
+    expect(ctx.agents.list().filter(isRootAgent)).toHaveLength(0)
     const { randomUUID } = await import('node:crypto'),
       { readdir } = await import('node:fs/promises')
     const input = {
@@ -2093,6 +2097,27 @@ it.each(['failed','completed'] as const)('does not replay a %s automatic brief l
 })
 
 describe('MCP broker across real AgentLoop and native ToolRuntime', () => {
+  it('loads the IDA Skill on demand and leaves ordinary MCP calls outside legacy scheduling', async () => {
+    const { SkillRegistry } = await import('@deepseek-ai/dsh-skill')
+    const regular = 'mcp__fixture__read'
+    const { ctx, cwd, parent, dispatch, execute, model } = await setup({ registeredTools: [regular] }, { mcpMode: 'skill' })
+    const broker = ctx.get('sapperToolBroker')!
+    await ctx.plugin(SkillRegistry, {})
+    const catalog = await ctx.skills.list({ cwd, scope: parent })
+    expect(catalog).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'sapper-ida-metadata', invocation: { modelInvocable: true, userInvocable: false } })]))
+    await ctx.plugin(await import('@deepseek-ai/dsh-tool-skill'), {})
+    await expect(execute('sapper_ida_metadata', { idb_path: 'invalid.txt' })).rejects.toThrow('请先在本轮加载')
+    await execute('skill', { name: 'sapper-ida-metadata' })
+    await expect(execute('sapper_ida_metadata', { idb_path: 'invalid.txt' })).rejects.toThrow('相对 .i64 或 .idb 路径')
+    await expect(execute(regular, { path: 'fixture.txt' })).resolves.toContain('VERIFIED-LOCAL-7C42')
+    const run = await dispatch()
+    expect(run.state, JSON.stringify(run)).toBe('completed')
+    expect(broker.snapshot()).toMatchObject({ leases: [], owners: [], receipts: [] })
+    const explorer = model.requests.find((request) => JSON.stringify(request.messages).includes('# Sapper explore'))
+    expect(explorer?.tools?.map((tool) => tool.name)).toEqual(expect.arrayContaining(['skill', 'sapper_ida_metadata']))
+    expect(explorer?.tools?.map((tool) => tool.name)).not.toContain(regular)
+    expect(run.children?.filter((child) => child.tool_broker)).toEqual([])
+  })
   it('holds a shared workflow before starting a second child, without spending its model steps', async () => {
     let release!: () => void
     const gate = new Promise<void>((r) => { release = r })
@@ -2120,7 +2145,7 @@ describe('MCP broker across real AgentLoop and native ToolRuntime', () => {
     const run = dispatch()
     try {
       await waitForRuntime(() => expect(read).toHaveBeenCalledTimes(1))
-      const alias = ctx.tools.execute({ name: b, arguments: { path: 'fixture.txt' }, agent: parent, callId: ToolCallId('alias-direct'), signal: new AbortController().signal })
+      const alias = executeTool(ctx.tools, { name: b, arguments: { path: 'fixture.txt' }, agent: parent, callId: ToolCallId('alias-direct'), signal: new AbortController().signal })
       await waitForRuntime(() => expect(broker.snapshot().waiting.length).toBeGreaterThan(0)); expect(read).toHaveBeenCalledTimes(1)
       release(); expect((await alias).isError).toBe(false)
       expect((await run).state).toBe('completed')
@@ -2133,32 +2158,87 @@ describe('MCP broker across real AgentLoop and native ToolRuntime', () => {
     const name = 'mcp__ida__run'
     const { ctx, parent, read } = await setup({ registeredTools: [name], beforeRead: () => gate })
     const broker = ctx.get('sapperToolBroker')!
-    const running = ctx.tools.execute({ name, arguments: { path: 'fixture.txt' }, agent: parent, callId: ToolCallId('cancel-running'), signal: controller.signal })
-    let queued: ReturnType<typeof ctx.tools.execute> | undefined
+    const running = executeTool(ctx.tools, { name, arguments: { path: 'fixture.txt' }, agent: parent, callId: ToolCallId('cancel-running'), signal: controller.signal })
+    let queued: ReturnType<typeof executeTool> | undefined
     try {
       await waitForRuntime(() => expect(read).toHaveBeenCalledTimes(1))
       controller.abort(new Error('user cancelled'))
       expect(broker.snapshot().leases.some((l) => l.state === 'active')).toBe(true)
-      queued = ctx.tools.execute({ name, arguments: { path: 'fixture.txt' }, agent: parent, callId: ToolCallId('after-cancel'), signal: new AbortController().signal })
+      queued = executeTool(ctx.tools, { name, arguments: { path: 'fixture.txt' }, agent: parent, callId: ToolCallId('after-cancel'), signal: new AbortController().signal })
       await waitForRuntime(() => expect(broker.snapshot().waiting).toHaveLength(1))
       release(); expect((await running).isError).toBe(true)
-      await waitForRuntime(() => expect(broker.snapshot().leases.some((l) => l.state === 'quarantined')).toBe(true))
+      expect((await queued).error?.message).toContain('RESOURCE_QUARANTINED')
+      expect(broker.snapshot().leases).toEqual(expect.arrayContaining([expect.objectContaining({ key: 'connector:ida', state: 'quarantined' })]))
+      expect(broker.snapshot().waiting).toEqual([])
       expect(read).toHaveBeenCalledTimes(1)
-      await broker.reset('unclassified:mcp', true)
-      expect((await queued).isError).toBe(false); expect(read).toHaveBeenCalledTimes(2)
-    } finally { release(); await running; if (queued) { await broker.reset('unclassified:mcp', true); await queued } }
+      await broker.reset('connector:ida', true)
+      const retry = await executeTool(ctx.tools, { name, arguments: { path: 'fixture.txt' }, agent: parent, callId: ToolCallId('after-reset'), signal: new AbortController().signal })
+      expect(retry.isError).toBe(false); expect(read).toHaveBeenCalledTimes(2)
+    } finally { release(); await running; await queued }
+  })
+  it('isolates a timed-out MCP connector and releases the healthy connector after a background run', async () => {
+    const ida = 'mcp__ida__read', browser = 'mcp__browser__read'
+    const { ctx, dispatch, execute, read } = await setup({ externalName: browser, registeredTools: [ida, browser] })
+    const broker = ctx.get('sapperToolBroker')!
+    read.mockRejectedValueOnce(new Error('MCP error -32001: Request timed out'))
+    await expect(execute(ida, { path: 'fixture.txt' })).rejects.toThrow('Request timed out')
+    await expect(execute(ida, { path: 'fixture.txt' })).rejects.toThrow('RESOURCE_QUARANTINED')
+    expect(broker.snapshot().waiting).toEqual([])
+
+    const run = await dispatch()
+    expect(run.state, JSON.stringify(run)).toBe('completed')
+    const planner = run.children?.find((child) => child.role === 'reason')
+    expect(planner?.tool_broker).toMatchObject({ selection: { selected: [] }, leases: [] })
+    const explorer = run.children?.find((child) => child.role === 'explore')
+    expect(explorer?.external_tools).toContain(browser)
+    expect(explorer?.external_tools).not.toContain(ida)
+    await expect(execute(browser, { path: 'fixture.txt' })).resolves.toContain('VERIFIED-LOCAL-7C42')
+    expect(broker.snapshot().leases.filter((lease) => lease.state !== 'released')).toMatchObject([{ key: 'connector:ida', state: 'quarantined' }])
+  })
+  it('requires one confirmed recovery for an old persisted quarantine with unknown connector identity', async () => {
+    const name = 'mcp__ida__read'
+    const { ctx, execute, read } = await setup({ registeredTools: [name] })
+    const broker = ctx.get('sapperToolBroker')!, key = 'unclassified:mcp'
+    const old = new (await import('../src/mcp/leases.js')).LeaseScheduler()
+    await old.acquire('old-main-call', [{ key, backendId: key, capacity: 1, exclusive: true }], new AbortController().signal, 0)
+    broker.scheduler.restore(old.snapshot())
+    old.close()
+    await expect(execute(name, { path: 'fixture.txt' })).rejects.toThrow('RESOURCE_QUARANTINED: unclassified:mcp')
+    expect(read).not.toHaveBeenCalled()
+    expect(broker.snapshot().waiting).toEqual([])
+    await expect(broker.reset(key, false)).rejects.toThrow('RESOURCE_QUARANTINED')
+    await broker.reset(key, true)
+    await expect(execute(name, { path: 'fixture.txt' })).resolves.toContain('VERIFIED-LOCAL-7C42')
+  })
+  it('releases a successful MCP call after post-processing fails and honors approval on the next call', async () => {
+    const name = 'mcp__ida__read'
+    const { ctx, execute, read, approval } = await setup({ registeredTools: [name] })
+    const broker = ctx.get('sapperToolBroker')!
+    const remove = ctx.on('tools/post-execute', (exec, _result, next) => {
+      if (exec.name === name) throw new Error('post-processing timeout')
+      return next()
+    })
+    await expect(execute(name, { path: 'fixture.txt' })).rejects.toThrow('post-processing timeout')
+    remove()
+    expect(broker.snapshot().leases.every((lease) => lease.state === 'released')).toBe(true)
+    ctx.on('tools/pre-execute', (exec, next) => exec.name === name ? Promise.resolve({ kind: 'ask', reason: 'fixture approval' }) : next())
+    approval.mockResolvedValueOnce('allowed-once')
+    await expect(execute(name, { path: 'fixture.txt' })).resolves.toContain('VERIFIED-LOCAL-7C42')
+    await expect(execute(name, { path: 'fixture.txt' })).rejects.toThrow('rejected')
+    expect(read).toHaveBeenCalledTimes(2)
+    expect(broker.snapshot().leases.every((lease) => lease.state === 'released')).toBe(true)
   })
   it('rechecks final monotonic guards after a queued main call becomes runnable', async () => {
     let release!: () => void
     const gate = new Promise<void>((r) => { release = r }), name = 'mcp__ida__decompile'
     const { ctx, parent, read } = await setup({ registeredTools: [name], beforeRead: () => gate })
     const broker = ctx.get('sapperToolBroker')!
-    const first = ctx.tools.execute({ name, arguments: { path: 'fixture.txt' }, agent: parent, callId: ToolCallId('guard-first'), signal: new AbortController().signal })
+    const first = executeTool(ctx.tools, { name, arguments: { path: 'fixture.txt' }, agent: parent, callId: ToolCallId('guard-first'), signal: new AbortController().signal })
     try {
       await waitForRuntime(() => expect(read).toHaveBeenCalledTimes(1))
       let revoked = false
       ctx.tools.guard((exec) => revoked && String(exec.callId) === 'guard-waiting' ? 'late permission revoked' : undefined)
-      const second = ctx.tools.execute({ name, arguments: { path: 'fixture.txt' }, agent: parent, callId: ToolCallId('guard-waiting'), signal: new AbortController().signal })
+      const second = executeTool(ctx.tools, { name, arguments: { path: 'fixture.txt' }, agent: parent, callId: ToolCallId('guard-waiting'), signal: new AbortController().signal })
       await waitForRuntime(() => expect(broker.snapshot().waiting).toHaveLength(1))
       revoked = true; release(); await first
       expect((await second).error?.message).toContain('late permission revoked'); expect(read).toHaveBeenCalledTimes(1)

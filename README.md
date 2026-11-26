@@ -3,7 +3,7 @@
 将 [sapper-v2](https://github.com/N1nEmAn/sapper-v2) 的事实图与
 `reason → explore → verify` 循环移植为 DSH NEXT 桌面插件。
 
-**当前版本 `0.1.0-alpha.21`：修复规划阶段把空 MCP 搜索误判为没有本地分析工具的问题；工具目录同时展示本地文件/命令与 MCP 能力，未开始探索的空计划明确报错并支持继续。保留 alpha.20 的作用域与资源隔离、多 flag 和可选复核。**
+**当前版本 `0.1.0-alpha.24` 提供按需 IDA 元数据 Skill。** 可在设置中选择按需模式，让普通对话沿用 DSH 原生 MCP，Agent 只在需要核对本地 IDB 时加载 Skill。默认保持兼容模式。 [MCP 工具层指南](docs/mcp-tool-layer.md#按需-ida-skill)
 
 [Misc 附件任务失败复盘与修复](docs/alpha21-validation.md)。
 
@@ -14,7 +14,7 @@
 本版修复 browse 目录选择、插件作用域下命令受理，以及重启后未完成题目的恢复。已有 alpha.13 创建记录可直接继续，见 [修复与验收](docs/alpha14-validation.md)。
 alpha.15 在成功工具输出出现 flag 时立即向主会话显示未验证候选，无需等待探索收尾或独立复核；后续进度仍保留该值，见 [flag 即时回显](docs/alpha15-validation.md)。
 alpha.16 修复工作台把普通分析和漏洞候选误标为“候选 flag”的显示问题，按 `kind` 分别标注；真正 flag 的即时回显保留。见 [repeater 日志复盘](docs/alpha16-validation.md)。
-仅支持 **DSH NEXT 0.2.1-rc.2**，Cordis 4.0.5 / Schemastery 3.18.5。
+仅支持 **DSH NEXT 0.2.2-rc.5**，Cordis 4.1.0 / Schemastery 3.19.0。
 
 当前可维护工作区事实图、意图、长文档和本地 flag；每轮注入有预算的 frontier、
 历史与相关证据指针，支持中英文召回、56 条离线 KB 及 `/sapper` 只读命令。
@@ -97,7 +97,7 @@ flag 事实是权威记录，`flags/ledger.json` 是可重建索引。详细边�
 在 DSH NEXT 菜单“打开 DSH 终端”，执行后重启应用：
 
 ```powershell
-dsh plugin add "D:\BaiduSyncdisk\sapper移植\sapper-dsh-0.1.0-alpha.21.tgz"
+dsh plugin add "D:\BaiduSyncdisk\sapper移植\sapper-dsh-0.1.0-alpha.24.tgz"
 ```
 
 开发需要 Node.js 22+、pnpm 8.15.4 和 Python 3（仅 golden 测试使用）：

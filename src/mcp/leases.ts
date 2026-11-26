@@ -18,7 +18,7 @@ export class LeaseScheduler {
     for (const record of records) {
       this.fences.set(record.key, Math.max(this.fences.get(record.key) ?? 0, record.fence))
       if (record.state === 'released') continue
-      this.leases.set(record.id, { ...record, state: 'quarantined', error: '宿主重启；资源执行状态未核实，不能按旧租约复用' })
+      this.leases.set(record.id, { ...record, state: 'quarantined', error: record.state === 'quarantined' && record.error ? record.error : '宿主重启，资源执行状态未核实' })
     }
   }
   snapshot() { return [...this.leases.values()].map((x) => ({ ...x })) }
@@ -47,8 +47,15 @@ export class LeaseScheduler {
   private pump() {
     const blocked = new Set<string>()
     for (const waiter of [...this.pending]) {
+      const quarantine = waiter.requests.map((r) => this.quarantineError(r)).find(Boolean)
+      if (quarantine) {
+        this.pending.splice(this.pending.indexOf(waiter), 1)
+        waiter.cleanup()
+        waiter.reject(quarantine)
+        continue
+      }
       const allocations = waiter.requests.map((r) => {
-        const active = this.snapshot().filter((l) => l.key === r.key && l.state !== 'released')
+        const active = [...this.leases.values()].filter((l) => l.key === r.key && l.state !== 'released')
         const occupied = new Set(active.map((l) => l.slot))
         return { request: r, slot: active.length >= r.capacity || active.some((l) => l.exclusive) || (r.exclusive && active.length) ? undefined : Array.from({ length: r.capacity }, (_, n) => n).find((n) => !occupied.has(n)) }
       })
@@ -67,7 +74,22 @@ export class LeaseScheduler {
     }
     this.changed()
   }
-  active(lease: ResourceLease) {
+  quarantineError(request: ResourceRequest): BrokerError | undefined {
+    const quarantined = [...this.leases.values()].filter((l) => l.key === request.key && l.state === 'quarantined')
+    const first = quarantined[0]
+    if (!first) return
+    const blocksAllSlots = request.exclusive || quarantined.some((l) => l.exclusive) || quarantined.length >= request.capacity
+    if (blocksAllSlots) return this.quarantinedError(first)
+  }
+  private quarantinedError(lease: ResourceLease) {
+    const detail = lease.error ? ` ${lease.error}。` : ''
+    return new BrokerError('RESOURCE_QUARANTINED', `${lease.key} 已隔离。${detail}核实旧操作已停止并重置实际后端后，在 设置 → Sapper → 工具与资源隔离 解除隔离。`)
+  }
+  active(lease: ResourceLease, cleanup = false) {
+    if (this.leases.get(lease.id) === lease && lease.state === 'quarantined') {
+      if (cleanup) return
+      throw this.quarantinedError(lease)
+    }
     if (this.leases.get(lease.id) !== lease || lease.state !== 'active') throw new BrokerError('LEASE_REVOKED', '资源租约不是当前活动租约')
   }
   heartbeat() { for (const lease of this.leases.values()) if (lease.state === 'active') lease.heartbeatAt = new Date().toISOString() }
@@ -78,7 +100,7 @@ export class LeaseScheduler {
     for (const lease of old) this.leases.delete(lease.id)
     this.pump()
   }
-  quarantine(lease: ResourceLease, error: string) { lease.state = 'quarantined'; lease.error = error; this.changed() }
+  quarantine(lease: ResourceLease, error: string) { lease.state = 'quarantined'; lease.error = error; this.pump() }
   reset(key: string) {
     if (this.snapshot().some((l) => l.key === key && ['active', 'draining'].includes(l.state))) throw new BrokerError('RESOURCE_BUSY', '当前仍有活跃执行，不能解除隔离')
     for (const lease of this.leases.values()) if (lease.key === key && lease.state === 'quarantined') lease.state = 'released'

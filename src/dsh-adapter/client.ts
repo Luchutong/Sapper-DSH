@@ -5,7 +5,7 @@ import type { ConfigForm, ConfigForms } from '@deepseek-ai/dsh-client-ui-setting
 import type { DirectoryListing } from '@deepseek-ai/dsh-host-directory-picker/types'
 import type { FileUploadService } from '@deepseek-ai/dsh-client-file-upload/client'
 
-/** Narrow client service contracts observed in DSH 0.2.1-rc.2.
+/** Narrow client service contracts observed in DSH 0.2.2-rc.5.
  * Keep this browser-only seam separate from Node/Cordis host augmentations.
  */
 export type BrowserSettingsScope = Pick<ConfigForm<unknown>, 'getSnapshot' | 'subscribe' | 'set' | 'mutate'>

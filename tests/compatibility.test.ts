@@ -28,6 +28,7 @@ describe('official DSH installation compatibility gate', () => {
 
   it('does not declare untested old or future SDKs compatible', () => {
     expect(evaluatePluginCompatibility(manifest, {}, '0.1.5-rc.1')?.exempted).toBe(false)
-    expect(evaluatePluginCompatibility(manifest, {}, '0.2.1-rc.3')?.exempted).toBe(false)
+    expect(evaluatePluginCompatibility(manifest, {}, '0.2.1-rc.2')?.exempted).toBe(false)
+    expect(evaluatePluginCompatibility(manifest, {}, '0.2.2-rc.6')?.exempted).toBe(false)
   })
 })

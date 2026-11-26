@@ -12,6 +12,7 @@ function group<T extends Record<string, Schema>>(fields: T) {
 /** Single source of defaults for the plugin Config form. */
 const PlainConfig = group({
   enabled: Schema.boolean().default(true).description('启用 Sapper'),
+  mcpMode: Schema.union(['legacy', 'skill']).default('legacy').description('legacy 沿用资源协调；skill 按需使用本地 IDA 只读元数据，其他 MCP 由 DSH 管理'),
   store: group({
     mode: Schema.union(['workspace', 'global']).default('workspace'),
     dir: Schema.string().default('.sapper'),

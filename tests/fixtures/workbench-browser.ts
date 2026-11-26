@@ -5,6 +5,7 @@ import path from 'node:path'
 import { Readable } from 'node:stream'
 import { chromium } from 'playwright-core'
 import { expect } from 'vitest'
+import { dshClientSource } from './dsh-client-artifact.js'
 import type { TaskPanelService } from '../../src/dsh-adapter/panel.js'
 /** Final lazy-CJS artifact + exact native SlotCore/LayoutController + live Host Gateway. */
 export async function workbenchBrowser(
@@ -33,36 +34,34 @@ export async function workbenchBrowser(
     '/plugin.js': path.resolve('lib/client.js'),
     '/slots.js': require.resolve('@deepseek-ai/dsh-client-ui-slots'),
   }
-  const layoutSource = await readFile(
-    require.resolve('@deepseek-ai/dsh-client-ui-layout/client'),
-    'utf8',
-  )
-  // Exercise the SDK's real UiWorkspace directory methods, including its typed
-  // DirectoryBrowseError, instead of a picker that always returns cwd.
-  const workspaceSource = await readFile(require.resolve('@deepseek-ai/dsh-client-ui-workspace/client'), 'utf8')
-  const methodsStart = workspaceSource.indexOf('async pickDirectory() {')
-  const directoryMethods = workspaceSource.slice(methodsStart, workspaceSource.indexOf('watchNavigation() {', methodsStart))
-  const errorStart = workspaceSource.indexOf('var DirectoryBrowseError = class')
-  const directoryError = workspaceSource.slice(errorStart, workspaceSource.indexOf('\n\t\t};', errorStart) + 6)
-  if (!directoryMethods.includes('async listDirectory(') || !directoryError.includes('this.rpcError = rpcError')) throw new Error('DSH directory API extraction drift')
-  const uploadSource = await readFile(require.resolve('@deepseek-ai/dsh-client-file-upload/client'), 'utf8')
-  // Exact SDK service/Blob Worker/receipt parser; only Cordis registration is a
-  // minimal shell, matching the rest of this browser fixture's plain Context.
-  const uploadCode = `const _deepseek_ai_cordis={Service:class{constructor(ctx){this.ctx=ctx}}};\n` + uploadSource.slice(uploadSource.indexOf('function bytesToBase64('), uploadSource.indexOf('//#region lib/types/client/index.js')) + '\nexport{FileUploadRuntime};'
-  if (!uploadCode.includes('function fileUploadWorker(')) throw new Error('DSH upload extraction drift')
-  const layout = layoutSource
-    .slice(
-      layoutSource.indexOf('var LayoutController = class'),
-      layoutSource.indexOf(
-        '//#endregion',
-        layoutSource.indexOf('var LayoutController = class'),
-      ),
-    )
-    .replace('var LayoutController', 'export var LayoutController')
-  if (!layout.includes('selectPanel(panelId)'))
-    throw new Error('DSH LayoutController extraction drift')
+  const [layoutSource, workspaceSource, uploadSource] = await Promise.all([
+    dshClientSource('@deepseek-ai/dsh-client-ui-layout'),
+    dshClientSource('@deepseek-ai/dsh-client-ui-workspace', ['UiWorkspaceService']),
+    dshClientSource('@deepseek-ai/dsh-client-file-upload', ['FileUploadRuntime']),
+  ])
+  // Instantiate the browser bundles and exercise the published controller,
+  // picker methods, and upload transport through the fixture shell.
+  const browserBundle = (source: string, binding: string) => `
+    var sdk; var window = { __ModuleLoader__: { load(entry) {
+      sdk = entry.factory((id) => {
+        if (id === 'react') return globalThis.React;
+        if (id === 'react/jsx-runtime') return {};
+        if (id === '@deepseek-ai/cordis') return { Service: class { constructor(ctx) { this.ctx = ctx } } };
+        return {};
+      });
+    } } };
+    ${source}
+    export const ${binding} = sdk.${binding};
+  `
+  const layout = browserBundle(layoutSource, 'LayoutController')
+  const uploadCode = browserBundle(uploadSource, 'FileUploadRuntime')
+  const directoryCode = browserBundle(workspaceSource, 'UiWorkspaceService') + `
+    export function createDirectoryUi(directoryPicker) {
+      return Object.assign(Object.create(UiWorkspaceService.prototype), { directoryPicker });
+    }
+  `
   const html = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><style>html,body{height:100%;margin:0}body{font:14px system-ui,sans-serif;color:#1e2635;background:#fff}body.dark{background:#181b22;color:#e4e8ef;--dsw-alias-bg-base:#181b22;--dsw-alias-label-primary:#e4e8ef;--dsw-alias-label-secondary:#a1abba;--dsw-alias-border-l3:#a6afbf32}#shell{height:100%;display:grid;grid-template-columns:280px minmax(0,1fr)}#sidebar{border-right:1px solid #8392a538;padding:12px}#app{min-width:0;overflow:hidden}button{font:inherit;color:inherit}#chat{padding:32px}#chat textarea{width:80%;height:100px}#composer{margin-top:20px}</style><div id="shell"><aside id="sidebar"></aside><div id="app"></div></div><script src="/react.js"></script><script src="/react-dom.js"></script><script>window.__ModuleLoader__={load(entry){window.sapper=entry.factory(id=>id==='react'?React:id==='react-dom'?ReactDOM:{Fragment:React.Fragment,jsx:(type,props,key)=>React.createElement(type,{...props,key}),jsxs:(type,props,key)=>React.createElement(type,{...props,key})})}};</script><script src="/plugin.js"></script>
-  <script type="module">import{SlotCore}from'/slots.js';import{LayoutController}from'/layout.js';import{DirectoryUi}from'/directory.js';import{FileUploadRuntime}from'/upload.js';
+  <script type="module">import{SlotCore}from'/slots.js';import{LayoutController}from'/layout.js';import{createDirectoryUi}from'/directory.js';import{FileUploadRuntime}from'/upload.js';
   const slots=new SlotCore();slots.register({name:'root',children:{'sidebar.panellist':{kind:'list',scope:'root'},main:{kind:'keyed',scope:'root'},'conversation.input.left':{kind:'list',scope:'root'},'conversation.chat.node':{kind:'keyed',scope:'session'},'settings.section':{kind:'list',scope:'root'},'plugins.item':{kind:'list',scope:'root'}}},()=>null);
   const app=ReactDOM.createRoot(document.getElementById('app')),sidebar=ReactDOM.createRoot(document.getElementById('sidebar'));let selected=null;window.retained=new Set();
   const render=()=>{sidebar.render(React.createElement(React.Fragment,null,...slots.entriesOfSlot('sidebar.panellist').map(e=>React.createElement('button',{key:e.options.id,onClick:()=>layout.selectPanel(e.options.id)},e.options.label))));const main=slots.entriesOfSlot('main').find(e=>e.options.key===selected);app.render(main?React.createElement(main.component):React.createElement('section',{id:'chat'},React.createElement('h2',null,'主会话'),React.createElement('textarea',{'aria-label':'主会话输入'}),React.createElement('div',{id:'composer'},...slots.entriesOfSlot('conversation.input.left').map(e=>React.createElement(e.component,{key:e.options.id})))))};
@@ -70,7 +69,7 @@ export async function workbenchBrowser(
   const remote={$mount:async contribution=>{for(const d of contribution.descriptors){remote[d.namespace]??={};remote[d.namespace][d.method]=async(...values)=>{const args=Object.fromEntries(d.parameters.map((p,i)=>[p.wire,values[i]]));return fetch('/rpc/'+d.namespace+'/'+d.method,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(args)}).then(r=>r.json())}}return()=>{}}};
   const value={status:'ready',writable:true,value:{enabled:true},base:{},user:{},revision:0};const scope={getSnapshot:()=>value,subscribe:()=>()=>{},set:async()=>true,mutate:async()=>true};
   const directoryRpc=async(method,args)=>fetch('/rpc/directoryPicker/'+method,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(args)}).then(r=>r.json());
-  const directoryUi=new DirectoryUi({pick:()=>directoryRpc('pick',{}),list:(path)=>directoryRpc('list',{path}),createDirectory:(path,name)=>directoryRpc('createDirectory',{path,name})});directoryUi.openSession=id=>{window.opened=id;layout.selectPanel(null)};
+  const directoryUi=createDirectoryUi({pick:()=>directoryRpc('pick',{}),list:(path)=>directoryRpc('list',{path}),createDirectory:(path,name)=>directoryRpc('createDirectory',{path,name})});directoryUi.openSession=id=>{window.opened=id;layout.selectPanel(null)};
   const ctx={remote,layout,uiWorkspace:directoryUi,sessions:{retain(id){window.retained.add(id);return{ready:Promise.resolve(),release(){window.retained.delete(id)}}}},inject:(_services,setup)=>setup(ctx),uiConversation:{events:{register:()=>()=>{}}},configForms:{get:()=>scope,whileServed:(ids,setup)=>setup(new Set(ids))},effect:setup=>setup(),slots:{inject:(_name,setup)=>setup(),register:(options,component)=>slots.register(options,component)}};
   ctx.fileUpload=new FileUploadRuntime(ctx);sapper.apply(ctx);render();window.ready=true;
   </script></html>`
@@ -88,7 +87,7 @@ export async function workbenchBrowser(
       }
       if (req.url === '/directory.js') {
         res.setHeader('content-type', 'text/javascript')
-        res.end(directoryError + '\nexport class DirectoryUi { constructor(directoryPicker){this.directoryPicker=directoryPicker}\n' + directoryMethods + '}')
+        res.end(directoryCode)
         return
       }
       if (assets[req.url!]) {
